@@ -321,21 +321,24 @@ export async function getPlannerWeek(
   const personalByDate = new Map<string, PersonalPlannerTask[]>()
   const personalList: PersonalPlannerTask[] = []
   for (const row of personalRows ?? []) {
+    // pg returns date columns as Date objects; normalize to YYYY-MM-DD string
+    const raw = row.scheduled_on
+    const scheduledOnIso =
+      raw instanceof Date ? format(raw, "yyyy-MM-dd") : String(raw).slice(0, 10)
     const t: PersonalPlannerTask = {
       kind: "personal",
       id: row.id as string,
       title: row.title as string,
       notes: (row.notes as string | null) ?? null,
-      scheduledOn: row.scheduled_on as string,
+      scheduledOn: scheduledOnIso,
       isDone: Boolean(row.is_done),
       doneAt:
         typeof row.done_at === "string" ? row.done_at : null,
     }
     personalList.push(t)
-    const d = row.scheduled_on as string
-    const list = personalByDate.get(d) ?? []
+    const list = personalByDate.get(scheduledOnIso) ?? []
     list.push(t)
-    personalByDate.set(d, list)
+    personalByDate.set(scheduledOnIso, list)
   }
 
   const dayInterval = eachDayOfInterval({ start: monday, end: sunday })
