@@ -683,3 +683,71 @@ export async function leaveClassroom(classroomId: string): Promise<{ ok: true } 
   revalidatePath("/dashboard/aluno/salas")
   return { ok: true }
 }
+
+export type ProfessorPendingActivity = {
+  classroomId: string
+  classroomName: string
+  subject: string
+  activityId: string
+  activityTitle: string
+  activityType: string
+  enviados: number
+  total: number
+}
+
+export async function getProfessorPendingActivities(): Promise<{
+  activities: ProfessorPendingActivity[]
+  error: string | null
+}> {
+  const user = await requireAuthedUser().catch(() => null)
+  if (!user) return { activities: [], error: "Nao autenticado" }
+
+  try {
+    const rows = await query<{
+      classroom_id: string
+      classroom_name: string | null
+      subject: string | null
+      activity_id: string
+      activity_title: string | null
+      activity_type: string | null
+      total: number
+      enviados: number
+    }>(
+      `SELECT
+         c.id            AS classroom_id,
+         c.name          AS classroom_name,
+         c.subject,
+         a.id            AS activity_id,
+         a.title         AS activity_title,
+         a.type          AS activity_type,
+         COUNT(DISTINCT cm.student_id)::int                                        AS total,
+         COUNT(DISTINCT s.student_id) FILTER (WHERE s.status = 'enviado')::int     AS enviados
+       FROM public.classrooms c
+       JOIN public.classroom_activities a
+         ON a.classroom_id = c.id AND a.status <> 'rascunho'
+       LEFT JOIN public.classroom_members cm ON cm.classroom_id = c.id
+       LEFT JOIN public.classroom_activity_submissions s
+         ON s.classroom_id = c.id AND s.activity_id = a.id
+       WHERE c.teacher_id = $1
+       GROUP BY c.id, c.name, c.subject, a.id, a.title, a.type
+       ORDER BY a.created_at DESC
+       LIMIT 10`,
+      [user.id]
+    )
+
+    const activities: ProfessorPendingActivity[] = (rows ?? []).map((r) => ({
+      classroomId: r.classroom_id,
+      classroomName: r.classroom_name ?? "Sala",
+      subject: r.subject ?? "",
+      activityId: r.activity_id,
+      activityTitle: r.activity_title ?? "Atividade",
+      activityType: r.activity_type ?? "activity",
+      enviados: Number(r.enviados),
+      total: Number(r.total),
+    }))
+
+    return { activities, error: null }
+  } catch (e: any) {
+    return { activities: [], error: e?.message ?? "Erro ao carregar atividades" }
+  }
+}
