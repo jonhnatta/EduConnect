@@ -727,8 +727,8 @@ export async function getProfessorPendingActivities(): Promise<{
          ON a.classroom_id = c.id AND a.status <> 'rascunho'
        LEFT JOIN public.classroom_members cm ON cm.classroom_id = c.id
        LEFT JOIN public.classroom_activity_submissions s
-         ON s.classroom_id = c.id AND s.activity_id = a.id
-       WHERE c.teacher_id = $1
+         ON s.activity_id = a.id
+       WHERE c.professor_id = $1
        GROUP BY c.id, c.name, c.subject, a.id, a.title, a.type
        ORDER BY a.created_at DESC
        LIMIT 10`,
