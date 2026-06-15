@@ -15,13 +15,11 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock,
-  FileText,
   Flame,
   Heart,
   Lightbulb,
   ListChecks,
   MessageCircle,
-  Play,
   Share2,
   Sparkles,
 } from "lucide-react"
@@ -32,47 +30,20 @@ import { toast } from "sonner"
 import { parseExamFromSettings } from "@/lib/activities/exam"
 import { parseAssessmentSettings } from "@/lib/content/assessment-settings"
 
-const stories = [
-  { id: 1, name: "Prof. Maria", avatar: "MS", color: "from-pink-500 to-purple-500", hasNew: true },
-  { id: 2, name: "Prof. Carlos", avatar: "CO", color: "from-blue-500 to-cyan-500", hasNew: true },
-  { id: 3, name: "Prof. Ana", avatar: "AP", color: "from-green-500 to-teal-500", hasNew: false },
-  { id: 4, name: "Prof. Roberto", avatar: "RL", color: "from-orange-500 to-red-500", hasNew: true },
-  { id: 5, name: "Prof. Julia", avatar: "JC", color: "from-indigo-500 to-purple-500", hasNew: false },
-]
+type TodayItem = {
+  id: string
+  title: string
+  isDone: boolean
+  href: string | null
+  kind: "personal" | "classroom"
+}
 
-const feedItemsMock = [
-  {
-    id: "mock-2",
-    type: "video" as const,
-    professor: { name: "Prof. Carlos Oliveira", avatar: "CO", verified: true },
-    title: "A Revolucao Francesa em 15 minutos",
-    disciplina: "Historia",
-    thumbnail: null,
-    duracao: "15:42",
-    recommendation: "Baseado no seu plano de estudos desta semana",
-    likes: 567,
-    comments: 89,
-    saved: false,
-  },
-  {
-    id: "mock-3",
-    type: "exercicio" as const,
-    professor: { name: "Prof. Ana Paula", avatar: "AP", verified: true },
-    title: "Lista de Exercicios: Cinematica",
-    disciplina: "Fisica",
-    questoes: 15,
-    recommendation: "Para reforcar o conteudo que voce estudou ontem",
-    likes: 123,
-    comments: 12,
-    saved: false,
-  },
-]
-
-const todayTasks = [
-  { id: 1, materia: "Matematica", tema: "Funcoes Quadraticas", tipo: "Exercicios", duracao: "30 min", status: "concluido" as const },
-  { id: 2, materia: "Historia", tema: "Revolucao Francesa", tipo: "Video", duracao: "20 min", status: "em_andamento" as const },
-  { id: 3, materia: "Fisica", tema: "Cinematica", tipo: "Artigo", duracao: "15 min", status: "pendente" as const },
-]
+type WeekStats = {
+  personalDone: number
+  personalTotal: number
+  classroomSubmitted: number
+  classroomActivitiesInWeek: number
+}
 
 function initials(name: string | null | undefined): string {
   if (!name?.trim()) return "?"
@@ -103,6 +74,10 @@ type Props = {
   initialSavedIds?: string[]
   initialCommentPreviews?: Record<string, ContentComment[]>
   viewerUserId?: string | null
+  todayItems?: TodayItem[]
+  streakDays?: number
+  todayProgress?: number
+  weekStats?: WeekStats
 }
 
 export function AlunoFeedClient({
@@ -111,6 +86,10 @@ export function AlunoFeedClient({
   initialSavedIds = [],
   initialCommentPreviews = {},
   viewerUserId = null,
+  todayItems = [],
+  streakDays = 0,
+  todayProgress = 0,
+  weekStats,
 }: Props) {
   const router = useRouter()
   const [savedMap, setSavedMap] = useState<Record<string, boolean>>(() => {
@@ -217,25 +196,6 @@ export function AlunoFeedClient({
 
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
-          <div className="bg-white rounded-xl p-4 border border-gray-100">
-            <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
-              {stories.map((story) => (
-                <button key={story.id} type="button" className="flex flex-col items-center gap-2 flex-shrink-0">
-                  <div
-                    className={`p-0.5 rounded-full bg-gradient-to-br ${story.color} ${story.hasNew ? "" : "opacity-50"}`}
-                  >
-                    <div className="p-0.5 rounded-full bg-white">
-                      <Avatar className="h-14 w-14">
-                        <AvatarFallback className="bg-gray-100 text-gray-600 text-sm">{story.avatar}</AvatarFallback>
-                      </Avatar>
-                    </div>
-                  </div>
-                  <span className="text-xs text-gray-600 max-w-[60px] truncate">{story.name}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
           <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
             <Button size="sm" className="bg-[#10B981] hover:bg-[#059669]">
               Todos
@@ -476,71 +436,15 @@ export function AlunoFeedClient({
               )
             })}
 
-            {feedItemsMock.map((item) => (
-              <div key={item.id} className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-                <div className="p-4 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Avatar className="h-10 w-10">
-                      <AvatarFallback className="bg-[#1D4ED8] text-white text-sm">{item.professor.avatar}</AvatarFallback>
-                    </Avatar>
-                    <div>
-                      <div className="flex items-center gap-1">
-                        <span className="font-medium text-gray-900">{item.professor.name}</span>
-                        {item.professor.verified && (
-                          <CheckCircle2 className="h-4 w-4 text-[#10B981]" />
-                        )}
-                      </div>
-                      <Badge variant="secondary" className="text-xs">
-                        {item.disciplina}
-                      </Badge>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="px-4 pb-3">
-                  <h3 className="font-display font-semibold text-lg text-gray-900 mb-2">{item.title}</h3>
-                  <div className="flex items-center gap-2 text-sm text-[#10B981] mb-3">
-                    <Sparkles className="h-4 w-4" />
-                    <span>{item.recommendation}</span>
-                  </div>
-                  <div className="bg-gray-100 rounded-lg aspect-video flex items-center justify-center mb-3">
-                    {item.type === "video" ? (
-                      <div className="flex flex-col items-center gap-2 text-gray-400">
-                        <div className="h-16 w-16 rounded-full bg-white/80 flex items-center justify-center">
-                          <Play className="h-8 w-8 text-[#1D4ED8] ml-1" />
-                        </div>
-                        <span className="text-sm">{item.duracao}</span>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col items-center gap-2 text-gray-400">
-                        <FileText className="h-12 w-12" />
-                        <span className="text-sm">{item.questoes} questoes</span>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex items-center justify-between pt-3 border-t border-gray-100">
-                    <div className="flex items-center gap-4 text-gray-600">
-                      <span className="flex items-center gap-1 text-sm">
-                        <Heart className="h-5 w-5" />
-                        {item.likes}
-                      </span>
-                      <span className="flex items-center gap-1 text-sm">
-                        <MessageCircle className="h-5 w-5" />
-                        {item.comments}
-                      </span>
-                      <Share2 className="h-5 w-5" />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="px-4 pb-4">
-                  <Button className="w-full bg-[#1D4ED8] hover:bg-[#1E3A8A]">
-                    {item.type === "video" ? "Assistir agora" : "Praticar"}
-                  </Button>
-                </div>
+            {initialArticles.length === 0 && (
+              <div className="bg-white rounded-xl border border-gray-100 p-8 text-center">
+                <BookOpen className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+                <h3 className="font-medium text-gray-900 mb-1">Nenhum conteudo ainda</h3>
+                <p className="text-sm text-gray-500">
+                  Explore professores e siga conteudos para preencher seu feed.
+                </p>
               </div>
-            ))}
+            )}
 
           </div>
         </div>
@@ -551,8 +455,12 @@ export function AlunoFeedClient({
               <span className="font-medium">Sequencia de estudos</span>
               <Flame className="h-6 w-6" />
             </div>
-            <div className="text-4xl font-bold font-display">7 dias</div>
-            <p className="text-sm text-orange-100 mt-1">Continue assim! Voce esta indo muito bem.</p>
+            <div className="text-4xl font-bold font-display">
+              {streakDays} {streakDays === 1 ? "dia" : "dias"}
+            </div>
+            <p className="text-sm text-orange-100 mt-1">
+              {streakDays > 0 ? "Continue assim! Voce esta indo muito bem." : "Comece hoje e inicie sua sequencia!"}
+            </p>
           </div>
 
           <div className="bg-white rounded-xl p-4 border border-gray-100">
@@ -563,57 +471,75 @@ export function AlunoFeedClient({
               </Link>
             </div>
             <div className="space-y-3">
-              {todayTasks.map((task) => (
-                <div key={task.id} className="flex items-center gap-3">
-                  <div
-                    className={`h-8 w-8 rounded-lg flex items-center justify-center ${
-                      task.status === "concluido"
-                        ? "bg-green-100"
-                        : task.status === "em_andamento"
-                          ? "bg-blue-100"
-                          : "bg-gray-100"
-                    }`}
-                  >
-                    {task.status === "concluido" ? (
-                      <CheckCircle2 className="h-4 w-4 text-[#10B981]" />
-                    ) : task.status === "em_andamento" ? (
-                      <Play className="h-4 w-4 text-[#1D4ED8]" />
-                    ) : (
-                      <Clock className="h-4 w-4 text-gray-400" />
+              {todayItems.length === 0 ? (
+                <p className="text-sm text-gray-500 text-center py-2">
+                  Nenhuma tarefa para hoje.{" "}
+                  <Link href="/dashboard/aluno/plano" className="text-[#10B981] underline">
+                    Adicione no plano
+                  </Link>
+                </p>
+              ) : (
+                todayItems.map((task) => (
+                  <div key={task.id} className="flex items-center gap-3">
+                    <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${task.isDone ? "bg-green-100" : "bg-gray-100"}`}>
+                      {task.isDone ? (
+                        <CheckCircle2 className="h-4 w-4 text-[#10B981]" />
+                      ) : (
+                        <Clock className="h-4 w-4 text-gray-400" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className={`text-sm font-medium truncate ${task.isDone ? "line-through text-gray-400" : "text-gray-900"}`}>
+                        {task.title}
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        {task.kind === "classroom" ? "Sala de aula" : "Tarefa pessoal"}
+                      </div>
+                    </div>
+                    {task.href && !task.isDone && (
+                      <Link href={task.href} className="text-xs text-[#1D4ED8] hover:underline flex-shrink-0">
+                        Ir
+                      </Link>
                     )}
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-gray-900 truncate">{task.tema}</div>
-                    <div className="text-xs text-gray-500">
-                      {task.materia} - {task.duracao}
-                    </div>
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
             <div className="mt-4 pt-4 border-t border-gray-100">
               <div className="flex items-center justify-between text-sm mb-2">
                 <span className="text-gray-600">Progresso de hoje</span>
-                <span className="font-medium text-[#10B981]">33%</span>
+                <span className="font-medium text-[#10B981]">{todayProgress}%</span>
               </div>
-              <Progress value={33} className="h-2" />
+              <Progress value={todayProgress} className="h-2" />
             </div>
           </div>
 
           <div className="bg-white rounded-xl p-4 border border-gray-100">
-            <h3 className="font-display font-semibold text-gray-900 mb-4">Metas da Semana</h3>
-            <div className="space-y-3">
-              <div className="flex items-center gap-3">
-                <div className="h-5 w-5 rounded border-2 border-[#10B981] bg-[#10B981] flex items-center justify-center">
-                  <CheckCircle2 className="h-3 w-3 text-white" />
-                </div>
-                <span className="text-sm text-gray-600 line-through">3 exercicios de Matematica</span>
+            <h3 className="font-display font-semibold text-gray-900 mb-4">Resumo da Semana</h3>
+            {(!weekStats || (weekStats.personalTotal === 0 && weekStats.classroomActivitiesInWeek === 0)) ? (
+              <p className="text-sm text-gray-500 text-center py-2">Nenhuma atividade esta semana ainda.</p>
+            ) : (
+              <div className="space-y-4">
+                {weekStats.personalTotal > 0 && (
+                  <div>
+                    <div className="flex items-center justify-between text-sm mb-1">
+                      <span className="text-gray-600">Tarefas pessoais</span>
+                      <span className="font-medium text-gray-900">{weekStats.personalDone}/{weekStats.personalTotal}</span>
+                    </div>
+                    <Progress value={Math.round((weekStats.personalDone / weekStats.personalTotal) * 100)} className="h-2" />
+                  </div>
+                )}
+                {weekStats.classroomActivitiesInWeek > 0 && (
+                  <div>
+                    <div className="flex items-center justify-between text-sm mb-1">
+                      <span className="text-gray-600">Atividades de sala</span>
+                      <span className="font-medium text-gray-900">{weekStats.classroomSubmitted}/{weekStats.classroomActivitiesInWeek}</span>
+                    </div>
+                    <Progress value={Math.round((weekStats.classroomSubmitted / weekStats.classroomActivitiesInWeek) * 100)} className="h-2" />
+                  </div>
+                )}
               </div>
-              <div className="flex items-center gap-3">
-                <div className="h-5 w-5 rounded border-2 border-gray-300" />
-                <span className="text-sm text-gray-600">Assistir 2 videos de Historia</span>
-              </div>
-            </div>
+            )}
           </div>
         </div>
       </div>
