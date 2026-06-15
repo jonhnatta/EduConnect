@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache"
 import { requireAuthedUser } from "@/lib/auth/user"
+import { getProfileAccess } from "@/lib/auth/profile"
 import { query, queryOne } from "@/lib/db/query"
 import type {
   ContentItemStatus,
@@ -26,6 +27,9 @@ export type ReviewedContentItem = {
 export async function listMyReviewedContent(): Promise<ReviewedContentItem[]> {
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return []
+
+  const profile = await getProfileAccess(user.id)
+  if (profile?.user_type !== "professor") return []
 
   type Row = {
     id: string
@@ -84,6 +88,9 @@ export async function getMyContentReview(
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return null
 
+  const profile = await getProfileAccess(user.id)
+  if (profile?.user_type !== "professor") return null
+
   type Row = {
     id: string
     content_item_id: string
@@ -133,6 +140,9 @@ export async function professorDecideAfterReview(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return { ok: false, error: "Nao autenticado" }
+
+  const profile = await getProfileAccess(user.id)
+  if (profile?.user_type !== "professor") return { ok: false, error: "Acesso negado" }
 
   type ItemRow = { id: string; published_at: string | null }
   const item = await queryOne<ItemRow>(

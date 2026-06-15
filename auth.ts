@@ -18,6 +18,10 @@ type DbUser = {
   user_type: string | null
 }
 
+type ProfileTokenRow = {
+  user_type: string | null
+}
+
 const providers = [
   Credentials({
     credentials: {
@@ -98,6 +102,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (user?.email) token.email = user.email
       // Persiste o tipo de usuario no token (apenas no login, quando `user` existe).
       if (user) (token as any).userType = (user as any).userType ?? null
+      // userType no token serve apenas para UX (redirecionamento no middleware).
+      // Nunca use como fonte de verdade para autorização — use lib/auth/guards.ts,
+      // que consulta o banco diretamente a cada requisição protegida.
+      if (!user && token.sub && !(token as any).userType) {
+        const profileRow = await queryOne<ProfileTokenRow>(
+          "select user_type from public.profiles where id = $1",
+          [String(token.sub)]
+        )
+        ;(token as any).userType = profileRow?.user_type ?? null
+      }
       return token
     },
     session: async ({ session, token }) => {

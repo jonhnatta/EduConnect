@@ -4,7 +4,7 @@ import { useEffect, useState, Suspense } from "react"
 import { useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { signIn } from "next-auth/react"
+import { getProviders, signIn } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -12,13 +12,17 @@ import { GraduationCap, Eye, EyeOff, Mail, Lock, ArrowRight, AlertCircle } from 
 import { safeInternalPath } from "@/lib/auth/redirect"
 
 function buildAuthRedirectUrl(next?: string) {
-  return next ? `/auth/redirect?next=${encodeURIComponent(next)}` : "/auth/redirect"
+  // Usa o origin real do browser para evitar que o NextAuth produza URLs com
+  // 0.0.0.0:3000 (endereço de bind do servidor, não o host acessível pelo usuário).
+  const origin = typeof window !== "undefined" ? window.location.origin : ""
+  const path = next ? `/auth/redirect?next=${encodeURIComponent(next)}` : "/auth/redirect"
+  return `${origin}${path}`
 }
 
 function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const isGoogleAvailable = process.env.NEXT_PUBLIC_AUTH_GOOGLE_ENABLED === "true"
+  const [isGoogleAvailable, setIsGoogleAvailable] = useState<boolean | null>(null)
   const [showPassword, setShowPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [isGoogleLoading, setIsGoogleLoading] = useState(false)
@@ -38,6 +42,24 @@ function LoginForm() {
         : "Nao foi possivel entrar com Google. Tente novamente."
     )
   }, [searchParams])
+
+  useEffect(() => {
+    let active = true
+
+    getProviders()
+      .then((providers) => {
+        if (!active) return
+        setIsGoogleAvailable(Boolean(providers?.google))
+      })
+      .catch(() => {
+        if (!active) return
+        setIsGoogleAvailable(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -166,7 +188,7 @@ function LoginForm() {
             </Button>
           </form>
 
-          {isGoogleAvailable && (
+          {isGoogleAvailable === true && (
             <>
               {/* Divider */}
               <div className="relative my-8">
@@ -199,7 +221,7 @@ function LoginForm() {
             </>
           )}
 
-          {!isGoogleAvailable && (
+          {isGoogleAvailable === false && (
             <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 p-4 flex items-center gap-3">
               <AlertCircle className="h-5 w-5 text-amber-500 flex-shrink-0" />
               <p className="text-sm text-amber-800">

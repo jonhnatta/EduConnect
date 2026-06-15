@@ -3,6 +3,7 @@ import { notFound } from "next/navigation"
 import { format } from "date-fns"
 import { ptBR } from "date-fns/locale"
 import { ChevronLeft } from "lucide-react"
+import { requireProfessorAccess } from "@/lib/auth/guards"
 import { getProfessorStudentOverview } from "@/app/actions/classroom-performance"
 import { AlunoPerformancePanel } from "@/components/dashboard/aluno-performance-panel"
 import { displayProfessorStudentName } from "@/lib/classrooms/professor-students-display"
@@ -16,6 +17,8 @@ export default async function ProfessorAlunoDetalhePage({
 }: {
   params: Promise<{ studentId: string }>
 }) {
+  await requireProfessorAccess()
+
   const { studentId } = await params
   if (!UUID_RE.test(studentId)) notFound()
 

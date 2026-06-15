@@ -10,12 +10,27 @@ type ProfileRow = {
   professor_verification_status: string | null
 }
 
+// Usa NEXT_PUBLIC_APP_URL para evitar que request.url contenha 0.0.0.0
+// (endereço de bind do servidor) na URL de redirecionamento enviada ao browser.
+function appOrigin(requestUrl: string): string {
+  const configured = process.env.NEXT_PUBLIC_APP_URL
+  if (configured) {
+    try {
+      return new URL(configured).origin
+    } catch {
+      // ignora URL mal-formada, cai no fallback
+    }
+  }
+  return new URL(requestUrl).origin
+}
+
 export async function GET(request: NextRequest) {
+  const base = appOrigin(request.url)
   const session = await auth()
   const userId = (session?.user as any)?.id as string | undefined
 
   if (!userId) {
-    return NextResponse.redirect(new URL("/login", request.url))
+    return NextResponse.redirect(new URL("/login", base))
   }
 
   const profile = await queryOne<ProfileRow>(
@@ -24,7 +39,7 @@ export async function GET(request: NextRequest) {
   )
 
   if (!profile?.user_type) {
-    return NextResponse.redirect(new URL("/cadastro/tipo-conta", request.url))
+    return NextResponse.redirect(new URL("/cadastro/tipo-conta", base))
   }
 
   const destination = profileRedirectPath(profile)
@@ -33,5 +48,5 @@ export async function GET(request: NextRequest) {
       ? safeInternalPath(request.nextUrl.searchParams.get("next"))
       : null
 
-  return NextResponse.redirect(new URL(next ?? destination, request.url))
+  return NextResponse.redirect(new URL(next ?? destination, base))
 }

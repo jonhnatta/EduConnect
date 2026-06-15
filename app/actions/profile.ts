@@ -3,6 +3,7 @@
 import { put, del } from "@vercel/blob"
 import { randomUUID } from "crypto"
 import { revalidatePath } from "next/cache"
+import type { PoolClient } from "pg"
 import { z } from "zod"
 import { requireAuthedUser } from "@/lib/auth/user"
 import { query, queryOne } from "@/lib/db/query"
@@ -10,7 +11,14 @@ import {
   inferMimeFromFilename,
   safeUploadFilename,
 } from "@/lib/activities/attachments"
-import { BIO_MAX_CHARS } from "@/lib/profile/constants"
+import {
+  BIO_MAX_CHARS,
+  EDUCATION_LEVEL_OPTIONS,
+  EMPLOYMENT_STATUS_OPTIONS,
+  STUDY_FOCUS_MAX_CHARS,
+} from "@/lib/profile/constants"
+import { buildStudentProfilePath, slugifyProfileValue } from "@/lib/profile/public"
+import { dbPool } from "@/lib/db/pool"
 
 export type ProfileVisibility = "public" | "private"
 export type DashboardProfile = {
@@ -21,6 +29,10 @@ export type DashboardProfile = {
   cover_url: string | null
   bio: string | null
   interests: string[]
+  slug: string | null
+  education_level: string | null
+  employment_status: string | null
+  study_focus: string | null
   profile_visibility: ProfileVisibility
 }
 
@@ -45,6 +57,10 @@ const updateProfileSchema = z.object({
   fullName: z.string().trim().min(2, "Informe seu nome").max(120, "Nome muito longo"),
   bio: z.string().trim().max(BIO_MAX_CHARS, `Descricao deve ter ate ${BIO_MAX_CHARS} caracteres`).optional(),
   interests: z.array(z.string().trim().min(1).max(40)).max(16).default([]),
+  slug: z.string().trim().max(60, "Slug muito longo").optional().default(""),
+  educationLevel: z.enum(EDUCATION_LEVEL_OPTIONS).optional().nullable(),
+  employmentStatus: z.enum(EMPLOYMENT_STATUS_OPTIONS).optional().nullable(),
+  studyFocus: z.string().trim().max(STUDY_FOCUS_MAX_CHARS, `Objetivo deve ter ate ${STUDY_FOCUS_MAX_CHARS} caracteres`).optional(),
   profileVisibility: z.enum(["public", "private"]),
 })
 
@@ -72,11 +88,35 @@ function blobRefFromStoredUrl(stored: string | null): string | null {
   return /^https?:\/\//.test(stored) ? stored : null
 }
 
-function revalidateProfilePaths(userType?: string | null) {
+type CurrentProfileRow = DashboardProfile
+
+async function ensureUniqueStudentSlug(
+  client: PoolClient,
+  input: string,
+  userId: string,
+) {
+  const base = slugifyProfileValue(input) || `aluno-${userId.slice(0, 8)}`
+  let candidate = base
+  let suffix = 2
+
+  while (true) {
+    const row = await client.query<{ id: string }>(
+      "select id from public.profiles where lower(slug) = lower($1) and id <> $2 limit 1",
+      [candidate, userId]
+    )
+    if (row.rowCount === 0) return candidate
+    candidate = `${base}-${suffix}`
+    suffix += 1
+  }
+}
+
+function revalidateProfilePaths(userType?: string | null, previousSlug?: string | null, nextSlug?: string | null) {
   revalidatePath("/dashboard/aluno/perfil")
   revalidatePath("/dashboard/professor/perfil")
   if (userType === "aluno") revalidatePath("/dashboard/aluno")
   if (userType === "professor") revalidatePath("/dashboard/professor")
+  if (userType === "aluno" && previousSlug) revalidatePath(buildStudentProfilePath(previousSlug))
+  if (userType === "aluno" && nextSlug && nextSlug !== previousSlug) revalidatePath(buildStudentProfilePath(nextSlug))
 }
 
 export async function getCurrentDashboardProfile(): Promise<DashboardProfile | null> {
@@ -84,7 +124,8 @@ export async function getCurrentDashboardProfile(): Promise<DashboardProfile | n
   if (!user) return null
 
   return queryOne<DashboardProfile>(
-    `select id, full_name, user_type, avatar_url, cover_url, bio,
+    `select id, full_name, user_type, avatar_url, cover_url, bio, slug,
+            education_level, employment_status, study_focus,
             coalesce(interests, array[]::text[]) as interests,
             coalesce(profile_visibility, 'private') as profile_visibility
        from public.profiles
@@ -106,16 +147,58 @@ export async function updateDashboardProfile(input: unknown): Promise<
   }
 
   const interests = [...new Set(parsed.data.interests.map((item) => item.trim()).filter(Boolean))]
+  const normalizedSlugInput = parsed.data.slug.trim()
+  if (normalizedSlugInput && slugifyProfileValue(normalizedSlugInput) !== normalizedSlugInput) {
+    return { ok: false, error: "Use um link publico com letras minusculas, numeros e hifens" }
+  }
+
+  const pool = dbPool()
+  const client = await pool.connect()
 
   try {
-    const profile = await queryOne<DashboardProfile>(
+    await client.query("begin")
+
+    const current = await client.query<CurrentProfileRow>(
+      `select id, full_name, user_type, avatar_url, cover_url, bio, slug,
+              education_level, employment_status, study_focus,
+              coalesce(interests, array[]::text[]) as interests,
+              coalesce(profile_visibility, 'private') as profile_visibility
+         from public.profiles
+        where id = $1
+        limit 1`,
+      [user.id]
+    )
+    const existing = current.rows[0]
+    if (!existing) {
+      await client.query("rollback")
+      return { ok: false, error: "Perfil nao encontrado" }
+    }
+
+    const nextSlug =
+      existing.user_type === "aluno"
+        ? await ensureUniqueStudentSlug(client, normalizedSlugInput || parsed.data.fullName, user.id)
+        : existing.slug
+
+    const nextEducationLevel =
+      existing.user_type === "aluno" ? parsed.data.educationLevel ?? null : existing.education_level
+    const nextEmploymentStatus =
+      existing.user_type === "aluno" ? parsed.data.employmentStatus ?? null : existing.employment_status
+    const nextStudyFocus =
+      existing.user_type === "aluno" ? parsed.data.studyFocus?.trim() || null : existing.study_focus
+
+    const result = await client.query<DashboardProfile>(
       `update public.profiles
           set full_name = $1,
               bio = $2,
               interests = $3,
-              profile_visibility = $4
-        where id = $5
-        returning id, full_name, user_type, avatar_url, cover_url, bio,
+              profile_visibility = $4,
+              slug = $5,
+              education_level = $6,
+              employment_status = $7,
+              study_focus = $8
+        where id = $9
+        returning id, full_name, user_type, avatar_url, cover_url, bio, slug,
+                  education_level, employment_status, study_focus,
                   coalesce(interests, array[]::text[]) as interests,
                   coalesce(profile_visibility, 'private') as profile_visibility`,
       [
@@ -123,14 +206,27 @@ export async function updateDashboardProfile(input: unknown): Promise<
         parsed.data.bio?.trim() || null,
         interests,
         parsed.data.profileVisibility,
+        nextSlug,
+        nextEducationLevel,
+        nextEmploymentStatus,
+        nextStudyFocus,
         user.id,
       ]
     )
-    if (!profile) return { ok: false, error: "Perfil nao encontrado" }
-    revalidateProfilePaths(profile.user_type)
+    const profile = result.rows[0]
+    if (!profile) {
+      await client.query("rollback")
+      return { ok: false, error: "Perfil nao encontrado" }
+    }
+
+    await client.query("commit")
+    revalidateProfilePaths(profile.user_type, existing.slug, profile.slug)
     return { ok: true, profile }
   } catch (e: any) {
+    await client.query("rollback").catch(() => {})
     return { ok: false, error: e?.message ?? "Erro ao salvar perfil" }
+  } finally {
+    client.release()
   }
 }
 
@@ -166,8 +262,8 @@ export async function uploadProfileImage(
 
   // Le a imagem atual ANTES de enviar a nova, para remove-la depois (evita
   // acumulo de blobs orfaos no store a cada troca de avatar/capa).
-  const prev = await queryOne<{ url: string | null; user_type: string }>(
-    `select ${column} as url, user_type from public.profiles where id = $1`,
+  const prev = await queryOne<{ url: string | null; user_type: string; slug: string | null }>(
+    `select ${column} as url, user_type, slug from public.profiles where id = $1`,
     [user.id]
   )
   if (!prev) return { ok: false, error: "Perfil nao encontrado" }
@@ -208,6 +304,6 @@ export async function uploadProfileImage(
     )
   }
 
-  revalidateProfilePaths(prev.user_type)
+  revalidateProfilePaths(prev.user_type, prev.slug, prev.slug)
   return { ok: true, url: servingUrl }
 }

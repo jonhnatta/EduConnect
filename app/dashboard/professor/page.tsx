@@ -21,7 +21,7 @@ import {
 } from "@/app/actions/content-items"
 import { getProfessorPendingActivities } from "@/app/actions/classrooms"
 import { listMyReviewedContent } from "@/app/actions/content-review"
-import { requireAuthedUser } from "@/lib/auth/user"
+import { requireProfessorAccess } from "@/lib/auth/guards"
 import { queryOne } from "@/lib/db/query"
 
 function formatCount(n: number): string {
@@ -41,13 +41,11 @@ function relativeTime(iso: string): string {
 }
 
 export default async function ProfessorFeedPage() {
-  const user = await requireAuthedUser().catch(() => null)
-  const profile = user
-    ? await queryOne<{ full_name: string | null }>(
-        "select full_name from public.profiles where id = $1",
-        [user.id]
-      ).catch(() => null)
-    : null
+  const { userId } = await requireProfessorAccess()
+  const profile = await queryOne<{ full_name: string | null }>(
+    "select full_name from public.profiles where id = $1",
+    [userId]
+  ).catch(() => null)
   const firstName = profile?.full_name?.split(" ")[0] ?? "Professor"
 
   const [viewStats, recentContent, pendingResult, allReviews] = await Promise.all([

@@ -1,16 +1,31 @@
 "use client"
 
 import { useRef, useState, useTransition } from "react"
-import { Camera, Eye, EyeOff, Loader2, Save, Upload, User } from "lucide-react"
+import Link from "next/link"
+import { Camera, Eye, EyeOff, ExternalLink, Loader2, Save, Upload, User } from "lucide-react"
 import { uploadProfileImage, updateDashboardProfile, type DashboardProfile } from "@/app/actions/profile"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
-import { BIO_MAX_CHARS } from "@/lib/profile/constants"
+import {
+  BIO_MAX_CHARS,
+  EDUCATION_LEVEL_OPTIONS,
+  EMPLOYMENT_STATUS_LABELS,
+  EMPLOYMENT_STATUS_OPTIONS,
+  STUDY_FOCUS_MAX_CHARS,
+} from "@/lib/profile/constants"
+import { buildStudentProfilePath } from "@/lib/profile/public"
 
 const SUBJECTS = [
   "Matematica",
@@ -80,11 +95,16 @@ export function ProfilePageEditor({
   const [fullName, setFullName] = useState(initialProfile.full_name ?? "")
   const [bio, setBio] = useState(initialProfile.bio ?? "")
   const [interests, setInterests] = useState<string[]>(initialProfile.interests ?? [])
+  const [slug, setSlug] = useState(initialProfile.slug ?? "")
+  const [educationLevel, setEducationLevel] = useState(initialProfile.education_level ?? "")
+  const [employmentStatus, setEmploymentStatus] = useState(initialProfile.employment_status ?? "nao_informado")
+  const [studyFocus, setStudyFocus] = useState(initialProfile.study_focus ?? "")
   const [isPublic, setIsPublic] = useState(initialProfile.profile_visibility === "public")
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [uploading, setUploading] = useState<"avatar" | "cover" | null>(null)
   const [isPending, startTransition] = useTransition()
+  const publicStudentPath = slug ? buildStudentProfilePath(slug) : null
 
   function notifyProfileUpdated() {
     window.dispatchEvent(new CustomEvent("profile:updated"))
@@ -128,6 +148,10 @@ export function ProfilePageEditor({
         fullName,
         bio,
         interests,
+        slug,
+        educationLevel: educationLevel || null,
+        employmentStatus: employmentStatus || null,
+        studyFocus,
         profileVisibility: isPublic ? "public" : "private",
       })
       if (!result.ok) {
@@ -139,6 +163,10 @@ export function ProfilePageEditor({
       setFullName(result.profile.full_name ?? "")
       setBio(result.profile.bio ?? "")
       setInterests(result.profile.interests ?? [])
+      setSlug(result.profile.slug ?? "")
+      setEducationLevel(result.profile.education_level ?? "")
+      setEmploymentStatus(result.profile.employment_status ?? "nao_informado")
+      setStudyFocus(result.profile.study_focus ?? "")
       setIsPublic(result.profile.profile_visibility === "public")
       setMessage("Perfil salvo")
       notifyProfileUpdated()
@@ -304,6 +332,77 @@ export function ProfilePageEditor({
               })}
             </div>
           </div>
+
+          {profileType === "aluno" ? (
+            <>
+              <div className="grid gap-5 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="slug">Link publico</Label>
+                  <Input
+                    id="slug"
+                    value={slug}
+                    onChange={(event) => setSlug(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"))}
+                    className={cn("h-11", theme.ring)}
+                    placeholder="seu-link-publico"
+                  />
+                  <p className="text-xs text-gray-500">
+                    Use letras minusculas, numeros e hifens.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Escolaridade</Label>
+                  <Select value={educationLevel} onValueChange={setEducationLevel}>
+                    <SelectTrigger className={cn("h-11 w-full", theme.ring)}>
+                      <SelectValue placeholder="Selecione seu nivel atual" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {EDUCATION_LEVEL_OPTIONS.map((item) => (
+                        <SelectItem key={item} value={item}>
+                          {item}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="grid gap-5 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Situacao profissional</Label>
+                  <Select value={employmentStatus} onValueChange={setEmploymentStatus}>
+                    <SelectTrigger className={cn("h-11 w-full", theme.ring)}>
+                      <SelectValue placeholder="Selecione sua situacao" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {EMPLOYMENT_STATUS_OPTIONS.map((item) => (
+                        <SelectItem key={item} value={item}>
+                          {EMPLOYMENT_STATUS_LABELS[item]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label htmlFor="studyFocus">Objetivo atual</Label>
+                    <span className={cn("text-xs", studyFocus.length > STUDY_FOCUS_MAX_CHARS ? "text-red-600" : "text-gray-500")}>
+                      {studyFocus.length}/{STUDY_FOCUS_MAX_CHARS}
+                    </span>
+                  </div>
+                  <Input
+                    id="studyFocus"
+                    value={studyFocus}
+                    maxLength={STUDY_FOCUS_MAX_CHARS}
+                    onChange={(event) => setStudyFocus(event.target.value)}
+                    className={cn("h-11", theme.ring)}
+                    placeholder="Ex.: buscando estagio em desenvolvimento front-end"
+                  />
+                </div>
+              </div>
+            </>
+          ) : null}
         </div>
 
         <aside className="space-y-6">
@@ -327,6 +426,16 @@ export function ProfilePageEditor({
                   ? "Seu perfil fica preparado para paginas publicas e descoberta."
                   : "Seu perfil permanece restrito ao seu uso autenticado."}
               </p>
+              {profileType === "aluno" && isPublic && publicStudentPath ? (
+                <Link
+                  href={publicStudentPath}
+                  target="_blank"
+                  className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-emerald-700 hover:text-emerald-800"
+                >
+                  Ver pagina publica
+                  <ExternalLink className="h-4 w-4" />
+                </Link>
+              ) : null}
             </div>
           </div>
 
@@ -344,6 +453,9 @@ export function ProfilePageEditor({
                 <div className="mt-3">
                   <p className="font-semibold text-gray-900">{fullName || "Seu nome"}</p>
                   <p className="text-sm text-gray-500 line-clamp-3">{bio || "Sua descricao aparecera aqui."}</p>
+                  {profileType === "aluno" && studyFocus ? (
+                    <p className="mt-2 text-xs font-medium text-emerald-700">{studyFocus}</p>
+                  ) : null}
                 </div>
               </div>
             </div>

@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation"
+import { requireProfessorAccess } from "@/lib/auth/guards"
 import {
   getClassroomForProfessor,
   listMembersForClassroom,
@@ -14,6 +15,8 @@ export default async function ProfessorSalaDetalhesPage({
 }: {
   params: Promise<{ id: string }>
 }) {
+  await requireProfessorAccess()
+
   const { id } = await params
   const result = await getClassroomForProfessor(id)
   if (!result.row) notFound()

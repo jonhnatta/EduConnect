@@ -12,12 +12,15 @@ import { listClassroomsForProfessor } from "@/app/actions/classrooms"
 import { CreateClassroomDialog } from "@/components/dashboard/create-classroom-dialog"
 import { format } from "date-fns"
 import { ptBR } from "date-fns/locale"
+import { requireProfessorAccess } from "@/lib/auth/guards"
 
 export default async function ProfessorSalasPage({
   searchParams,
 }: {
   searchParams: Promise<{ status?: string }>
 }) {
+  await requireProfessorAccess()
+
   const sp = await searchParams
   const isPendente = sp.status === "pendente"
   const canCreate = !isPendente

@@ -2,7 +2,9 @@ import { auth } from "@/auth"
 import { NextResponse, type NextRequest } from "next/server"
 
 function homeFor(userType?: string | null): string {
-  return userType === "professor" ? "/dashboard/professor" : "/dashboard/aluno"
+  if (userType === "professor") return "/dashboard/professor"
+  if (userType === "aluno") return "/dashboard/aluno"
+  return "/cadastro/tipo-conta"
 }
 
 export async function proxy(request: NextRequest) {
@@ -21,6 +23,14 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url)
   }
 
+  // Autenticado sem tipo definido nao deve entrar em dashboard nenhum.
+  if (isDashboard && session?.user && !userType) {
+    const url = request.nextUrl.clone()
+    url.pathname = "/cadastro/tipo-conta"
+    url.search = ""
+    return NextResponse.redirect(url)
+  }
+
   // Ja autenticado em pagina de auth -> dashboard correto para o tipo
   if (isAuthPage && session?.user) {
     const url = request.nextUrl.clone()
@@ -29,8 +39,9 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url)
   }
 
-  // Controle de area por tipo: professor nao acessa area de aluno e vice-versa.
-  // So aplica quando o tipo e conhecido (evita loop em onboarding sem perfil).
+  // Redirecionamento de área por tipo: conveniência de UX apenas.
+  // A barreira de segurança real está nos layouts server-side (professor/layout.tsx,
+  // aluno/layout.tsx) que consultam o banco a cada navegação — não o JWT, que pode ficar stale.
   if (isDashboard && session?.user && userType) {
     const inWrongArea =
       (userType === "professor" && pathname.startsWith("/dashboard/aluno")) ||

@@ -35,6 +35,8 @@ services:
     # arquivo usado no dev local. O bloco environment abaixo tem PRECEDENCIA e
     # sobrescreve o DATABASE_URL para apontar ao servico "db" da rede do Compose.
     env_file:
+      - path: .env
+        required: false
       - path: .env.development.local
         required: false
     environment:
@@ -42,6 +44,8 @@ services:
       DATABASE_SSL: "false"
       DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
       AUTH_TRUST_HOST: "true"
+      AUTH_URL: ${AUTH_URL:-http://localhost:3000}
+      NEXTAUTH_URL: ${AUTH_URL:-http://localhost:3000}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
     ports:
       - "${APP_PORT:-3000}:3000"

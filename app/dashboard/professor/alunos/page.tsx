@@ -1,5 +1,6 @@
 import Link from "next/link"
 import { Suspense } from "react"
+import { requireProfessorAccess } from "@/lib/auth/guards"
 import { listStudentsAcrossClassroomsForProfessor } from "@/app/actions/classrooms"
 import { ProfessorAlunosSearchBar } from "@/components/dashboard/professor-alunos-search"
 import { displayProfessorStudentName } from "@/lib/classrooms/professor-students-display"
@@ -31,6 +32,8 @@ export default async function ProfessorAlunosPage({
 }: {
   searchParams: Promise<{ status?: string; q?: string; page?: string }>
 }) {
+  await requireProfessorAccess()
+
   const sp = await searchParams
   const isPendente = sp.status === "pendente"
   const q = typeof sp.q === "string" ? sp.q : ""
