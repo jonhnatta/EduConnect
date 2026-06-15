@@ -1,23 +1,26 @@
+export const revalidate = 0
+
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
   Eye,
   Heart,
-  MessageCircle,
   Users,
   FileText,
-  TrendingUp,
   Clock,
   CheckCircle2,
-  AlertCircle,
   ChevronRight,
   Plus,
+  Bell,
+  Sparkles,
 } from "lucide-react"
 import {
   getProfessorViewStats,
   listMyContentItemsForProfessor,
 } from "@/app/actions/content-items"
+import { getProfessorPendingActivities } from "@/app/actions/classrooms"
+import { listMyReviewedContent } from "@/app/actions/content-review"
 import { requireAuthedUser } from "@/lib/auth/user"
 import { queryOne } from "@/lib/db/query"
 
@@ -37,18 +40,6 @@ function relativeTime(iso: string): string {
   return `Ha ${Math.floor(d / 7)} semana${Math.floor(d / 7) > 1 ? "s" : ""}`
 }
 
-// Mock sections que pertencem à task #19
-const pendingActivities = [
-  { id: 1, sala: "Matematica 3A", atividade: "Prova Bimestral", entregas: 15, total: 28 },
-  { id: 2, sala: "Matematica 2B", atividade: "Lista de Exercicios", entregas: 22, total: 30 },
-]
-
-const notifications = [
-  { id: 1, text: "Seu artigo 'Equacoes do Segundo Grau' foi aprovado pela IA", type: "success", time: "Ha 2 horas" },
-  { id: 2, text: "15 alunos entregaram a 'Prova Bimestral' - corrija agora", type: "warning", time: "Ha 3 horas" },
-  { id: 3, text: "Seu perfil ganhou 45 novos seguidores esta semana", type: "info", time: "Ha 1 dia" },
-]
-
 export default async function ProfessorFeedPage() {
   const user = await requireAuthedUser().catch(() => null)
   const profile = user
@@ -59,10 +50,16 @@ export default async function ProfessorFeedPage() {
     : null
   const firstName = profile?.full_name?.split(" ")[0] ?? "Professor"
 
-  const [viewStats, recentContent] = await Promise.all([
+  const [viewStats, recentContent, pendingResult, allReviews] = await Promise.all([
     getProfessorViewStats(),
     listMyContentItemsForProfessor(),
+    getProfessorPendingActivities(),
+    listMyReviewedContent(),
   ])
+
+  const recentPosts = recentContent.slice(0, 5)
+  const pendingActivities = pendingResult.activities
+  const pendingReviews = allReviews.filter((r) => r.status === "aguardando_decisao")
 
   const stats = [
     { label: "Visualizacoes", value: formatCount(viewStats.totalViews), icon: Eye },
@@ -70,8 +67,6 @@ export default async function ProfessorFeedPage() {
     { label: "Publicacoes", value: String(viewStats.totalPublications), icon: FileText },
     { label: "Curtidas", value: formatCount(viewStats.totalLikes), icon: Heart },
   ]
-
-  const recentPosts = recentContent.slice(0, 5)
 
   return (
     <div className="max-w-6xl mx-auto pb-20 lg:pb-0">
@@ -103,7 +98,7 @@ export default async function ProfessorFeedPage() {
 
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
-          {/* Recent Posts — dados reais */}
+          {/* Publicações recentes — dados reais */}
           <div className="bg-white rounded-xl border border-gray-100">
             <div className="p-4 border-b border-gray-100 flex items-center justify-between">
               <h2 className="font-display font-semibold text-gray-900">Minhas Publicacoes</h2>
@@ -167,7 +162,7 @@ export default async function ProfessorFeedPage() {
             </div>
           </div>
 
-          {/* Atividades Pendentes — mock, task #19 */}
+          {/* Atividades Pendentes — dados reais */}
           <div className="bg-white rounded-xl border border-gray-100">
             <div className="p-4 border-b border-gray-100 flex items-center justify-between">
               <h2 className="font-display font-semibold text-gray-900">Atividades Pendentes</h2>
@@ -176,63 +171,89 @@ export default async function ProfessorFeedPage() {
               </Link>
             </div>
             <div className="divide-y divide-gray-100">
-              {pendingActivities.map((activity) => (
-                <div key={activity.id} className="p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="font-medium text-gray-900">{activity.atividade}</h3>
-                      <p className="text-sm text-gray-500">{activity.sala}</p>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-lg font-semibold text-[#1D4ED8]">
-                        {activity.entregas}/{activity.total}
-                      </div>
-                      <p className="text-xs text-gray-500">entregas</p>
-                    </div>
-                  </div>
-                  <div className="mt-3 flex gap-2">
-                    <Button size="sm" variant="outline" className="flex-1">Ver entregas</Button>
-                    <Button size="sm" className="flex-1 bg-[#1D4ED8] hover:bg-[#1E3A8A]">Corrigir</Button>
-                  </div>
+              {pendingActivities.length === 0 ? (
+                <div className="p-8 text-center text-gray-500 text-sm">
+                  Nenhuma atividade com entregas pendentes.{" "}
+                  <Link href="/dashboard/professor/salas" className="text-[#1D4ED8] hover:underline">
+                    Crie uma sala
+                  </Link>{" "}
+                  para comecar.
                 </div>
-              ))}
+              ) : (
+                pendingActivities.map((activity) => (
+                  <div key={activity.activityId} className="p-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-medium text-gray-900 truncate">{activity.activityTitle}</h3>
+                        <p className="text-sm text-gray-500">
+                          {activity.classroomName}
+                          {activity.subject ? ` — ${activity.subject}` : ""}
+                        </p>
+                      </div>
+                      <div className="text-right ml-4">
+                        <div className="text-lg font-semibold text-[#1D4ED8]">
+                          {activity.enviados}/{activity.total}
+                        </div>
+                        <p className="text-xs text-gray-500">entregas</p>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex gap-2">
+                      <Button size="sm" variant="outline" className="flex-1" asChild>
+                        <Link href={`/dashboard/professor/salas/${activity.classroomId}/atividades/${activity.activityId}`}>
+                          Ver entregas
+                        </Link>
+                      </Button>
+                      <Button size="sm" className="flex-1 bg-[#1D4ED8] hover:bg-[#1E3A8A]" asChild>
+                        <Link href={`/dashboard/professor/salas/${activity.classroomId}/atividades/${activity.activityId}`}>
+                          Corrigir
+                        </Link>
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>
 
         {/* Sidebar */}
         <div className="space-y-6">
-          {/* Notificações — mock, task #17 */}
+          {/* Revisões IA aguardando decisão — só mostra se houver */}
+          {pendingReviews.length > 0 && (
+            <div className="bg-white rounded-xl border border-amber-200">
+              <div className="p-4 border-b border-amber-100 flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-amber-500" />
+                <h2 className="font-display font-semibold text-gray-900">Revisoes IA pendentes</h2>
+                <Badge className="bg-amber-100 text-amber-800 ml-auto">{pendingReviews.length}</Badge>
+              </div>
+              <div className="divide-y divide-gray-100">
+                {pendingReviews.slice(0, 3).map((item) => (
+                  <div key={item.id} className="p-4">
+                    <h3 className="text-sm font-medium text-gray-900 truncate mb-1">{item.title}</h3>
+                    <p className="text-xs text-gray-500 mb-2">Score IA: {item.score}</p>
+                    <Button size="sm" className="w-full bg-amber-500 hover:bg-amber-600" asChild>
+                      <Link href={`/dashboard/professor/criar?edit=${encodeURIComponent(item.id)}`}>
+                        Decidir
+                      </Link>
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Notificações — task #17 */}
           <div className="bg-white rounded-xl border border-gray-100">
-            <div className="p-4 border-b border-gray-100">
+            <div className="p-4 border-b border-gray-100 flex items-center gap-2">
+              <Bell className="h-4 w-4 text-gray-400" />
               <h2 className="font-display font-semibold text-gray-900">Notificacoes</h2>
             </div>
-            <div className="divide-y divide-gray-100">
-              {notifications.map((notif) => (
-                <div key={notif.id} className="p-4">
-                  <div className="flex items-start gap-3">
-                    <div className={`h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                      notif.type === "success" ? "bg-green-100" :
-                      notif.type === "warning" ? "bg-amber-100" : "bg-blue-100"
-                    }`}>
-                      {notif.type === "success" ? (
-                        <CheckCircle2 className="h-4 w-4 text-[#10B981]" />
-                      ) : notif.type === "warning" ? (
-                        <AlertCircle className="h-4 w-4 text-amber-500" />
-                      ) : (
-                        <Users className="h-4 w-4 text-[#1D4ED8]" />
-                      )}
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-700">{notif.text}</p>
-                      <p className="text-xs text-gray-400 mt-1">{notif.time}</p>
-                    </div>
-                  </div>
-                </div>
-              ))}
+            <div className="p-6 text-center text-sm text-gray-400">
+              Notificacoes em breve.
             </div>
           </div>
 
+          {/* Destaques com dados reais */}
           <div className="bg-gradient-to-br from-[#1D4ED8] to-[#1E3A8A] rounded-xl p-4 text-white">
             <h3 className="font-semibold mb-4">Destaques</h3>
             <div className="space-y-3">
