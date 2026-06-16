@@ -8,6 +8,18 @@ type FollowState = {
   followersCount: number
 }
 
+async function resolveTeacherId(teacherIdOrSlug: string): Promise<string | null> {
+  const row = await queryOne<{ id: string }>(
+    `SELECT id
+       FROM public.profiles
+      WHERE user_type = 'professor'
+        AND (id::text = $1 OR lower(slug) = lower($1))
+      LIMIT 1`,
+    [teacherIdOrSlug]
+  )
+  return row?.id ?? null
+}
+
 async function getAlunoId(): Promise<string | null> {
   const user = await getAuthedUser().catch(() => null)
   if (!user) return null
@@ -19,8 +31,10 @@ async function getAlunoId(): Promise<string | null> {
   return user.id
 }
 
-export async function getFollowState(teacherId: string): Promise<FollowState> {
+export async function getFollowState(teacherIdOrSlug: string): Promise<FollowState> {
   const user = await getAuthedUser().catch(() => null)
+  const teacherId = await resolveTeacherId(teacherIdOrSlug)
+  if (!teacherId) return { following: false, followersCount: 0 }
 
   const countRow = await queryOne<{ followers_count: string }>(
     "SELECT followers_count FROM public.profiles WHERE id = $1",

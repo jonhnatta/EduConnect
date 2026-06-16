@@ -11,6 +11,10 @@ export function buildStudentProfilePath(slug: string) {
   return `/aluno/${encodeURIComponent(slug)}`
 }
 
+export function buildTeacherProfilePath(slug: string) {
+  return `/professor/${encodeURIComponent(slug)}`
+}
+
 export function slugifyProfileValue(input: string) {
   return input
     .normalize("NFD")

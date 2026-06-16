@@ -5,17 +5,15 @@ import {
   CheckCircle2,
   BookOpen,
   ChevronLeft,
-  FileText,
-  Dumbbell,
-  ClipboardList,
-  BarChart2,
-  Lightbulb,
   Heart,
-  Eye,
+  Globe,
+  GraduationCap,
+  Users,
 } from "lucide-react"
 import { getProfessorProfile } from "@/app/actions/professors"
 import { getFollowState } from "@/app/actions/follows"
 import { FollowButton } from "./_follow-button"
+import { PublicProfileTabs } from "./_public-profile-tabs"
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/)
@@ -28,23 +26,6 @@ function formatCount(n: number) {
   return String(n)
 }
 
-function formatDate(iso: string | null) {
-  if (!iso) return ""
-  return new Date(iso).toLocaleDateString("pt-BR", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  })
-}
-
-const TYPE_CONFIG: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
-  article:    { label: "Artigo",    icon: <FileText className="h-5 w-5" />,      color: "bg-blue-50 text-blue-600" },
-  exercise:   { label: "Exercício", icon: <Dumbbell className="h-5 w-5" />,      color: "bg-amber-50 text-amber-600" },
-  assessment: { label: "Prova",     icon: <ClipboardList className="h-5 w-5" />, color: "bg-red-50 text-red-600" },
-  simulado:   { label: "Simulado",  icon: <BarChart2 className="h-5 w-5" />,     color: "bg-purple-50 text-purple-600" },
-  dica:       { label: "Dica",      icon: <Lightbulb className="h-5 w-5" />,     color: "bg-green-50 text-green-600" },
-}
-
 export default async function PerfilProfessorPublico({
   params,
 }: {
@@ -52,12 +33,11 @@ export default async function PerfilProfessorPublico({
 }) {
   const { slug } = await params
 
-  const [profile, followState] = await Promise.all([
-    getProfessorProfile(slug),
-    getFollowState(slug).catch(() => ({ following: false, followersCount: 0 })),
-  ])
+  const profile = await getProfessorProfile(slug)
 
   if (!profile) notFound()
+
+  const followState = await getFollowState(profile.id).catch(() => ({ following: false, followersCount: 0 }))
 
   return (
     <div className="min-h-screen bg-gray-50 pb-20">
@@ -134,6 +114,22 @@ export default async function PerfilProfessorPublico({
               <div className="flex items-center justify-center sm:justify-start gap-6 pt-4 border-t border-gray-100">
                 <div>
                   <div className="font-display font-bold text-xl text-gray-900">
+                    {formatCount(followState.followersCount)}
+                  </div>
+                  <div className="text-xs text-gray-500 flex items-center gap-1">
+                    <Users className="h-3 w-3" /> Seguidores
+                  </div>
+                </div>
+                <div>
+                  <div className="font-display font-bold text-xl text-gray-900">
+                    {formatCount(profile.students_count)}
+                  </div>
+                  <div className="text-xs text-gray-500 flex items-center gap-1">
+                    <GraduationCap className="h-3 w-3" /> Alunos
+                  </div>
+                </div>
+                <div>
+                  <div className="font-display font-bold text-xl text-gray-900">
                     {profile.post_count}
                   </div>
                   <div className="text-xs text-gray-500 flex items-center gap-1">
@@ -176,60 +172,39 @@ export default async function PerfilProfessorPublico({
                 </div>
               </div>
             )}
+
+            {profile.levels.length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-100 p-6">
+                <h3 className="font-display font-semibold text-gray-900 mb-3">Niveis</h3>
+                <div className="flex flex-wrap gap-2">
+                  {profile.levels.map((level) => (
+                    <Badge key={level} variant="secondary" className="bg-gray-100 text-gray-700 hover:bg-gray-200">
+                      {level}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {profile.website_url ? (
+              <div className="bg-white rounded-xl border border-gray-100 p-6">
+                <h3 className="font-display font-semibold text-gray-900 mb-3">Site</h3>
+                <a
+                  href={profile.website_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-2 text-sm font-medium text-[#1D4ED8] hover:underline"
+                >
+                  <Globe className="h-4 w-4" />
+                  {profile.website_url}
+                </a>
+              </div>
+            ) : null}
           </div>
 
           {/* Publicações */}
           <div className="md:col-span-2">
-            <h2 className="font-display font-semibold text-lg text-gray-900 mb-4">
-              Publicações em destaque
-            </h2>
-
-            {profile.posts.length > 0 ? (
-              <div className="space-y-3">
-                {profile.posts.map((post) => {
-                  const cfg = TYPE_CONFIG[post.type] ?? TYPE_CONFIG.article
-                  return (
-                    <div
-                      key={post.id}
-                      className="bg-white rounded-xl border border-gray-100 p-5 hover:border-[#1D4ED8]/30 hover:shadow-md transition-all"
-                    >
-                      <div className="flex items-start gap-4">
-                        <div className={`h-12 w-12 rounded-lg flex items-center justify-center shrink-0 ${cfg.color}`}>
-                          {cfg.icon}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
-                              {cfg.label}
-                            </span>
-                            {post.published_at && (
-                              <span className="text-xs text-gray-400">
-                                {formatDate(post.published_at)}
-                              </span>
-                            )}
-                          </div>
-                          <h3 className="font-medium text-gray-900 leading-snug mb-2">
-                            {post.title}
-                          </h3>
-                          <div className="flex items-center gap-4 text-xs text-gray-400">
-                            <span className="flex items-center gap-1">
-                              <Heart className="h-3.5 w-3.5" /> {formatCount(post.like_count)}
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <Eye className="h-3.5 w-3.5" /> {formatCount(post.view_count)}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            ) : (
-              <div className="bg-white rounded-xl border border-dashed border-gray-200 p-12 text-center text-gray-400">
-                Nenhuma publicação ainda.
-              </div>
-            )}
+            <PublicProfileTabs posts={profile.posts} />
           </div>
         </div>
       </div>

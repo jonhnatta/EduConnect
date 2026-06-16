@@ -25,7 +25,7 @@ import {
   EMPLOYMENT_STATUS_OPTIONS,
   STUDY_FOCUS_MAX_CHARS,
 } from "@/lib/profile/constants"
-import { buildStudentProfilePath } from "@/lib/profile/public"
+import { buildStudentProfilePath, buildTeacherProfilePath } from "@/lib/profile/public"
 
 const SUBJECTS = [
   "Matematica",
@@ -96,6 +96,7 @@ export function ProfilePageEditor({
   const [profile, setProfile] = useState(initialProfile)
   const [fullName, setFullName] = useState(initialProfile.full_name ?? "")
   const [bio, setBio] = useState(initialProfile.bio ?? "")
+  const [websiteUrl, setWebsiteUrl] = useState(initialProfile.website_url ?? "")
   const [interests, setInterests] = useState<string[]>(initialProfile.interests ?? [])
   const [slug, setSlug] = useState(initialProfile.slug ?? "")
   const [educationLevel, setEducationLevel] = useState(initialProfile.education_level ?? "")
@@ -107,6 +108,7 @@ export function ProfilePageEditor({
   const [uploading, setUploading] = useState<"avatar" | "cover" | null>(null)
   const [isPending, startTransition] = useTransition()
   const publicStudentPath = slug ? buildStudentProfilePath(slug) : null
+  const publicTeacherPath = profileType === "professor" && slug ? buildTeacherProfilePath(slug) : null
 
   function notifyProfileUpdated() {
     window.dispatchEvent(new CustomEvent("profile:updated"))
@@ -149,6 +151,7 @@ export function ProfilePageEditor({
       const result = await updateDashboardProfile({
         fullName,
         bio,
+        websiteUrl,
         interests,
         slug,
         educationLevel: educationLevel || null,
@@ -164,6 +167,7 @@ export function ProfilePageEditor({
       setProfile(result.profile)
       setFullName(result.profile.full_name ?? "")
       setBio(result.profile.bio ?? "")
+      setWebsiteUrl(result.profile.website_url ?? "")
       setInterests(result.profile.interests ?? [])
       setSlug(result.profile.slug ?? "")
       setEducationLevel(result.profile.education_level ?? "")
@@ -330,6 +334,21 @@ export function ProfilePageEditor({
             />
           </div>
 
+          {profileType === "professor" ? (
+            <div className="space-y-2">
+              <Label htmlFor="websiteUrl">Site</Label>
+              <Input
+                id="websiteUrl"
+                type="url"
+                value={websiteUrl}
+                onChange={(event) => setWebsiteUrl(event.target.value)}
+                className={cn("h-11", theme.ring)}
+                placeholder="https://seusite.com.br"
+              />
+              <p className="text-xs text-gray-500">Opcional. Se informado, pode aparecer no seu perfil publico.</p>
+            </div>
+          ) : null}
+
           <div className="space-y-3">
             <Label>{profileType === "professor" ? "Disciplinas" : "Interesses"}</Label>
             <div className="flex flex-wrap gap-2">
@@ -452,6 +471,16 @@ export function ProfilePageEditor({
                   href={publicStudentPath}
                   target="_blank"
                   className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-emerald-700 hover:text-emerald-800"
+                >
+                  Ver pagina publica
+                  <ExternalLink className="h-4 w-4" />
+                </Link>
+              ) : null}
+              {profileType === "professor" && isPublic && publicTeacherPath ? (
+                <Link
+                  href={publicTeacherPath}
+                  target="_blank"
+                  className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-blue-700 hover:text-blue-800"
                 >
                   Ver pagina publica
                   <ExternalLink className="h-4 w-4" />

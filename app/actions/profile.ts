@@ -17,7 +17,7 @@ import {
   EMPLOYMENT_STATUS_OPTIONS,
   STUDY_FOCUS_MAX_CHARS,
 } from "@/lib/profile/constants"
-import { buildStudentProfilePath, slugifyProfileValue } from "@/lib/profile/public"
+import { buildStudentProfilePath, buildTeacherProfilePath, slugifyProfileValue } from "@/lib/profile/public"
 import { dbPool } from "@/lib/db/pool"
 
 export type ProfileVisibility = "public" | "private"
@@ -27,6 +27,7 @@ export type DashboardProfile = {
   user_type: "aluno" | "professor"
   avatar_url: string | null
   cover_url: string | null
+  website_url: string | null
   bio: string | null
   interests: string[]
   slug: string | null
@@ -56,6 +57,7 @@ function sniffImageMime(buf: Buffer): string | null {
 const updateProfileSchema = z.object({
   fullName: z.string().trim().min(2, "Informe seu nome").max(120, "Nome muito longo"),
   bio: z.string().trim().max(BIO_MAX_CHARS, `Descricao deve ter ate ${BIO_MAX_CHARS} caracteres`).optional(),
+  websiteUrl: z.string().trim().url("Informe uma URL valida").max(240, "Site muito longo").optional().or(z.literal("")),
   interests: z.array(z.string().trim().min(1).max(40)).max(16).default([]),
   slug: z.string().trim().max(60, "Slug muito longo").optional().default(""),
   educationLevel: z.enum(EDUCATION_LEVEL_OPTIONS).optional().nullable(),
@@ -117,6 +119,8 @@ function revalidateProfilePaths(userType?: string | null, previousSlug?: string 
   if (userType === "professor") revalidatePath("/dashboard/professor")
   if (userType === "aluno" && previousSlug) revalidatePath(buildStudentProfilePath(previousSlug))
   if (userType === "aluno" && nextSlug && nextSlug !== previousSlug) revalidatePath(buildStudentProfilePath(nextSlug))
+  if (userType === "professor" && previousSlug) revalidatePath(buildTeacherProfilePath(previousSlug))
+  if (userType === "professor" && nextSlug && nextSlug !== previousSlug) revalidatePath(buildTeacherProfilePath(nextSlug))
 }
 
 export async function getCurrentDashboardProfile(): Promise<DashboardProfile | null> {
@@ -124,7 +128,7 @@ export async function getCurrentDashboardProfile(): Promise<DashboardProfile | n
   if (!user) return null
 
   return queryOne<DashboardProfile>(
-    `select id, full_name, user_type, avatar_url, cover_url, bio, slug,
+    `select id, full_name, user_type, avatar_url, cover_url, website_url, bio, slug,
             education_level, employment_status, study_focus,
             coalesce(interests, array[]::text[]) as interests,
             coalesce(profile_visibility, 'private') as profile_visibility
@@ -159,7 +163,7 @@ export async function updateDashboardProfile(input: unknown): Promise<
     await client.query("begin")
 
     const current = await client.query<CurrentProfileRow>(
-      `select id, full_name, user_type, avatar_url, cover_url, bio, slug,
+      `select id, full_name, user_type, avatar_url, cover_url, website_url, bio, slug,
               education_level, employment_status, study_focus,
               coalesce(interests, array[]::text[]) as interests,
               coalesce(profile_visibility, 'private') as profile_visibility
@@ -190,20 +194,22 @@ export async function updateDashboardProfile(input: unknown): Promise<
       `update public.profiles
           set full_name = $1,
               bio = $2,
-              interests = $3,
-              profile_visibility = $4,
-              slug = $5,
-              education_level = $6,
-              employment_status = $7,
-              study_focus = $8
-        where id = $9
-        returning id, full_name, user_type, avatar_url, cover_url, bio, slug,
+              website_url = $3,
+              interests = $4,
+              profile_visibility = $5,
+              slug = $6,
+              education_level = $7,
+              employment_status = $8,
+              study_focus = $9
+        where id = $10
+        returning id, full_name, user_type, avatar_url, cover_url, website_url, bio, slug,
                   education_level, employment_status, study_focus,
                   coalesce(interests, array[]::text[]) as interests,
                   coalesce(profile_visibility, 'private') as profile_visibility`,
       [
         parsed.data.fullName,
         parsed.data.bio?.trim() || null,
+        parsed.data.websiteUrl?.trim() || null,
         interests,
         parsed.data.profileVisibility,
         nextSlug,

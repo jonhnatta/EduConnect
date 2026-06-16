@@ -39,11 +39,12 @@ async function fetchTopIds(): Promise<Set<string>> {
      LEFT JOIN public.content_items ci ON ci.author_id = p.id
      WHERE p.user_type = 'professor'
        AND p.professor_verification_status = 'approved'
+       AND coalesce(p.profile_visibility, 'private') = 'public'
      GROUP BY p.id
-     HAVING COUNT(DISTINCT ci.id) FILTER (WHERE ci.status = 'published') > 0
+     HAVING COUNT(DISTINCT ci.id) FILTER (WHERE ci.status = 'published' AND ci.visibility = 'public') > 0
      ORDER BY (
-       COUNT(DISTINCT ci.id) FILTER (WHERE ci.status = 'published') * 5
-       + COALESCE(SUM(ci.like_count) FILTER (WHERE ci.status = 'published'), 0)
+       COUNT(DISTINCT ci.id) FILTER (WHERE ci.status = 'published' AND ci.visibility = 'public') * 5
+       + COALESCE(SUM(ci.like_count) FILTER (WHERE ci.status = 'published' AND ci.visibility = 'public'), 0)
      ) DESC
      LIMIT 3`,
     []
@@ -60,6 +61,7 @@ export async function listProfessores(
   const conditions: string[] = [
     "p.user_type = 'professor'",
     "p.professor_verification_status = 'approved'",
+    "coalesce(p.profile_visibility, 'private') = 'public'",
   ]
 
   if (disciplina) {
@@ -120,13 +122,14 @@ export async function listProfessores(
        p.interests,
        p.followers_count::int                                             AS followers_count,
        COUNT(DISTINCT ci.id)
-         FILTER (WHERE ci.status = 'published')::int                     AS post_count,
+         FILTER (WHERE ci.status = 'published' AND ci.visibility = 'public')::int
+                                                                        AS post_count,
        COALESCE(
-         SUM(ci.like_count) FILTER (WHERE ci.status = 'published'), 0
+         SUM(ci.like_count) FILTER (WHERE ci.status = 'published' AND ci.visibility = 'public'), 0
        )::int                                                             AS total_likes,
        (
-         COUNT(DISTINCT ci.id) FILTER (WHERE ci.status = 'published') * 5
-         + COALESCE(SUM(ci.like_count) FILTER (WHERE ci.status = 'published'), 0)
+         COUNT(DISTINCT ci.id) FILTER (WHERE ci.status = 'published' AND ci.visibility = 'public') * 5
+         + COALESCE(SUM(ci.like_count) FILTER (WHERE ci.status = 'published' AND ci.visibility = 'public'), 0)
        )::int                                                             AS relevance_score
      FROM public.profiles p
      LEFT JOIN public.content_items ci ON ci.author_id = p.id
@@ -167,6 +170,7 @@ export async function listDisciplinas(): Promise<string[]> {
      FROM public.profiles p
      WHERE p.user_type = 'professor'
        AND p.professor_verification_status = 'approved'
+       AND coalesce(p.profile_visibility, 'private') = 'public'
        AND p.interests IS NOT NULL
      ORDER BY disciplina`,
     []
@@ -192,8 +196,11 @@ export type ProfessorProfile = {
   bio: string | null
   avatar_url: string | null
   cover_url: string | null
+  website_url: string | null
   interests: string[]
+  levels: string[]
   followers_count: number
+  students_count: number
   post_count: number
   total_likes: number
   posts: ProfessorPost[]
@@ -209,30 +216,58 @@ export async function getProfessorProfile(
     bio: string | null
     avatar_url: string | null
     cover_url: string | null
+    website_url: string | null
     interests: string[] | null
     followers_count: string
+    students_count: string
   }>(
-    `SELECT id, slug, full_name, bio, avatar_url, cover_url, interests, followers_count
-     FROM public.profiles
-     WHERE user_type = 'professor'
-       AND professor_verification_status = 'approved'
-       AND (lower(slug) = lower($1) OR id::text = $1)
+    `SELECT
+       p.id,
+       p.slug,
+       p.full_name,
+       p.bio,
+       p.avatar_url,
+       p.cover_url,
+       p.website_url,
+       p.interests,
+       p.followers_count,
+       (
+         SELECT count(distinct cm.student_id)::int
+         FROM public.classrooms c
+         JOIN public.classroom_members cm ON cm.classroom_id = c.id
+         WHERE c.professor_id = p.id
+       ) AS students_count
+     FROM public.profiles p
+     WHERE p.user_type = 'professor'
+       AND p.professor_verification_status = 'approved'
+       AND coalesce(p.profile_visibility, 'private') = 'public'
+       AND (lower(p.slug) = lower($1) OR p.id::text = $1)
      LIMIT 1`,
     [slugOrId]
   )
 
   if (!prof) return null
 
-  const posts = await query<ProfessorPost>(
-    `SELECT id, type, title, like_count, view_count, published_at
+  const posts = await query<(ProfessorPost & { nivel: string | null })>(
+    `SELECT
+       id,
+       type,
+       title,
+       like_count,
+       view_count,
+       published_at,
+       nullif(btrim(settings->>'nivel'), '') as nivel
      FROM public.content_items
-     WHERE author_id = $1 AND status = 'published'
+     WHERE author_id = $1
+       AND status = 'published'
+       AND visibility = 'public'
      ORDER BY like_count DESC, published_at DESC
      LIMIT 10`,
     [prof.id]
   )
 
   const postList = posts ?? []
+  const levels = [...new Set(postList.map((post) => post.nivel).filter((value): value is string => !!value))]
 
   return {
     id: prof.id,
@@ -241,10 +276,13 @@ export async function getProfessorProfile(
     bio: prof.bio,
     avatar_url: prof.avatar_url,
     cover_url: prof.cover_url,
+    website_url: prof.website_url,
     interests: prof.interests ?? [],
+    levels,
     followers_count: Number(prof.followers_count ?? 0),
+    students_count: Number(prof.students_count ?? 0),
     post_count: postList.length,
     total_likes: postList.reduce((s, p) => s + p.like_count, 0),
-    posts: postList,
+    posts: postList.map(({ nivel: _nivel, ...post }) => post),
   }
 }
