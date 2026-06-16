@@ -11,6 +11,7 @@ export type ProfessorCard = {
   interests: string[]
   post_count: number
   total_likes: number
+  followers_count: number
   relevance_score: number
   em_alta: boolean
 }
@@ -105,6 +106,7 @@ export async function listProfessores(
     bio: string | null
     avatar_url: string | null
     interests: string[] | null
+    followers_count: string
     post_count: string
     total_likes: string
     relevance_score: string
@@ -116,6 +118,7 @@ export async function listProfessores(
        p.bio,
        p.avatar_url,
        p.interests,
+       p.followers_count::int                                             AS followers_count,
        COUNT(DISTINCT ci.id)
          FILTER (WHERE ci.status = 'published')::int                     AS post_count,
        COALESCE(
@@ -143,6 +146,7 @@ export async function listProfessores(
     bio: r.bio,
     avatar_url: r.avatar_url,
     interests: r.interests ?? [],
+    followers_count: Number(r.followers_count ?? 0),
     post_count: Number(r.post_count),
     total_likes: Number(r.total_likes),
     relevance_score: Number(r.relevance_score),
@@ -189,6 +193,7 @@ export type ProfessorProfile = {
   avatar_url: string | null
   cover_url: string | null
   interests: string[]
+  followers_count: number
   post_count: number
   total_likes: number
   posts: ProfessorPost[]
@@ -205,8 +210,9 @@ export async function getProfessorProfile(
     avatar_url: string | null
     cover_url: string | null
     interests: string[] | null
+    followers_count: string
   }>(
-    `SELECT id, slug, full_name, bio, avatar_url, cover_url, interests
+    `SELECT id, slug, full_name, bio, avatar_url, cover_url, interests, followers_count
      FROM public.profiles
      WHERE user_type = 'professor'
        AND professor_verification_status = 'approved'
@@ -236,6 +242,7 @@ export async function getProfessorProfile(
     avatar_url: prof.avatar_url,
     cover_url: prof.cover_url,
     interests: prof.interests ?? [],
+    followers_count: Number(prof.followers_count ?? 0),
     post_count: postList.length,
     total_likes: postList.reduce((s, p) => s + p.like_count, 0),
     posts: postList,

@@ -2,7 +2,7 @@
 
 import { useRef, useState, useTransition } from "react"
 import Link from "next/link"
-import { Camera, Eye, EyeOff, ExternalLink, Loader2, Save, Upload, User } from "lucide-react"
+import { Camera, Eye, EyeOff, ExternalLink, Loader2, Save, Upload, User, Users } from "lucide-react"
 import { uploadProfileImage, updateDashboardProfile, type DashboardProfile } from "@/app/actions/profile"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
@@ -84,9 +84,11 @@ function initials(name: string | null) {
 export function ProfilePageEditor({
   initialProfile,
   profileType,
+  socialStats,
 }: {
   initialProfile: DashboardProfile
   profileType: "aluno" | "professor"
+  socialStats?: { followersCount: number; followingCount: number }
 }) {
   const theme = THEMES[profileType]
   const avatarInputRef = useRef<HTMLInputElement>(null)
@@ -206,7 +208,8 @@ export function ProfilePageEditor({
         </div>
 
         <div className="px-4 sm:px-6 pb-6">
-          <div className="flex flex-col sm:flex-row sm:items-end gap-4 -mt-14 sm:-mt-16">
+          {/* Linha 1: avatar (sobrepõe a capa) + botão salvar — sem texto aqui */}
+          <div className="flex items-end justify-between -mt-14 sm:-mt-16">
             <div className="relative w-fit">
               <Avatar className="h-28 w-28 sm:h-36 sm:w-36 border-4 border-white shadow-sm">
                 <AvatarImage src={profile.avatar_url || ""} />
@@ -232,33 +235,51 @@ export function ProfilePageEditor({
               </button>
             </div>
 
-            <div className="flex-1 sm:pb-3">
-              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={cn("inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium", theme.soft)}>
-                      <User className="h-3.5 w-3.5 mr-1.5" />
-                      {theme.roleLabel}
-                    </span>
-                    <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-medium text-gray-600">
-                      {isPublic ? <Eye className="h-3.5 w-3.5 mr-1.5" /> : <EyeOff className="h-3.5 w-3.5 mr-1.5" />}
-                      {isPublic ? "Publico" : "Privado"}
-                    </span>
-                  </div>
-                  <h2 className="font-display text-2xl font-bold text-gray-900">{fullName || "Seu nome"}</h2>
-                  <p className="text-sm text-gray-500">Perfil pessoal na EduConnect</p>
-                </div>
-                <Button
-                  type="button"
-                  className={cn("gap-2 text-white", theme.accent, theme.accentHover)}
-                  disabled={isPending}
-                  onClick={saveProfile}
-                >
-                  {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                  Salvar perfil
-                </Button>
-              </div>
+            <Button
+              type="button"
+              className={cn("gap-2 text-white mb-1", theme.accent, theme.accentHover)}
+              disabled={isPending}
+              onClick={saveProfile}
+            >
+              {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              Salvar perfil
+            </Button>
+          </div>
+
+          {/* Linha 2: badges, nome e estatísticas — totalmente na área branca */}
+          <div className="mt-4">
+            <div className="flex flex-wrap items-center gap-2 mb-2">
+              <span className={cn("inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium", theme.soft)}>
+                <User className="h-3.5 w-3.5 mr-1.5" />
+                {theme.roleLabel}
+              </span>
+              <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-medium text-gray-600">
+                {isPublic ? <Eye className="h-3.5 w-3.5 mr-1.5" /> : <EyeOff className="h-3.5 w-3.5 mr-1.5" />}
+                {isPublic ? "Publico" : "Privado"}
+              </span>
             </div>
+            <h2 className="font-display text-2xl font-bold text-gray-900">{fullName || "Seu nome"}</h2>
+            {socialStats ? (
+              <div className="flex items-center gap-5 mt-2">
+                <div className="text-center">
+                  <p className="font-display font-bold text-lg text-gray-900 leading-tight">
+                    {profileType === "professor" ? socialStats.followersCount : 0}
+                  </p>
+                  <p className="text-xs text-gray-500 flex items-center gap-1 justify-center">
+                    <Users className="h-3 w-3" /> seguidores
+                  </p>
+                </div>
+                <div className="w-px h-8 bg-gray-200" />
+                <div className="text-center">
+                  <p className="font-display font-bold text-lg text-gray-900 leading-tight">
+                    {profileType === "aluno" ? socialStats.followingCount : 0}
+                  </p>
+                  <p className="text-xs text-gray-500">seguindo</p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500 mt-1">Perfil pessoal na EduConnect</p>
+            )}
           </div>
 
           {message ? (

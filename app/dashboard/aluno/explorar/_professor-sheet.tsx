@@ -22,9 +22,13 @@ import {
   Lightbulb,
   BarChart2,
   Loader2,
+  Users,
+  UserPlus,
+  UserCheck,
 } from "lucide-react"
 import { getProfessorProfile } from "@/app/actions/professors"
 import type { ProfessorProfile, ProfessorPost } from "@/app/actions/professors"
+import { getFollowState, toggleFollow } from "@/app/actions/follows"
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/)
@@ -123,6 +127,9 @@ interface Props {
 export function ProfessorSheet({ slugOrId, onClose }: Props) {
   const [profile, setProfile] = useState<ProfessorProfile | null>(null)
   const [isPending, startTransition] = useTransition()
+  const [following, setFollowing] = useState(false)
+  const [followersCount, setFollowersCount] = useState(0)
+  const [isFollowPending, startFollowTransition] = useTransition()
 
   useEffect(() => {
     if (!slugOrId) {
@@ -131,10 +138,33 @@ export function ProfessorSheet({ slugOrId, onClose }: Props) {
     }
     setProfile(null)
     startTransition(async () => {
-      const data = await getProfessorProfile(slugOrId)
+      const [data, followState] = await Promise.all([
+        getProfessorProfile(slugOrId),
+        getFollowState(slugOrId).catch(() => ({ following: false, followersCount: 0 })),
+      ])
       setProfile(data)
+      setFollowing(followState.following)
+      setFollowersCount(followState.followersCount)
     })
   }, [slugOrId])
+
+  function handleFollow() {
+    if (!profile) return
+    const nextFollowing = !following
+    setFollowing(nextFollowing)
+    setFollowersCount((c) => (nextFollowing ? c + 1 : Math.max(c - 1, 0)))
+
+    startFollowTransition(async () => {
+      const result = await toggleFollow(profile.id)
+      if (result.ok) {
+        setFollowing(result.following)
+        setFollowersCount(result.followersCount)
+      } else {
+        setFollowing(following)
+        setFollowersCount(followersCount)
+      }
+    })
+  }
 
   const isOpen = !!slugOrId
 
@@ -215,24 +245,54 @@ export function ProfessorSheet({ slugOrId, onClose }: Props) {
                 </p>
               )}
 
-              {/* Stats */}
-              <div className="flex gap-6 py-4 border-y border-gray-100 mb-5">
-                <div className="text-center">
-                  <p className="font-display font-bold text-xl text-gray-900">
-                    {profile.post_count}
-                  </p>
-                  <p className="text-xs text-gray-500 flex items-center gap-1 justify-center mt-0.5">
-                    <BookOpen className="h-3 w-3" /> Publicações
-                  </p>
+              {/* Stats + Seguir */}
+              <div className="flex items-center justify-between py-4 border-y border-gray-100 mb-5">
+                <div className="flex gap-5">
+                  <div className="text-center">
+                    <p className="font-display font-bold text-xl text-gray-900">
+                      {formatCount(followersCount)}
+                    </p>
+                    <p className="text-xs text-gray-500 flex items-center gap-1 justify-center mt-0.5">
+                      <Users className="h-3 w-3" /> Seguidores
+                    </p>
+                  </div>
+                  <div className="text-center">
+                    <p className="font-display font-bold text-xl text-gray-900">
+                      {profile.post_count}
+                    </p>
+                    <p className="text-xs text-gray-500 flex items-center gap-1 justify-center mt-0.5">
+                      <BookOpen className="h-3 w-3" /> Publicações
+                    </p>
+                  </div>
+                  <div className="text-center">
+                    <p className="font-display font-bold text-xl text-gray-900">
+                      {formatCount(profile.total_likes)}
+                    </p>
+                    <p className="text-xs text-gray-500 flex items-center gap-1 justify-center mt-0.5">
+                      <Heart className="h-3 w-3" /> Curtidas
+                    </p>
+                  </div>
                 </div>
-                <div className="text-center">
-                  <p className="font-display font-bold text-xl text-gray-900">
-                    {formatCount(profile.total_likes)}
-                  </p>
-                  <p className="text-xs text-gray-500 flex items-center gap-1 justify-center mt-0.5">
-                    <Heart className="h-3 w-3" /> Curtidas
-                  </p>
-                </div>
+
+                <Button
+                  onClick={handleFollow}
+                  disabled={isFollowPending}
+                  size="sm"
+                  className={`gap-1.5 ${
+                    following
+                      ? "bg-gray-100 text-gray-800 hover:bg-red-50 hover:text-red-600 border border-gray-200"
+                      : "bg-[#1D4ED8] text-white hover:bg-[#1E3A8A]"
+                  }`}
+                >
+                  {isFollowPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : following ? (
+                    <UserCheck className="h-3.5 w-3.5" />
+                  ) : (
+                    <UserPlus className="h-3.5 w-3.5" />
+                  )}
+                  {following ? "Seguindo" : "Seguir"}
+                </Button>
               </div>
 
               {/* Publicações */}

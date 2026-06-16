@@ -10,7 +10,6 @@ import {
   BookOpen,
   ChevronRight,
   TrendingUp,
-  Heart,
   Flame,
   Loader2,
 } from "lucide-react"
@@ -343,12 +342,12 @@ function ProfessorCardItem({
         <div className="mt-auto pt-4 border-t border-gray-100 flex items-center justify-between text-sm">
           <div className="flex items-center gap-4 text-gray-500">
             <div className="flex items-center gap-1.5">
-              <BookOpen className="h-4 w-4 text-gray-400" />
-              <span>{prof.post_count} posts</span>
+              <Users className="h-4 w-4 text-gray-400" />
+              <span>{formatCount(prof.followers_count)}</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <Heart className="h-4 w-4 text-gray-400" />
-              <span>{formatCount(prof.total_likes)}</span>
+              <BookOpen className="h-4 w-4 text-gray-400" />
+              <span>{prof.post_count} posts</span>
             </div>
           </div>
           <div className="text-[#1D4ED8] font-medium flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity -translate-x-2 group-hover:translate-x-0">
