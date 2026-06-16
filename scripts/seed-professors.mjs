@@ -775,11 +775,12 @@ async function insertProfessor(client, professor) {
 
   await client.query(
     `INSERT INTO public.profiles
-       (id, full_name, user_type, bio, interests, professor_verification_status, created_at, updated_at)
-     VALUES ($1, $2, 'professor', $3, $4, 'approved', NOW(), NOW())
+       (id, full_name, user_type, bio, interests, professor_verification_status, profile_visibility, created_at, updated_at)
+     VALUES ($1, $2, 'professor', $3, $4, 'approved', 'public', NOW(), NOW())
      ON CONFLICT (id) DO UPDATE SET
        full_name = EXCLUDED.full_name,
        professor_verification_status = 'approved',
+       profile_visibility = 'public',
        bio = EXCLUDED.bio,
        interests = EXCLUDED.interests`,
     [finalUserId, professor.fullName, professor.bio, professor.interests]

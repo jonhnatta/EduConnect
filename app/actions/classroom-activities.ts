@@ -4,7 +4,10 @@ import { del, put } from "@/lib/blob"
 import { randomUUID } from "crypto"
 import { revalidatePath } from "next/cache"
 import { requireAuthedUser } from "@/lib/auth/user"
-import { getProfessorActionAccess } from "@/lib/auth/guards"
+import {
+  getProfessorActionAccess,
+  getApprovedProfessorActionAccess,
+} from "@/lib/auth/guards"
 import { query, queryOne } from "@/lib/db/query"
 import type {
   ActivityAttachment,
@@ -101,7 +104,8 @@ export async function uploadActivityAttachmentFiles(
     return { ok: false, error: "BLOB_READ_WRITE_TOKEN nao configurado" }
   }
 
-  const access = await getProfessorActionAccess()
+  // Apenas professor APROVADO publica/edita conteudo avaliativo (reavaliado a cada acao).
+  const access = await getApprovedProfessorActionAccess()
   if (!access.ok) return { ok: false, error: access.error }
 
   const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
@@ -246,10 +250,10 @@ export async function uploadTrixActivityImage(
     return { ok: false, error: "BLOB_READ_WRITE_TOKEN nao configurado" }
   }
 
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return { ok: false, error: "Nao autenticado" }
+  const access = await getApprovedProfessorActionAccess()
+  if (!access.ok) return { ok: false, error: access.error }
 
-  const ok = await assertProfessorOwnsClassroom(classroomId, user.id)
+  const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
   if (!ok) return { ok: false, error: "Sala nao encontrada" }
 
   const file = formData.get("file")
@@ -290,13 +294,13 @@ export async function uploadTrixActivityImage(
 export async function createActivity(
   input: CreateActivityInput
 ): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return { ok: false, error: "Nao autenticado" }
+  const access = await getApprovedProfessorActionAccess()
+  if (!access.ok) return { ok: false, error: access.error }
 
   const title = input.title.trim()
   if (!title) return { ok: false, error: "Titulo obrigatorio" }
 
-  const ok = await assertProfessorOwnsClassroom(input.classroomId, user.id)
+  const ok = await assertProfessorOwnsClassroom(input.classroomId, access.userId)
   if (!ok) return { ok: false, error: "Sala nao encontrada" }
 
   const attachments = input.attachments ?? []
@@ -363,10 +367,10 @@ export async function createActivity(
 export async function updateActivity(
   input: UpdateActivityInput
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return { ok: false, error: "Nao autenticado" }
+  const access = await getApprovedProfessorActionAccess()
+  if (!access.ok) return { ok: false, error: access.error }
 
-  const ok = await assertProfessorOwnsClassroom(input.classroomId, user.id)
+  const ok = await assertProfessorOwnsClassroom(input.classroomId, access.userId)
   if (!ok) return { ok: false, error: "Sala nao encontrada" }
 
   const patch: Record<string, unknown> = {}
@@ -474,10 +478,10 @@ export async function deleteActivity(
   activityId: string,
   classroomId: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return { ok: false, error: "Nao autenticado" }
+  const access = await getApprovedProfessorActionAccess()
+  if (!access.ok) return { ok: false, error: access.error }
 
-  const ok = await assertProfessorOwnsClassroom(classroomId, user.id)
+  const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
   if (!ok) return { ok: false, error: "Sala nao encontrada" }
 
   const existing = await queryOne<{ settings: any }>(

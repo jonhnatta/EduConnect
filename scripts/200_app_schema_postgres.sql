@@ -530,6 +530,22 @@ alter table public.profiles
   add constraint profiles_professor_verification_status_check
   check (professor_verification_status in ('none', 'pending', 'approved', 'rejected'));
 
+-- Verificação por IA + fila de análise manual (scripts/026).
+alter table public.profiles
+  add column if not exists professor_verification_ai_reason text;
+alter table public.profiles
+  add column if not exists professor_verification_manual_requested_at timestamptz;
+alter table public.profiles
+  add column if not exists professor_verification_reviewed_at timestamptz;
+create index if not exists idx_profiles_verification_manual_queue
+  on public.profiles (professor_verification_manual_requested_at)
+  where professor_verification_status = 'pending'
+    and professor_verification_manual_requested_at is not null;
+
+-- Consentimento LGPD (scripts/025): momento do aceite de Termos + Privacidade.
+alter table public.profiles
+  add column if not exists terms_accepted_at timestamptz;
+
 -- 008_student_planner_personal_tasks.sql
 create table if not exists public.student_planner_personal_tasks (
   id uuid primary key default gen_random_uuid(),

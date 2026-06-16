@@ -11,8 +11,10 @@ export function generateInviteCodeSegment(length = 4): string {
   return out
 }
 
+// 6 caracteres do alfabeto de 32 simbolos = 32^6 ≈ 1,07 bilhao de combinacoes
+// (antes eram 4 = ~1 milhao, enumeravel). Reduz drasticamente o brute-force do codigo.
 export function buildInviteCode(): string {
-  return `EDU-${generateInviteCodeSegment(4)}`
+  return `EDU-${generateInviteCodeSegment(6)}`
 }
 
 export function normalizeInviteCodeInput(code: string): string {

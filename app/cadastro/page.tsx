@@ -64,6 +64,7 @@ function CadastroContent() {
   const [error, setError] = useState<string | null>(null)
   const [selectedMaterias, setSelectedMaterias] = useState<string[]>([])
   const [selectedNiveis, setSelectedNiveis] = useState<string[]>([])
+  const [acceptedTerms, setAcceptedTerms] = useState(false)
 
   const professorDocInputRef = useRef<HTMLInputElement | null>(null)
   const [professorDoc, setProfessorDoc] = useState<File | null>(null)
@@ -137,6 +138,12 @@ function CadastroContent() {
       return
     }
 
+    if (!acceptedTerms) {
+      setError("Voce precisa aceitar os Termos de Uso e a Politica de Privacidade")
+      setIsLoading(false)
+      return
+    }
+
     const res = await fetch("/api/auth/signup", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -146,6 +153,7 @@ function CadastroContent() {
         fullName: formData.nome,
         userType,
         interests: selectedMaterias,
+        acceptedTerms,
       }),
     })
 
@@ -548,14 +556,35 @@ function CadastroContent() {
                   </>
                 )}
 
-                <Button 
-                  type="submit" 
+                {/* Aceite de Termos + Privacidade (LGPD) */}
+                <label className="flex items-start gap-3 text-sm text-gray-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={acceptedTerms}
+                    onChange={(e) => setAcceptedTerms(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-gray-300 text-[#1D4ED8] focus:ring-[#1D4ED8]"
+                  />
+                  <span>
+                    Li e concordo com os{" "}
+                    <Link href="/termos" target="_blank" className="text-[#1D4ED8] underline font-medium">
+                      Termos de Uso
+                    </Link>{" "}
+                    e a{" "}
+                    <Link href="/privacidade" target="_blank" className="text-[#1D4ED8] underline font-medium">
+                      Política de Privacidade
+                    </Link>
+                    .
+                  </span>
+                </label>
+
+                <Button
+                  type="submit"
                   className={`w-full h-12 text-base font-semibold ${
-                    userType === "professor" 
-                      ? "bg-[#1D4ED8] hover:bg-[#1E3A8A]" 
+                    userType === "professor"
+                      ? "bg-[#1D4ED8] hover:bg-[#1E3A8A]"
                       : "bg-[#10B981] hover:bg-[#059669]"
                   }`}
-                  disabled={isLoading}
+                  disabled={isLoading || !acceptedTerms}
                 >
                   {isLoading ? (
                     <span className="flex items-center gap-2">

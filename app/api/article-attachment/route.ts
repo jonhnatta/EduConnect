@@ -1,6 +1,8 @@
 import { get } from "@/lib/blob"
 import { NextRequest, NextResponse } from "next/server"
 import { queryOne } from "@/lib/db/query"
+import { getAuthedUser } from "@/lib/auth/user"
+import { applySafeServingHeaders } from "@/lib/http/safe-serving"
 
 export const runtime = "nodejs"
 
@@ -8,6 +10,10 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function extractContentItemId(pathname: string): string | null {
+  // Rejeita traversal antes de qualquer uso do pathname no backend de blob.
+  if (pathname.includes("..") || pathname.includes("//") || pathname.includes("\\")) {
+    return null
+  }
   const parts = pathname.split("/").filter(Boolean)
   if (parts[0] !== "articles" || !parts[1]) return null
   return UUID_RE.test(parts[1]) ? parts[1] : null
@@ -30,12 +36,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid pathname" }, { status: 400 })
   }
 
-  const row = await queryOne<{ id: string }>(
-    "select id from public.content_items where id = $1",
-    [contentItemId]
-  )
+  // Autorizacao real (a RLS e inerte): so serve a midia se o solicitante pode ver o conteudo.
+  // user_can_view_content_item libera publicado+publico a qualquer um (inclusive anonimo),
+  // e restringe rascunho/privado ao autor e conteudo de turma a membros.
+  const user = await getAuthedUser()
+  const access = await queryOne<{ can_view: boolean }>(
+    "select public.user_can_view_content_item($1::uuid, $2::uuid) as can_view",
+    [contentItemId, user?.id ?? null]
+  ).catch(() => null)
 
-  if (!row) {
+  if (access?.can_view !== true) {
     return NextResponse.json({ error: "Not found" }, { status: 404 })
   }
 
@@ -68,12 +78,7 @@ export async function GET(request: NextRequest) {
   const friendly = filenameParam
     ? sanitizeDownloadFilename(filenameParam)
     : pathname.split("/").pop() ?? "file"
-  if (!outHeaders.has("content-disposition")) {
-    outHeaders.set(
-      "content-disposition",
-      `inline; filename*=UTF-8''${encodeURIComponent(friendly)}`
-    )
-  }
+  applySafeServingHeaders(outHeaders, friendly)
 
   return new NextResponse(result.stream, {
     status: 200,
