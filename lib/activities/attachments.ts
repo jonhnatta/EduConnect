@@ -89,6 +89,10 @@ function isLikelyVercelBlobHost(hostname: string): boolean {
   )
 }
 
+function isSimulatorUrl(url: string): boolean {
+  return url.startsWith("blob-sim://")
+}
+
 export type ClassroomBlobKind = "activity" | "material"
 
 export function blobPathPrefixForClassroom(
@@ -110,13 +114,15 @@ export function assertBlobAttachmentsForClassroom(
     if (!a.pathname.includes(prefix)) {
       return "Anexo nao pertence a esta sala"
     }
-    try {
-      const u = new URL(a.url)
-      if (u.protocol !== "https:" || !isLikelyVercelBlobHost(u.hostname)) {
+    if (!isSimulatorUrl(a.url)) {
+      try {
+        const u = new URL(a.url)
+        if (u.protocol !== "https:" || !isLikelyVercelBlobHost(u.hostname)) {
+          return "URL de anexo invalida"
+        }
+      } catch {
         return "URL de anexo invalida"
       }
-    } catch {
-      return "URL de anexo invalida"
     }
   }
   return null

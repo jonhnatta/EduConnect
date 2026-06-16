@@ -1,6 +1,6 @@
 "use server"
 
-import { put, del } from "@vercel/blob"
+import { put, del } from "@/lib/blob"
 import { randomUUID } from "crypto"
 import { revalidatePath } from "next/cache"
 import type { PoolClient } from "pg"

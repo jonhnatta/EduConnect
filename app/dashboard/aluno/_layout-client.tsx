@@ -91,9 +91,11 @@ export function AlunoLayoutClient({
             <span className="font-display text-lg font-bold text-gray-900">EduConnect</span>
           </Link>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" className="relative">
-              <Bell className="h-5 w-5 text-gray-600" />
-              <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500" />
+            <Button asChild variant="ghost" size="icon" className="relative">
+              <Link href="/dashboard/aluno/notificacoes" aria-label="Abrir notificacoes">
+                <Bell className="h-5 w-5 text-gray-600" />
+                <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500" />
+              </Link>
             </Button>
             <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)}>
               {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
@@ -227,9 +229,11 @@ export function AlunoLayoutClient({
             </div>
           </div>
           <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" className="relative">
-              <Bell className="h-5 w-5 text-gray-600" />
-              <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500" />
+            <Button asChild variant="ghost" size="icon" className="relative">
+              <Link href="/dashboard/aluno/notificacoes" aria-label="Abrir notificacoes">
+                <Bell className="h-5 w-5 text-gray-600" />
+                <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500" />
+              </Link>
             </Button>
             <Avatar className="h-9 w-9">
               <AvatarImage src={profile?.avatar_url || ""} />

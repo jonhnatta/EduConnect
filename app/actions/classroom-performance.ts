@@ -1,7 +1,7 @@
 "use server"
 
 import { requireAuthedUser } from "@/lib/auth/user"
-import { getProfileAccess, isApprovedProfessor } from "@/lib/auth/profile"
+import { getProfessorActionAccess, getApprovedProfessorActionAccess } from "@/lib/auth/guards"
 import { query, queryOne } from "@/lib/db/query"
 import { parseExamFromSettings } from "@/lib/activities/exam"
 import type { ClassroomActivityRow } from "@/lib/activities/types"
@@ -125,12 +125,10 @@ export async function getClassroomPerformanceForProfessor(
     error: err,
   })
 
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) {
-    return emptyProf("Nao autenticado")
-  }
+  const access = await getProfessorActionAccess()
+  if (!access.ok) return emptyProf(access.error)
 
-  const ok = await assertProfessorOwnsClassroom(classroomId, user.id)
+  const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
   if (!ok) {
     return emptyProf("Sala nao encontrada")
   }
@@ -574,19 +572,13 @@ export async function getMyPerformanceInClassroom(
 export async function getProfessorStudentOverview(
   studentId: string
 ): Promise<ProfessorStudentOverview> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) {
-    return { studentId, fullName: null, classrooms: [], error: "Nao autenticado" }
-  }
-
-  const profile = await getProfileAccess(user.id)
-
-  if (!isApprovedProfessor(profile)) {
+  const access = await getApprovedProfessorActionAccess()
+  if (!access.ok) {
     return {
       studentId,
       fullName: null,
       classrooms: [],
-      error: "Apenas professores aprovados",
+      error: access.error,
     }
   }
 
@@ -605,7 +597,7 @@ export async function getProfessorStudentOverview(
         education_level: string | null
       }>(
         "select id, name, subject, education_level from public.classrooms where professor_id = $1 order by name asc",
-        [user.id]
+        [access.userId]
       )) ?? []
   } catch (e: any) {
     return {

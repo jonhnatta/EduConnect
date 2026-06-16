@@ -1,10 +1,13 @@
 "use server"
 
-import { del, put } from "@vercel/blob"
+import { del, put } from "@/lib/blob"
 import { randomUUID } from "crypto"
 import { revalidatePath } from "next/cache"
 import { requireAuthedUser } from "@/lib/auth/user"
-import { getProfileAccess, isApprovedProfessor } from "@/lib/auth/profile"
+import {
+  getApprovedProfessorActionAccess,
+  getProfessorActionAccess,
+} from "@/lib/auth/guards"
 import { dbPool } from "@/lib/db/pool"
 import { query, queryOne } from "@/lib/db/query"
 import {
@@ -69,13 +72,8 @@ export type CreateClassroomInput = {
 export async function createClassroom(
   input: CreateClassroomInput
 ): Promise<{ ok: true; id: string; inviteCode: string } | { ok: false; error: string }> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return { ok: false, error: "Nao autenticado" }
-
-  const profile = await getProfileAccess(user.id)
-  if (!isApprovedProfessor(profile)) {
-    return { ok: false, error: "Apenas professores aprovados podem criar salas" }
-  }
+  const access = await getApprovedProfessorActionAccess()
+  if (!access.ok) return { ok: false, error: access.error }
 
   const name = input.name.trim()
   const subject = input.subject.trim()
@@ -94,7 +92,7 @@ export async function createClassroom(
          values ($1,$2,$3,$4,$5,$6,$7,'ativa', timezone('utc'::text, now()), timezone('utc'::text, now()))
          returning id, invite_code`,
         [
-          user.id,
+          access.userId,
           name,
           subject,
           educationLevel,
@@ -173,8 +171,8 @@ export async function listClassroomsForProfessor(): Promise<{
   rows: (ClassroomRow & { member_count: number })[]
   error: string | null
 }> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return { rows: [], error: "Nao autenticado" }
+  const access = await getProfessorActionAccess()
+  if (!access.ok) return { rows: [], error: access.error }
 
   try {
     const rows = await query<(ClassroomRow & { member_count: number })>(
@@ -184,7 +182,7 @@ export async function listClassroomsForProfessor(): Promise<{
        where c.professor_id = $1
        group by c.id
        order by c.created_at desc`,
-      [user.id]
+      [access.userId]
     )
     return { rows, error: null }
   } catch (e: any) {
@@ -218,8 +216,8 @@ export async function listClassroomsForStudent(): Promise<{
 export async function getClassroomForProfessor(
   classroomId: string
 ): Promise<{ row: ClassroomRow & { member_count: number }; error: string | null } | { row: null; error: string }> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return { row: null, error: "Nao autenticado" }
+  const access = await getProfessorActionAccess()
+  if (!access.ok) return { row: null, error: access.error }
 
   try {
     const row = await queryOne<(ClassroomRow & { member_count: number })>(
@@ -228,7 +226,7 @@ export async function getClassroomForProfessor(
        left join public.classroom_members cm on cm.classroom_id = c.id
        where c.id = $1 and c.professor_id = $2
        group by c.id`,
-      [classroomId, user.id]
+      [classroomId, access.userId]
     )
     if (!row) return { row: null, error: "Sala nao encontrada" }
     return { row, error: null }
@@ -263,10 +261,10 @@ export async function listMembersForClassroom(classroomId: string): Promise<{
   members: { student_id: string; full_name: string | null; joined_at: string }[]
   error: string | null
 }> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return { members: [], error: "Nao autenticado" }
+  const access = await getProfessorActionAccess()
+  if (!access.ok) return { members: [], error: access.error }
 
-  const ok = await assertProfessorOwnsClassroom(classroomId, user.id)
+  const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
   if (!ok) return { members: [], error: "Sala nao encontrada" }
 
   try {
@@ -321,26 +319,14 @@ export type ListStudentsAcrossClassroomsResult = {
 export async function listStudentsAcrossClassroomsForProfessor(
   opts?: ListStudentsAcrossClassroomsOptions
 ): Promise<ListStudentsAcrossClassroomsResult> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) {
+  const access = await getApprovedProfessorActionAccess()
+  if (!access.ok) {
     return {
       rows: [],
       total: 0,
       page: 1,
       pageSize: PROFESSOR_STUDENTS_DEFAULT_PAGE_SIZE,
-      error: "Nao autenticado",
-    }
-  }
-
-  const profile = await getProfileAccess(user.id)
-
-  if (!isApprovedProfessor(profile)) {
-    return {
-      rows: [],
-      total: 0,
-      page: 1,
-      pageSize: PROFESSOR_STUDENTS_DEFAULT_PAGE_SIZE,
-      error: "Apenas professores aprovados",
+      error: access.error,
     }
   }
 
@@ -357,7 +343,7 @@ export async function listStudentsAcrossClassroomsForProfessor(
   try {
     roomList = await query<{ id: string; name: string; subject: string }>(
       "select id, name, subject from public.classrooms where professor_id = $1 order by name asc",
-      [user.id]
+      [access.userId]
     )
   } catch (e: any) {
     return { rows: [], total: 0, page: 1, pageSize, error: e?.message ?? "Erro ao listar salas" }
@@ -699,8 +685,8 @@ export async function getProfessorPendingActivities(): Promise<{
   activities: ProfessorPendingActivity[]
   error: string | null
 }> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return { activities: [], error: "Nao autenticado" }
+  const access = await getProfessorActionAccess()
+  if (!access.ok) return { activities: [], error: access.error }
 
   try {
     const rows = await query<{
@@ -732,7 +718,7 @@ export async function getProfessorPendingActivities(): Promise<{
        GROUP BY c.id, c.name, c.subject, a.id, a.title, a.type
        ORDER BY a.created_at DESC
        LIMIT 10`,
-      [user.id]
+      [access.userId]
     )
 
     const activities: ProfessorPendingActivity[] = (rows ?? []).map((r) => ({

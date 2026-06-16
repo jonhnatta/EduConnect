@@ -1,17 +1,10 @@
 import { listMyReviewedContent } from "@/app/actions/content-review"
 import { ProfessorAnaliseClient } from "@/components/dashboard/professor-analise-client"
-import { requireAuthedUser } from "@/lib/auth/user"
-import { getProfileAccess, isApprovedProfessor } from "@/lib/auth/profile"
+import { requireApprovedProfessorAccess } from "@/lib/auth/guards"
 import { Bot } from "lucide-react"
-import { redirect } from "next/navigation"
 
 export default async function ProfessorAnalisePage() {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) redirect("/login")
-
-  const profile = await getProfileAccess(user.id)
-
-  if (!isApprovedProfessor(profile)) redirect("/dashboard/aluno")
+  await requireApprovedProfessorAccess()
 
   const items = await listMyReviewedContent()
 

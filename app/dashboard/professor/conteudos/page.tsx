@@ -4,26 +4,18 @@ import {
 } from "@/app/actions/content-items"
 import { ProfessorContentFeed } from "@/components/dashboard/professor-content-feed"
 import { ProfessorFeedSidebar } from "@/components/dashboard/professor-feed-sidebar"
-import { requireAuthedUser } from "@/lib/auth/user"
-import { getProfileAccess, isApprovedProfessor } from "@/lib/auth/profile"
+import { requireApprovedProfessorAccess } from "@/lib/auth/guards"
 import { queryOne } from "@/lib/db/query"
 import { ArrowLeft } from "lucide-react"
 import Link from "next/link"
-import { redirect } from "next/navigation"
 
 export default async function ProfessorMeuFeedPage() {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) redirect("/login")
+  const { userId } = await requireApprovedProfessorAccess()
 
   const profile = await queryOne<{ full_name: string | null; avatar_url: string | null; user_type: string | null; professor_verification_status: string | null }>(
     "select full_name, avatar_url, user_type from public.profiles where id = $1",
-    [user.id]
+    [userId]
   )
-
-  const access = await getProfileAccess(user.id)
-  if (!isApprovedProfessor(access)) {
-    redirect("/dashboard/aluno")
-  }
 
   const items = await listMyContentItemsForProfessor()
   const commentPreviews = await listContentCommentPreviews(items.map((item) => item.id), 2)
@@ -56,7 +48,7 @@ export default async function ProfessorMeuFeedPage() {
             authorAvatarUrl={profile?.avatar_url ?? null}
             initialItems={items}
             initialCommentPreviews={commentPreviews}
-            viewerUserId={user?.id ?? null}
+            viewerUserId={userId}
           />
         </div>
 

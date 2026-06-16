@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache"
 import { requireAuthedUser } from "@/lib/auth/user"
+import { getProfessorActionAccess } from "@/lib/auth/guards"
 import { query, queryOne } from "@/lib/db/query"
 import {
   type ActivityExamDefinition,
@@ -366,10 +367,10 @@ export async function listSubmissionsForActivity(
   classroomId: string,
   activityId: string
 ): Promise<{ rows: SubmissionListItem[]; error: string | null }> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return { rows: [], error: "Nao autenticado" }
+  const access = await getProfessorActionAccess()
+  if (!access.ok) return { rows: [], error: access.error }
 
-  const ok = await assertProfessorOwnsClassroom(classroomId, user.id)
+  const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
   if (!ok) return { rows: [], error: "Sala nao encontrada" }
 
   const act = await queryOne<{ id: string }>(
@@ -415,10 +416,10 @@ export async function getSubmissionEnviosByActivity(
   classroomId: string,
   activityIds: string[]
 ): Promise<Record<string, number>> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user || activityIds.length === 0) return {}
+  const access = await getProfessorActionAccess()
+  if (!access.ok || activityIds.length === 0) return {}
 
-  const ok = await assertProfessorOwnsClassroom(classroomId, user.id)
+  const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
   if (!ok) return {}
 
   const data = await query<{ activity_id: string }>(
@@ -439,10 +440,10 @@ export async function countSubmissionsForActivity(
   classroomId: string,
   activityId: string
 ): Promise<{ enviados: number; total: number; error: string | null }> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return { enviados: 0, total: 0, error: "Nao autenticado" }
+  const access = await getProfessorActionAccess()
+  if (!access.ok) return { enviados: 0, total: 0, error: access.error }
 
-  const ok = await assertProfessorOwnsClassroom(classroomId, user.id)
+  const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
   if (!ok) return { enviados: 0, total: 0, error: "Sala nao encontrada" }
 
   try {
@@ -466,10 +467,10 @@ export async function gradeOpenAnswers(
   submissionId: string,
   openScores: Record<string, number>
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return { ok: false, error: "Nao autenticado" }
+  const access = await getProfessorActionAccess()
+  if (!access.ok) return { ok: false, error: access.error }
 
-  const ok = await assertProfessorOwnsClassroom(classroomId, user.id)
+  const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
   if (!ok) return { ok: false, error: "Sala nao encontrada" }
 
   const act = await queryOne<{ settings: any }>(

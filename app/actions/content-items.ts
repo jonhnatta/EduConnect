@@ -1,11 +1,11 @@
 "use server"
 
-import { put } from "@vercel/blob"
+import { put } from "@/lib/blob"
 import { randomUUID } from "crypto"
 import { revalidatePath } from "next/cache"
 import { after } from "next/server"
 import { getAuthedUser, requireAuthedUser } from "@/lib/auth/user"
-import { getProfileAccess, isApprovedProfessor } from "@/lib/auth/profile"
+import { getApprovedProfessorActionAccess } from "@/lib/auth/guards"
 import { query, queryOne } from "@/lib/db/query"
 import { runArticleReview } from "@/lib/content/review-agent"
 import {
@@ -100,13 +100,11 @@ function isArticleCoverVideoFile(file: File): boolean {
 }
 
 async function assertProfessor() {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return { user: null as null, error: "Nao autenticado" as const }
-  const profile = await getProfileAccess(user.id)
-  if (!isApprovedProfessor(profile)) {
-    return { user: null as null, error: "Apenas professores aprovados" as const }
+  const access = await getApprovedProfessorActionAccess()
+  if (!access.ok) {
+    return { user: null as null, error: access.error as "Nao autenticado" | "Apenas professores aprovados" }
   }
-  return { user: { id: user.id }, error: null as null }
+  return { user: { id: access.userId }, error: null as null }
 }
 
 async function assertOwnsArticle(

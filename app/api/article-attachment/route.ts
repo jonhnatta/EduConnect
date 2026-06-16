@@ -1,4 +1,4 @@
-import { get } from "@vercel/blob"
+import { get } from "@/lib/blob"
 import { NextRequest, NextResponse } from "next/server"
 import { queryOne } from "@/lib/db/query"
 

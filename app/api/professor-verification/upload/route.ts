@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { put } from "@vercel/blob"
+import { put } from "@/lib/blob"
 import { randomUUID } from "crypto"
 import { auth } from "@/auth"
 import { query, queryOne } from "@/lib/db/query"

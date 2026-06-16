@@ -8,6 +8,10 @@ export type GuardedAccess = {
   profile: ProfileAccessRow
 }
 
+export type ActionGuardedAccess =
+  | { ok: true; userId: string; profile: ProfileAccessRow }
+  | { ok: false; error: string }
+
 /**
  * Garante que o usuário autenticado é professor (qualquer status de verificação).
  * Consulta o banco diretamente — não confia no claim do JWT.
@@ -52,4 +56,24 @@ export async function requireAlunoAccess(): Promise<GuardedAccess> {
   if (profile.user_type !== "aluno") redirect("/dashboard/professor")
 
   return { userId: user.id, profile }
+}
+
+export async function getProfessorActionAccess(): Promise<ActionGuardedAccess> {
+  const user = await getAuthedUser()
+  if (!user) return { ok: false, error: "Nao autenticado" }
+
+  const profile = await getProfileAccess(user.id)
+  if (!profile?.user_type) return { ok: false, error: "Perfil incompleto" }
+  if (profile.user_type !== "professor") return { ok: false, error: "Acesso negado" }
+
+  return { ok: true, userId: user.id, profile }
+}
+
+export async function getApprovedProfessorActionAccess(): Promise<ActionGuardedAccess> {
+  const access = await getProfessorActionAccess()
+  if (!access.ok) return access
+  if (!isApprovedProfessor(access.profile)) {
+    return { ok: false, error: "Apenas professores aprovados" }
+  }
+  return access
 }

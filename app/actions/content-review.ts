@@ -1,8 +1,7 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { requireAuthedUser } from "@/lib/auth/user"
-import { getProfileAccess } from "@/lib/auth/profile"
+import { getApprovedProfessorActionAccess } from "@/lib/auth/guards"
 import { query, queryOne } from "@/lib/db/query"
 import type {
   ContentItemStatus,
@@ -25,11 +24,8 @@ export type ReviewedContentItem = {
 }
 
 export async function listMyReviewedContent(): Promise<ReviewedContentItem[]> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return []
-
-  const profile = await getProfileAccess(user.id)
-  if (profile?.user_type !== "professor") return []
+  const access = await getApprovedProfessorActionAccess()
+  if (!access.ok) return []
 
   type Row = {
     id: string
@@ -58,7 +54,7 @@ export async function listMyReviewedContent(): Promise<ReviewedContentItem[]> {
      inner join public.content_review_results crr on crr.content_item_id = ci.id
      where ci.author_id = $1
      order by ci.updated_at desc`,
-    [user.id]
+    [access.userId]
   )
 
   const items: ReviewedContentItem[] = []
@@ -85,11 +81,8 @@ export async function listMyReviewedContent(): Promise<ReviewedContentItem[]> {
 export async function getMyContentReview(
   contentItemId: string
 ): Promise<ContentReviewResult | null> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return null
-
-  const profile = await getProfileAccess(user.id)
-  if (profile?.user_type !== "professor") return null
+  const access = await getApprovedProfessorActionAccess()
+  if (!access.ok) return null
 
   type Row = {
     id: string
@@ -114,7 +107,7 @@ export async function getMyContentReview(
      inner join public.content_items ci on ci.id = crr.content_item_id
      where crr.content_item_id = $1
        and ci.author_id = $2`,
-    [contentItemId, user.id]
+    [contentItemId, access.userId]
   )
 
   if (!row) return null
@@ -138,18 +131,15 @@ export async function professorDecideAfterReview(
   contentItemId: string,
   decision: "publish" | "revise"
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return { ok: false, error: "Nao autenticado" }
-
-  const profile = await getProfileAccess(user.id)
-  if (profile?.user_type !== "professor") return { ok: false, error: "Acesso negado" }
+  const access = await getApprovedProfessorActionAccess()
+  if (!access.ok) return { ok: false, error: access.error }
 
   type ItemRow = { id: string; published_at: string | null }
   const item = await queryOne<ItemRow>(
     `select id, published_at
      from public.content_items
      where id = $1 and author_id = $2 and status = 'aguardando_decisao'`,
-    [contentItemId, user.id]
+    [contentItemId, access.userId]
   )
 
   if (!item) {
@@ -163,14 +153,14 @@ export async function professorDecideAfterReview(
         `update public.content_items
          set status = 'published', published_at = $3
          where id = $1 and author_id = $2`,
-        [contentItemId, user.id, publishedAt]
+        [contentItemId, access.userId, publishedAt]
       )
     } else {
       await query(
         `update public.content_items
          set status = 'draft'
          where id = $1 and author_id = $2`,
-        [contentItemId, user.id]
+        [contentItemId, access.userId]
       )
     }
   } catch (e: any) {

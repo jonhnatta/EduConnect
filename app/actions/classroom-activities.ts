@@ -1,9 +1,10 @@
 "use server"
 
-import { del, put } from "@vercel/blob"
+import { del, put } from "@/lib/blob"
 import { randomUUID } from "crypto"
 import { revalidatePath } from "next/cache"
 import { requireAuthedUser } from "@/lib/auth/user"
+import { getProfessorActionAccess } from "@/lib/auth/guards"
 import { query, queryOne } from "@/lib/db/query"
 import type {
   ActivityAttachment,
@@ -100,10 +101,10 @@ export async function uploadActivityAttachmentFiles(
     return { ok: false, error: "BLOB_READ_WRITE_TOKEN nao configurado" }
   }
 
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return { ok: false, error: "Nao autenticado" }
+  const access = await getProfessorActionAccess()
+  if (!access.ok) return { ok: false, error: access.error }
 
-  const ok = await assertProfessorOwnsClassroom(classroomId, user.id)
+  const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
   if (!ok) return { ok: false, error: "Sala nao encontrada" }
 
   const raw = formData.getAll("files")
@@ -166,10 +167,10 @@ export async function uploadActivityAttachmentFiles(
 export async function listActivitiesForClassroomAsProfessor(
   classroomId: string
 ): Promise<{ rows: ClassroomActivityRow[]; error: string | null }> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return { rows: [], error: "Nao autenticado" }
+  const access = await getProfessorActionAccess()
+  if (!access.ok) return { rows: [], error: access.error }
 
-  const ok = await assertProfessorOwnsClassroom(classroomId, user.id)
+  const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
   if (!ok) return { rows: [], error: "Sala nao encontrada" }
 
   try {
