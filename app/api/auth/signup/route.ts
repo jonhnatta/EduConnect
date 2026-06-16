@@ -11,6 +11,8 @@ const schema = z.object({
   fullName: z.string().min(1).max(200),
   userType: z.enum(["aluno", "professor"]),
   interests: z.array(z.string()).optional().default([]),
+  // Aceite obrigatório de Termos + Privacidade (consentimento LGPD registrado no servidor).
+  acceptedTerms: z.literal(true),
 })
 
 export async function POST(request: Request) {
@@ -42,9 +44,10 @@ export async function POST(request: Request) {
     const userId = userRes.rows[0]?.id
     if (!userId) throw new Error("Falha ao criar usuario")
 
+    // Professor nasce com perfil PÚBLICO (para ser descoberto no Explorar); aluno fica privado.
     await client.query(
-      "insert into public.profiles (id, full_name, user_type, interests) values ($1, $2, $3, $4)",
-      [userId, fullName, userType, interests]
+      "insert into public.profiles (id, full_name, user_type, interests, profile_visibility, terms_accepted_at) values ($1, $2, $3, $4, $5, timezone('utc'::text, now()))",
+      [userId, fullName, userType, interests, userType === "professor" ? "public" : "private"]
     )
 
     await client.query("commit")

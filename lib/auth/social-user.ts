@@ -33,8 +33,10 @@ export async function ensureSocialUser(input: EnsureSocialUserInput) {
 
     let user = await findUserByProvider(client, input.provider, input.providerAccountId)
 
+    let matchedByEmail = false
     if (!user) {
       user = await findUserByEmail(client, email)
+      matchedByEmail = !!user
     }
 
     if (user) {
@@ -43,16 +45,27 @@ export async function ensureSocialUser(input: EnsureSocialUserInput) {
         return null
       }
 
+      // Defesa contra pre-hijack: quando um login social VERIFICADO assume uma conta
+      // que ja tinha senha (definida antes de o e-mail ser verificado), invalida essa
+      // senha. O Google provou que esta pessoa controla o e-mail; quem pre-registrou a
+      // senha, nao. O dono legitimo redefine a senha por e-mail se quiser. Sem isso, o
+      // atacante manteria acesso pela senha que cadastrou no e-mail da vitima.
+      const clearPassword =
+        matchedByEmail &&
+        user.auth_provider !== input.provider &&
+        Boolean(input.emailVerified)
+
       await client.query(
         `update public.users
             set auth_provider = coalesce(auth_provider, $1),
                 auth_provider_account_id = coalesce(auth_provider_account_id, $2),
+                password_hash = case when $5::boolean then null else password_hash end,
                 email_verified_at = case
                   when $3::boolean and email_verified_at is null then timezone('utc'::text, now())
                   else email_verified_at
                 end
           where id = $4`,
-        [input.provider, input.providerAccountId, Boolean(input.emailVerified), user.id],
+        [input.provider, input.providerAccountId, Boolean(input.emailVerified), user.id, clearPassword],
       )
     } else {
       const created = await client.query<UserRow>(

@@ -11,6 +11,12 @@ const credentialsSchema = z.object({
   password: z.string().min(6),
 })
 
+// Hash bcrypt fixo (custo 12) usado quando o usuario nao existe ou e OAuth-only.
+// Garante que authorize() sempre execute um bcrypt.compare, eliminando o sinal de
+// timing que distinguia "sem conta / OAuth-only" de "senha incorreta" (anti-enumeracao).
+const DUMMY_BCRYPT_HASH =
+  "$2b$12$q.ul727zW.Gkg.nHsQAAtO/C22WWNwNWbBqOp465VkOwZqU4.bg7O"
+
 type DbUser = {
   id: string
   email: string
@@ -40,10 +46,10 @@ const providers = [
           where u.email = $1`,
         [email.toLowerCase()]
       )
-      if (!user?.password_hash) return null
-
-      const ok = await bcrypt.compare(password, user.password_hash)
-      if (!ok) return null
+      // Sempre executa o compare (com hash real ou dummy) para nao vazar timing.
+      const hashToCompare = user?.password_hash ?? DUMMY_BCRYPT_HASH
+      const ok = await bcrypt.compare(password, hashToCompare)
+      if (!user?.password_hash || !ok) return null
 
       return { id: user.id, email: user.email, userType: user.user_type ?? null }
     },

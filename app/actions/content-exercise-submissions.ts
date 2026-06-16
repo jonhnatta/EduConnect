@@ -530,12 +530,31 @@ export async function gradeContentExerciseOpenAnswers(
 export async function getMcqSolutionsForContentExercise(
   contentItemId: string
 ): Promise<Record<string, number> | null> {
-  const row = await queryOne<{ settings: Record<string, unknown>; type: string }>(
-    "select settings, type from public.content_items where id = $1",
+  // Autorizacao na propria action: a RLS e inerte e toda funcao "use server" e
+  // um endpoint POST. Sem isso, qualquer um obteria o gabarito antes de responder.
+  const user = await requireAuthedUser().catch(() => null)
+  if (!user) return null
+
+  const row = await queryOne<{
+    settings: Record<string, unknown>
+    type: string
+    author_id: string
+  }>(
+    "select settings, type, author_id from public.content_items where id = $1",
     [contentItemId]
   )
 
   if (!row || !isExamLikeContentType(row.type)) return null
+
+  // So libera o gabarito para o autor (preview/correcao) ou para o aluno que JA enviou.
+  if (row.author_id !== user.id) {
+    const sub = await queryOne<{ status: string }>(
+      "select status from public.content_exercise_submissions where content_item_id = $1 and student_id = $2",
+      [contentItemId, user.id]
+    )
+    if (sub?.status !== "enviado") return null
+  }
+
   const exam = parseExamFromSettings(row.settings as Record<string, unknown>)
   if (!exam) return null
   const out: Record<string, number> = {}
@@ -545,15 +564,24 @@ export async function getMcqSolutionsForContentExercise(
   return out
 }
 
-/** Definicao completa com gabarito (correcao / preview autor). */
+/** Definicao completa com gabarito — APENAS o autor do conteudo (correcao / preview). */
 export async function getExamDefinitionForContentItem(
   contentItemId: string
 ): Promise<ActivityExamDefinition | null> {
-  const row = await queryOne<{ settings: Record<string, unknown>; type: string }>(
-    "select settings, type from public.content_items where id = $1",
+  const user = await requireAuthedUser().catch(() => null)
+  if (!user) return null
+
+  const row = await queryOne<{
+    settings: Record<string, unknown>
+    type: string
+    author_id: string
+  }>(
+    "select settings, type, author_id from public.content_items where id = $1",
     [contentItemId]
   )
 
   if (!row || !isExamLikeContentType(row.type)) return null
+  // Gabarito completo (com correctIndex) jamais vai para nao-autor.
+  if (row.author_id !== user.id) return null
   return parseExamFromSettings(row.settings as Record<string, unknown>)
 }

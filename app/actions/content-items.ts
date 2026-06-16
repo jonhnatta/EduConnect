@@ -16,6 +16,7 @@ import { sanitizeActivityHtml } from "@/lib/sanitize-activity-html"
 import {
   mergeActivitySettings,
   parseExamFromSettings,
+  toPublicExam,
   validateExamDefinition,
   validateExamQuestionDisciplinas,
   type ActivityExamDefinition,
@@ -1819,6 +1820,9 @@ export async function toggleContentLike(
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return { ok: false, error: "Nao autenticado" }
 
+  const canView = await canViewContentItem(contentItemId, user.id)
+  if (!canView) return { ok: false, error: "Conteudo nao encontrado" }
+
   const existing = await queryOne<{ id: string }>(
     "select id from public.content_reactions where content_item_id = $1 and user_id = $2 and reaction_type = 'like'",
     [contentItemId, user.id]
@@ -1875,6 +1879,9 @@ export async function toggleContentSave(
 > {
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return { ok: false, error: "Nao autenticado" }
+
+  const canView = await canViewContentItem(contentItemId, user.id)
+  if (!canView) return { ok: false, error: "Conteudo nao encontrado" }
 
   const existing = await queryOne<{ id: string }>(
     "select id from public.content_saves where content_item_id = $1 and user_id = $2",
@@ -1940,6 +1947,9 @@ export async function recordContentView(
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return { ok: false, error: "Nao autenticado" }
 
+  const canView = await canViewContentItem(contentItemId, user.id)
+  if (!canView) return { ok: false, error: "Conteudo nao encontrado" }
+
   const existing = await queryOne<{ id: string }>(
     `select id from public.content_view_events
      where content_item_id = $1
@@ -1968,6 +1978,10 @@ export async function recordContentShare(
   method: ShareMethod
 ): Promise<{ ok: true; shareCount: number } | { ok: false; error: string }> {
   const user = await requireAuthedUser().catch(() => null)
+
+  const canView = await canViewContentItem(contentItemId, user?.id ?? null)
+  if (!canView) return { ok: false, error: "Conteudo nao encontrado" }
+
   try {
     await query(
       "insert into public.content_share_events (content_item_id, user_id, share_method) values ($1, $2, $3)",
@@ -1998,6 +2012,13 @@ export async function getContentItemById(
     }
   | { ok: false; error: string }
 > {
+  // RLS e inerte (app_user e superuser/BYPASSRLS): a autorizacao acontece AQUI.
+  // canViewContentItem espelha user_can_view_content_item — autor ve rascunho/privado,
+  // publicado/publico e liberado, conteudo de turma exige matricula.
+  const user = await getAuthedUser()
+  const canView = await canViewContentItem(id, user?.id ?? null)
+  if (!canView) return { ok: false, error: "Conteudo nao encontrado" }
+
   const item = await queryOne<ContentItemRow>(
     "select * from public.content_items where id = $1",
     [id]
@@ -2009,9 +2030,23 @@ export async function getContentItemById(
     [item.author_id]
   )
 
+  // Nunca expor o gabarito (correctIndex) a quem nao e o autor do conteudo.
+  let safeSettings = asRecord((item as any).settings) as ContentItemSettings
+  const isExamLike =
+    item.type === "exercise" || item.type === "assessment" || item.type === "simulado"
+  if (isExamLike && user?.id !== item.author_id) {
+    const examDef = parseExamFromSettings(safeSettings as Record<string, unknown>)
+    if (examDef) {
+      safeSettings = {
+        ...safeSettings,
+        exam: toPublicExam(examDef) as unknown as ContentItemSettings["exam"],
+      }
+    }
+  }
+
   return {
     ok: true,
-    item: { ...item, settings: asRecord((item as any).settings) as ContentItemSettings },
+    item: { ...item, settings: safeSettings },
     author: {
       full_name: author?.full_name ?? null,
       avatar_url: author?.avatar_url ?? null,

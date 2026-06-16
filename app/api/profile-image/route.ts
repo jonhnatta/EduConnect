@@ -1,6 +1,8 @@
 import { get } from "@/lib/blob"
 import { NextRequest, NextResponse } from "next/server"
 import { queryOne } from "@/lib/db/query"
+import { getAuthedUser } from "@/lib/auth/user"
+import { applySafeServingHeaders } from "@/lib/http/safe-serving"
 
 export const runtime = "nodejs"
 
@@ -9,6 +11,9 @@ const UUID_RE =
 
 // Caminho esperado: profiles/<uuid-do-perfil>/<avatar|cover>-...
 function extractProfileId(pathname: string): string | null {
+  if (pathname.includes("..") || pathname.includes("//") || pathname.includes("\\")) {
+    return null
+  }
   const parts = pathname.split("/").filter(Boolean)
   if (parts[0] !== "profiles" || !parts[1]) return null
   return UUID_RE.test(parts[1]) ? parts[1] : null
@@ -25,12 +30,21 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid pathname" }, { status: 400 })
   }
 
-  const row = await queryOne<{ id: string }>(
-    "select id from public.profiles where id = $1",
+  const row = await queryOne<{ id: string; profile_visibility: string }>(
+    "select id, profile_visibility from public.profiles where id = $1",
     [profileId]
   )
   if (!row) {
     return NextResponse.json({ error: "Not found" }, { status: 404 })
+  }
+
+  // Perfil privado nao deve ser exposto publicamente (a RLS e inerte). Publico -> qualquer
+  // um; privado -> apenas o dono ou usuarios autenticados (fecha o scraping anonimo por UUID).
+  if (row.profile_visibility !== "public") {
+    const user = await getAuthedUser()
+    if (!user) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 })
+    }
   }
 
   const token = process.env.BLOB_READ_WRITE_TOKEN
@@ -62,6 +76,7 @@ export async function GET(request: NextRequest) {
     outHeaders.append(key, value)
   })
   outHeaders.set("cache-control", "private, max-age=3600")
+  applySafeServingHeaders(outHeaders, pathname.split("/").pop() ?? "image")
 
   return new NextResponse(result.stream, {
     status: 200,

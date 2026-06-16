@@ -3,6 +3,7 @@ import { Sora, DM_Sans, JetBrains_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { Toaster } from 'sonner'
 import { AuthSessionProvider } from "@/components/auth/session-provider"
+import { CookieConsent } from "@/components/legal/cookie-consent"
 import './globals.css'
 
 const sora = Sora({ 
@@ -58,6 +59,7 @@ export default function RootLayout({
         className={`${sora.variable} ${dmSans.variable} ${jetbrainsMono.variable} font-sans antialiased`}
       >
         <AuthSessionProvider>{children}</AuthSessionProvider>
+        <CookieConsent />
         <Toaster richColors position="top-center" />
         <Analytics />
       </body>

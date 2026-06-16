@@ -1,9 +1,10 @@
 "use client"
 
-import { useState, useEffect, Suspense } from "react"
+import { useState, useEffect, Suspense, useTransition } from "react"
 import Link from "next/link"
 import { usePathname, useSearchParams, useRouter } from "next/navigation"
 import { signOut, useSession } from "next-auth/react"
+import { requestManualVerification } from "@/app/actions/professor-verification"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import {
@@ -22,7 +23,9 @@ import {
   LogOut,
   ChevronDown,
   Plus,
-  AlertCircle
+  AlertCircle,
+  ShieldAlert,
+  Loader2
 } from "lucide-react"
 import {
   DropdownMenu,
@@ -60,21 +63,39 @@ function ProfessorLayoutContent({
     full_name: string
     avatar_url: string | null
     professor_verification_status?: string | null
+    professor_verification_ai_reason?: string | null
   } | null>(null)
+  const [requesting, startRequesting] = useTransition()
+  const [manualRequested, setManualRequested] = useState(false)
   const isPendente =
     searchParams.get("status") === "pendente" ||
     profile?.professor_verification_status === "pending"
+  const isRejected = profile?.professor_verification_status === "rejected"
+  // Só publica/cria sala quem está aprovado (espelha o guard do servidor).
+  const cannotPublish = isPendente || isRejected
 
-  useEffect(() => {
-    if (status !== "authenticated") return
-    const loadProfile = () => fetch("/api/me")
+  const reloadProfile = () =>
+    fetch("/api/me")
       .then((r) => r.json())
       .then((d) => setProfile(d?.profile ?? null))
       .catch(() => setProfile(null))
-    loadProfile()
-    window.addEventListener("profile:updated", loadProfile)
-    return () => window.removeEventListener("profile:updated", loadProfile)
+
+  useEffect(() => {
+    if (status !== "authenticated") return
+    reloadProfile()
+    window.addEventListener("profile:updated", reloadProfile)
+    return () => window.removeEventListener("profile:updated", reloadProfile)
   }, [status])
+
+  function handleRequestManual() {
+    startRequesting(async () => {
+      const result = await requestManualVerification()
+      if (result.ok) {
+        setManualRequested(true)
+        await reloadProfile()
+      }
+    })
+  }
 
   const handleLogout = async () => {
     await signOut({ redirect: false })
@@ -97,6 +118,40 @@ function ProfessorLayoutContent({
             <p className="text-sm text-amber-800">
               Seu cadastro esta em analise. Funcionalidades de publicacao estarao disponiveis apos aprovacao.
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* Rejected Banner — análise automática não confirmou; oferece análise manual */}
+      {isRejected && !isPendente && (
+        <div className="bg-red-50 border-b border-red-200 px-4 py-3">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center gap-3">
+            <ShieldAlert className="h-5 w-5 text-red-500 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm text-red-800 font-medium">
+                Nao conseguimos confirmar automaticamente que voce e professor.
+              </p>
+              {profile?.professor_verification_ai_reason && (
+                <p className="text-xs text-red-700 mt-0.5">
+                  {profile.professor_verification_ai_reason}
+                </p>
+              )}
+            </div>
+            {manualRequested ? (
+              <span className="text-sm text-red-700 font-medium">
+                Solicitacao enviada — em analise manual.
+              </span>
+            ) : (
+              <Button
+                size="sm"
+                onClick={handleRequestManual}
+                disabled={requesting}
+                className="bg-red-600 hover:bg-red-700 text-white gap-2 shrink-0"
+              >
+                {requesting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Solicitar analise manual
+              </Button>
+            )}
           </div>
         </div>
       )}
@@ -153,7 +208,7 @@ function ProfessorLayoutContent({
             <Button
               asChild
               className="w-full bg-white text-[#1E3A8A] hover:bg-blue-50 gap-2"
-              disabled={isPendente}
+              disabled={cannotPublish}
             >
               <Link href="/dashboard/professor/criar">
                 <Plus className="h-4 w-4" />
@@ -166,7 +221,7 @@ function ProfessorLayoutContent({
           <nav className="flex-1 px-3 py-2 space-y-1 overflow-y-auto">
             {navigation.map((item) => {
               const isActive = pathname === item.href
-              const isDisabled = isPendente && (item.href.includes("criar") || item.href.includes("salas"))
+              const isDisabled = cannotPublish && (item.href.includes("criar") || item.href.includes("salas"))
               return (
                 <Link
                   key={item.name}
@@ -287,7 +342,7 @@ function ProfessorLayoutContent({
       </div>
 
       {/* Floating Create Button (Mobile) */}
-      {!isPendente && (
+      {!cannotPublish && (
         <Link
           href="/dashboard/professor/criar"
           className="lg:hidden fixed bottom-20 right-4 h-14 w-14 rounded-full bg-[#1D4ED8] text-white shadow-lg flex items-center justify-center z-40"

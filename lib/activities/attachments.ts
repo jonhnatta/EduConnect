@@ -81,18 +81,6 @@ export function parseActivityAttachments(
   return out
 }
 
-function isLikelyVercelBlobHost(hostname: string): boolean {
-  return (
-    /\.blob\.vercel-storage\.com$/i.test(hostname) ||
-    hostname === "vercel-storage.com" ||
-    hostname.endsWith(".vercel-storage.com")
-  )
-}
-
-function isSimulatorUrl(url: string): boolean {
-  return url.startsWith("blob-sim://")
-}
-
 export type ClassroomBlobKind = "activity" | "material"
 
 export function blobPathPrefixForClassroom(
@@ -111,18 +99,13 @@ export function assertBlobAttachmentsForClassroom(
 ): string | null {
   const prefix = blobPathPrefixForClassroom(classroomId, kind)
   for (const a of list) {
-    if (!a.pathname.includes(prefix)) {
-      return "Anexo nao pertence a esta sala"
+    const key = a.pathname || ""
+    // Segurança: a key precisa pertencer ao prefixo desta sala e não conter traversal/scheme.
+    if (!key || key.includes("..") || key.startsWith("/") || /^[a-z][a-z0-9+.-]*:\/\//i.test(key)) {
+      return "Caminho de anexo invalido"
     }
-    if (!isSimulatorUrl(a.url)) {
-      try {
-        const u = new URL(a.url)
-        if (u.protocol !== "https:" || !isLikelyVercelBlobHost(u.hostname)) {
-          return "URL de anexo invalida"
-        }
-      } catch {
-        return "URL de anexo invalida"
-      }
+    if (!key.startsWith(prefix)) {
+      return "Anexo nao pertence a esta sala"
     }
   }
   return null

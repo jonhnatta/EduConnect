@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { BookOpen, GraduationCap, AlertCircle, ArrowRight, Upload } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -42,6 +43,7 @@ export function TipoContaForm({
   const [professorDoc, setProfessorDoc] = useState<File | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [acceptedTerms, setAcceptedTerms] = useState(false)
 
   function handlePickProfessorDoc(file: File | null) {
     setError(null)
@@ -78,6 +80,11 @@ export function TipoContaForm({
       return
     }
 
+    if (!acceptedTerms) {
+      setError("Voce precisa aceitar os Termos de Uso e a Politica de Privacidade")
+      return
+    }
+
     setIsLoading(true)
     setError(null)
 
@@ -85,7 +92,7 @@ export function TipoContaForm({
       const response = await fetch("/api/auth/complete-profile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userType: selected }),
+        body: JSON.stringify({ userType: selected, acceptedTerms }),
       })
       const data = await response.json().catch(() => ({}))
 
@@ -196,10 +203,30 @@ export function TipoContaForm({
         </div>
       )}
 
+      <label className="flex items-start gap-3 text-sm text-gray-600 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={acceptedTerms}
+          onChange={(e) => setAcceptedTerms(e.target.checked)}
+          className="mt-0.5 h-4 w-4 rounded border-gray-300 text-[#1D4ED8] focus:ring-[#1D4ED8]"
+        />
+        <span>
+          Li e concordo com os{" "}
+          <Link href="/termos" target="_blank" className="text-[#1D4ED8] underline font-medium">
+            Termos de Uso
+          </Link>{" "}
+          e a{" "}
+          <Link href="/privacidade" target="_blank" className="text-[#1D4ED8] underline font-medium">
+            Política de Privacidade
+          </Link>
+          .
+        </span>
+      </label>
+
       <Button
         type="button"
         className="w-full h-12 bg-[#1D4ED8] hover:bg-[#1E3A8A] text-base font-semibold"
-        disabled={isLoading}
+        disabled={isLoading || !acceptedTerms}
         onClick={handleSubmit}
       >
         {isLoading ? (selected === "professor" ? "Enviando..." : "Salvando...") : (

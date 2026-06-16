@@ -2,7 +2,10 @@
 
 import { revalidatePath } from "next/cache"
 import { requireAuthedUser } from "@/lib/auth/user"
-import { getProfessorActionAccess } from "@/lib/auth/guards"
+import {
+  getProfessorActionAccess,
+  getApprovedProfessorActionAccess,
+} from "@/lib/auth/guards"
 import { query, queryOne } from "@/lib/db/query"
 import {
   type ActivityExamDefinition,
@@ -96,6 +99,26 @@ async function assertProfessorOwnsClassroom(
     [classroomId, userId]
   )
   return !!row
+}
+
+/**
+ * Impoe a janela de tempo da atividade. O status so vira 'encerrada' por acao MANUAL
+ * do professor — sem este check, envios antes da abertura ou apos o prazo seriam aceitos.
+ */
+function assertActivityWindowAllowed(
+  startsAt: string | Date | null | undefined,
+  dueAt: string | Date | null | undefined
+): string | null {
+  const now = Date.now()
+  if (startsAt) {
+    const t = new Date(startsAt).getTime()
+    if (!Number.isNaN(t) && t > now) return "A atividade ainda nao esta aberta."
+  }
+  if (dueAt) {
+    const t = new Date(dueAt).getTime()
+    if (!Number.isNaN(t) && t < now) return "O prazo de entrega encerrou."
+  }
+  return null
 }
 
 function revalidateActivityPaths(classroomId: string, activityId: string) {
@@ -215,8 +238,8 @@ export async function saveSubmissionDraft(
   const member = await assertStudentMember(classroomId, user.id)
   if (!member) return { ok: false, error: "Voce nao participa desta sala" }
 
-  const act = await queryOne<{ id: string; status: string; settings: any }>(
-    "select id, status, settings from public.classroom_activities where id = $1 and classroom_id = $2",
+  const act = await queryOne<{ id: string; status: string; settings: any; starts_at: string | Date | null; due_at: string | Date | null }>(
+    "select id, status, settings, starts_at, due_at from public.classroom_activities where id = $1 and classroom_id = $2",
     [activityId, classroomId]
   )
   if (!act) return { ok: false, error: "Atividade nao encontrada" }
@@ -224,6 +247,8 @@ export async function saveSubmissionDraft(
   if (act.status === "encerrada") {
     return { ok: false, error: "Atividade encerrada" }
   }
+  const windowErr = assertActivityWindowAllowed(act.starts_at, act.due_at)
+  if (windowErr) return { ok: false, error: windowErr }
 
   const exam = parseExamFromSettings(asRecord(act.settings))
   if (!exam) return { ok: false, error: "Sem questoes nesta atividade" }
@@ -287,8 +312,8 @@ export async function submitExam(
   const member = await assertStudentMember(classroomId, user.id)
   if (!member) return { ok: false, error: "Voce nao participa desta sala" }
 
-  const act = await queryOne<{ settings: any; status: string }>(
-    "select settings, status from public.classroom_activities where id = $1 and classroom_id = $2",
+  const act = await queryOne<{ settings: any; status: string; starts_at: string | Date | null; due_at: string | Date | null }>(
+    "select settings, status, starts_at, due_at from public.classroom_activities where id = $1 and classroom_id = $2",
     [activityId, classroomId]
   )
   if (!act) return { ok: false, error: "Atividade nao encontrada" }
@@ -296,6 +321,8 @@ export async function submitExam(
   if (act.status === "encerrada") {
     return { ok: false, error: "Atividade encerrada" }
   }
+  const windowErr = assertActivityWindowAllowed(act.starts_at, act.due_at)
+  if (windowErr) return { ok: false, error: windowErr }
 
   const exam = parseExamFromSettings(asRecord(act.settings))
   if (!exam) return { ok: false, error: "Sem questoes nesta atividade" }
@@ -467,7 +494,8 @@ export async function gradeOpenAnswers(
   submissionId: string,
   openScores: Record<string, number>
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const access = await getProfessorActionAccess()
+  // Atribuir nota e gestao de avaliacao -> exige professor APROVADO (consistente com A3).
+  const access = await getApprovedProfessorActionAccess()
   if (!access.ok) return { ok: false, error: access.error }
 
   const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
