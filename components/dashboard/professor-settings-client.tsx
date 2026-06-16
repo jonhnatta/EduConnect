@@ -1,18 +1,21 @@
 "use client"
 
-import { useState, type ComponentType } from "react"
+import { useState, useTransition, type ComponentType } from "react"
 import Link from "next/link"
+import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
-import { Bell, Bot, Globe, Settings2, ShieldCheck, Users } from "lucide-react"
+import { Bell, Bot, Globe, Loader2, Settings2, ShieldCheck, Users } from "lucide-react"
+import { updateMySettings, type NotificationPrefs } from "@/app/actions/settings"
 
 type ProfessorSettingsClientProps = {
   fullName: string
   email: string
   verificationStatus: string | null
   profileVisibility: "public" | "private"
+  notificationPrefs?: NotificationPrefs
 }
 
 function SettingRow({
@@ -49,12 +52,32 @@ export function ProfessorSettingsClient({
   email,
   verificationStatus,
   profileVisibility,
+  notificationPrefs = {},
 }: ProfessorSettingsClientProps) {
-  const [reviewBeforePublish, setReviewBeforePublish] = useState(true)
-  const [studentSubmissionAlerts, setStudentSubmissionAlerts] = useState(true)
+  const pref = (key: string, fallback = true) =>
+    typeof notificationPrefs[key] === "boolean" ? notificationPrefs[key] : fallback
+  const [reviewBeforePublish, setReviewBeforePublish] = useState(pref("reviewBeforePublish"))
+  const [studentSubmissionAlerts, setStudentSubmissionAlerts] = useState(pref("studentSubmissionAlerts"))
   const [publicProfile, setPublicProfile] = useState(profileVisibility === "public")
-  const [weeklyDigest, setWeeklyDigest] = useState(true)
-  const [classroomAnnouncements, setClassroomAnnouncements] = useState(true)
+  const [weeklyDigest, setWeeklyDigest] = useState(pref("weeklyDigest"))
+  const [classroomAnnouncements, setClassroomAnnouncements] = useState(pref("classroomAnnouncements"))
+  const [saving, startSaving] = useTransition()
+
+  function handleSave() {
+    startSaving(async () => {
+      const result = await updateMySettings({
+        profileVisibility: publicProfile ? "public" : "private",
+        notificationPrefs: {
+          reviewBeforePublish,
+          studentSubmissionAlerts,
+          weeklyDigest,
+          classroomAnnouncements,
+        },
+      })
+      if (result.ok) toast.success("Preferencias salvas")
+      else toast.error(result.error)
+    })
+  }
 
   const approvalLabel =
     verificationStatus === "approved"
@@ -75,7 +98,10 @@ export function ProfessorSettingsClient({
             Ajuste como voce publica conteudos, recebe alertas e apresenta seu perfil.
           </p>
         </div>
-        <Button className="bg-[#1D4ED8] hover:bg-[#1E3A8A]">Salvar preferencias</Button>
+        <Button className="bg-[#1D4ED8] hover:bg-[#1E3A8A] gap-2" onClick={handleSave} disabled={saving}>
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          Salvar preferencias
+        </Button>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
@@ -209,7 +235,7 @@ export function ProfessorSettingsClient({
               </div>
               <div className="flex items-center gap-2 rounded-xl border border-dashed border-blue-200 bg-blue-50/60 p-4">
                 <ShieldCheck className="h-4 w-4 text-[#1D4ED8]" />
-                <p>Este mockup prepara o terreno para persistir preferencias sem quebrar o padrao existente.</p>
+                <p>Suas preferencias sao salvas na sua conta ao clicar em &quot;Salvar preferencias&quot;.</p>
               </div>
             </CardContent>
           </Card>

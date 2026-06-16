@@ -404,6 +404,8 @@ as $$
         and ci.author_id = p_user_id
       )
     )
+  -- Nota: o ranking por follow (professores seguidos primeiro) é aplicado pela migração
+  -- scripts/027_feed_follow_ranking.sql, que depende de teacher_followers (scripts/022).
   order by ci.published_at desc nulls last
   limit greatest(1, least(coalesce(p_limit, 20), 100));
 $$;
@@ -545,6 +547,24 @@ create index if not exists idx_profiles_verification_manual_queue
 -- Consentimento LGPD (scripts/025): momento do aceite de Termos + Privacidade.
 alter table public.profiles
   add column if not exists terms_accepted_at timestamptz;
+
+-- Preferências de notificação/configurações (scripts/028).
+alter table public.profiles
+  add column if not exists notification_prefs jsonb not null default '{}'::jsonb;
+
+-- Avaliações de professor / reputação (scripts/029).
+create table if not exists public.professor_reviews (
+  id          uuid        primary key default gen_random_uuid(),
+  teacher_id  uuid        not null references public.profiles(id) on delete cascade,
+  student_id  uuid        not null references public.profiles(id) on delete cascade,
+  rating      int         not null check (rating between 1 and 5),
+  comment     text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  constraint professor_reviews_unique unique (teacher_id, student_id),
+  constraint professor_reviews_not_self check (teacher_id <> student_id)
+);
+create index if not exists idx_professor_reviews_teacher on public.professor_reviews (teacher_id);
 
 -- 008_student_planner_personal_tasks.sql
 create table if not exists public.student_planner_personal_tasks (

@@ -14,6 +14,7 @@ import {
   Bot,
   Search,
   Trophy,
+  Bookmark,
   Settings,
   User,
   Bell,
@@ -37,6 +38,7 @@ const navigation = [
   { name: "Minhas Salas", href: "/dashboard/aluno/salas", icon: Users },
   { name: "Tutor IA", href: "/dashboard/aluno/tutor", icon: Bot },
   { name: "Explorar Professores", href: "/dashboard/aluno/explorar", icon: Search },
+  { name: "Salvos", href: "/dashboard/aluno/salvos", icon: Bookmark },
   { name: "Meu Progresso", href: "/dashboard/aluno/progresso", icon: Trophy },
 ]
 

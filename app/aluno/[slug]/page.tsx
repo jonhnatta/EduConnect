@@ -4,6 +4,7 @@ import { queryOne } from "@/lib/db/query"
 import { employmentStatusLabel } from "@/lib/profile/public"
 
 type PublicStudentProfile = {
+  id: string
   full_name: string | null
   slug: string
   avatar_url: string | null
@@ -33,7 +34,7 @@ export default async function PublicStudentProfilePage({
 }) {
   const { slug } = await params
   const profile = await queryOne<PublicStudentProfile>(
-    `select full_name, slug, avatar_url, cover_url, bio,
+    `select id, full_name, slug, avatar_url, cover_url, bio,
             coalesce(interests, array[]::text[]) as interests,
             education_level, employment_status, study_focus
        from public.profiles
@@ -45,6 +46,12 @@ export default async function PublicStudentProfilePage({
   )
 
   if (!profile) notFound()
+
+  const followingRow = await queryOne<{ cnt: string }>(
+    "select count(*)::int as cnt from public.teacher_followers where student_id = $1",
+    [profile.id]
+  ).catch(() => null)
+  const followingCount = Number(followingRow?.cnt ?? 0)
 
   return (
     <div className="min-h-screen bg-[linear-gradient(180deg,#f4fbf8_0%,#ffffff_24%,#ffffff_100%)] pb-16">
@@ -145,9 +152,12 @@ export default async function PublicStudentProfilePage({
                 </p>
               </div>
               <div className="rounded-2xl border border-emerald-100 bg-white/80 p-4">
-                <p className="font-medium text-slate-900">Sobre este perfil</p>
-                <p className="mt-1 leading-6">
-                  Esta pagina foi criada para apresentar de forma simples a jornada de estudo e os objetivos profissionais do aluno.
+                <p className="font-medium text-slate-900">Professores que segue</p>
+                <p className="mt-1 text-2xl font-bold text-emerald-700">
+                  {followingCount}
+                </p>
+                <p className="text-xs text-slate-500">
+                  {followingCount === 1 ? "professor seguido" : "professores seguidos"} na EduConnect
                 </p>
               </div>
             </div>

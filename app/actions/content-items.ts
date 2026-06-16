@@ -1506,6 +1506,49 @@ export async function getFeedArticlesForCurrentUser(limit = 20): Promise<FeedCon
     }))
 }
 
+/** Conteúdos que o usuário salvou (para a página "Salvos"). */
+export async function listMySavedContent(limit = 50): Promise<FeedContentItem[]> {
+  const user = await requireAuthedUser().catch(() => null)
+  if (!user) return []
+
+  let rows: any[] = []
+  try {
+    rows = await query<any>(
+      `select ci.*
+       from public.content_items ci
+       join public.content_saves cs on cs.content_item_id = ci.id
+       where cs.user_id = $1 and ci.status = 'published'
+       order by cs.created_at desc
+       limit $2`,
+      [user.id, Math.max(1, Math.min(limit, 100))]
+    )
+  } catch {
+    return []
+  }
+  if (rows.length === 0) return []
+
+  const authorIds = [
+    ...new Set(rows.map((a) => a.author_id).filter((id: any) => typeof id === "string" && id.length > 0)),
+  ]
+  let profiles: { id: string; full_name: string | null; avatar_url: string | null }[] = []
+  if (authorIds.length > 0) {
+    profiles = await query<{ id: string; full_name: string | null; avatar_url: string | null }>(
+      "select id, full_name, avatar_url from public.profiles where id = any($1::uuid[])",
+      [authorIds]
+    )
+  }
+  const byId = new Map(profiles.map((p) => [p.id, p]))
+
+  return rows.map((a) => ({
+    ...(a as ContentItemRow),
+    settings: asRecord((a as any).settings) as ContentItemSettings,
+    author: {
+      full_name: byId.get((a as any).author_id)?.full_name ?? null,
+      avatar_url: byId.get((a as any).author_id)?.avatar_url ?? null,
+    },
+  }))
+}
+
 export async function getMyLikesForContentIds(
   contentIds: string[]
 ): Promise<Set<string>> {

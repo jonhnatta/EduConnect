@@ -1,7 +1,10 @@
 "use client"
 
-import { useState } from "react"
-import { Badge } from "@/components/ui/badge"
+import { useState, useTransition } from "react"
+import { useRouter } from "next/navigation"
+import { toast } from "sonner"
+import { Button } from "@/components/ui/button"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Eye,
   FileText,
@@ -10,8 +13,11 @@ import {
   BarChart2,
   Lightbulb,
   Heart,
+  Star,
+  Loader2,
 } from "lucide-react"
 import type { ProfessorPost } from "@/app/actions/professors"
+import { submitProfessorReview, type ProfessorReviewsSummary } from "@/app/actions/professor-reviews"
 
 function formatCount(n: number) {
   if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`
@@ -35,8 +41,55 @@ const TYPE_CONFIG: Record<string, { label: string; icon: React.ReactNode; color:
   dica: { label: "Dica", icon: <Lightbulb className="h-5 w-5" />, color: "bg-green-50 text-green-600" },
 }
 
-export function PublicProfileTabs({ posts }: { posts: ProfessorPost[] }) {
+function StarRow({ value, onChange }: { value: number; onChange?: (v: number) => void }) {
+  return (
+    <div className="flex items-center gap-1">
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          key={n}
+          type="button"
+          disabled={!onChange}
+          onClick={() => onChange?.(n)}
+          className={onChange ? "cursor-pointer" : "cursor-default"}
+          aria-label={`${n} estrela${n > 1 ? "s" : ""}`}
+        >
+          <Star className={`h-5 w-5 ${n <= value ? "fill-[#F59E0B] text-[#F59E0B]" : "text-gray-300"}`} />
+        </button>
+      ))}
+    </div>
+  )
+}
+
+export function PublicProfileTabs({
+  posts,
+  teacherId,
+  reviews,
+}: {
+  posts: ProfessorPost[]
+  teacherId: string
+  reviews: ProfessorReviewsSummary
+}) {
   const [activeTab, setActiveTab] = useState<"publicacoes" | "avaliacoes">("publicacoes")
+  const router = useRouter()
+  const [rating, setRating] = useState(reviews.myReview?.rating ?? 0)
+  const [comment, setComment] = useState(reviews.myReview?.comment ?? "")
+  const [saving, startSaving] = useTransition()
+
+  function handleSubmitReview() {
+    if (rating < 1) {
+      toast.error("Escolha uma nota de 1 a 5")
+      return
+    }
+    startSaving(async () => {
+      const res = await submitProfessorReview(teacherId, rating, comment)
+      if (res.ok) {
+        toast.success("Avaliacao enviada")
+        router.refresh()
+      } else {
+        toast.error(res.error)
+      }
+    })
+  }
 
   return (
     <div>
@@ -107,9 +160,66 @@ export function PublicProfileTabs({ posts }: { posts: ProfessorPost[] }) {
           </div>
         )
       ) : (
-        <div className="rounded-xl border border-gray-100 bg-white p-12 text-center text-gray-500">
-          <Badge className="mb-4 bg-blue-50 text-blue-700 hover:bg-blue-50">Em breve</Badge>
-          <p>O sistema de avaliacoes e reputacao do professor ficara disponivel em breve.</p>
+        <div className="space-y-6">
+          {/* Resumo */}
+          <div className="flex items-center gap-4 rounded-xl border border-gray-100 bg-white p-5">
+            <div className="text-center">
+              <div className="font-display text-3xl font-bold text-gray-900">
+                {reviews.count > 0 ? reviews.average.toFixed(1) : "—"}
+              </div>
+              <StarRow value={Math.round(reviews.average)} />
+            </div>
+            <div className="text-sm text-gray-500">
+              {reviews.count > 0
+                ? `${reviews.count} avaliacao${reviews.count > 1 ? "es" : ""} de alunos`
+                : "Ainda sem avaliacoes"}
+            </div>
+          </div>
+
+          {/* Formulário (apenas aluno logado) */}
+          {reviews.canReview ? (
+            <div className="rounded-xl border border-gray-100 bg-white p-5">
+              <h3 className="mb-3 text-sm font-semibold text-gray-900">
+                {reviews.myReview ? "Editar sua avaliacao" : "Avaliar este professor"}
+              </h3>
+              <StarRow value={rating} onChange={setRating} />
+              <Textarea
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                maxLength={1000}
+                placeholder="Conte como foi sua experiencia (opcional)"
+                className="mt-3 min-h-24 resize-none"
+              />
+              <Button
+                onClick={handleSubmitReview}
+                disabled={saving}
+                className="mt-3 gap-2 bg-[#1D4ED8] hover:bg-[#1E3A8A]"
+              >
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {reviews.myReview ? "Atualizar avaliacao" : "Enviar avaliacao"}
+              </Button>
+            </div>
+          ) : null}
+
+          {/* Lista */}
+          {reviews.reviews.length > 0 ? (
+            <div className="space-y-3">
+              {reviews.reviews.map((r) => (
+                <div key={r.id} className="rounded-xl border border-gray-100 bg-white p-4">
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="text-sm font-medium text-gray-900">{r.student_name ?? "Aluno"}</span>
+                    <StarRow value={r.rating} />
+                  </div>
+                  {r.comment ? <p className="text-sm text-gray-600">{r.comment}</p> : null}
+                  <p className="mt-1 text-xs text-gray-400">{formatDate(r.created_at)}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-gray-200 bg-white p-10 text-center text-gray-400">
+              Seja o primeiro a avaliar este professor.
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -1,17 +1,20 @@
 "use client"
 
-import { useState, type ComponentType } from "react"
+import { useState, useTransition, type ComponentType } from "react"
 import Link from "next/link"
+import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
-import { Bell, Eye, Globe, Lock, Shield, Sparkles } from "lucide-react"
+import { Bell, Eye, Globe, Lock, Loader2, Shield, Sparkles } from "lucide-react"
+import { updateMySettings, type NotificationPrefs } from "@/app/actions/settings"
 
 type AlunoSettingsClientProps = {
   fullName: string
   email: string
   profileVisibility: "public" | "private"
+  notificationPrefs?: NotificationPrefs
 }
 
 function SettingRow({
@@ -47,12 +50,27 @@ export function AlunoSettingsClient({
   fullName,
   email,
   profileVisibility,
+  notificationPrefs = {},
 }: AlunoSettingsClientProps) {
-  const [emailAlerts, setEmailAlerts] = useState(true)
-  const [classroomAlerts, setClassroomAlerts] = useState(true)
-  const [goalReminders, setGoalReminders] = useState(true)
+  const pref = (key: string, fallback = true) =>
+    typeof notificationPrefs[key] === "boolean" ? notificationPrefs[key] : fallback
+  const [emailAlerts, setEmailAlerts] = useState(pref("emailAlerts"))
+  const [classroomAlerts, setClassroomAlerts] = useState(pref("classroomAlerts"))
+  const [goalReminders, setGoalReminders] = useState(pref("goalReminders"))
   const [publicProfile, setPublicProfile] = useState(profileVisibility === "public")
-  const [mentorSuggestions, setMentorSuggestions] = useState(true)
+  const [mentorSuggestions, setMentorSuggestions] = useState(pref("mentorSuggestions"))
+  const [saving, startSaving] = useTransition()
+
+  function handleSave() {
+    startSaving(async () => {
+      const result = await updateMySettings({
+        profileVisibility: publicProfile ? "public" : "private",
+        notificationPrefs: { emailAlerts, classroomAlerts, goalReminders, mentorSuggestions },
+      })
+      if (result.ok) toast.success("Preferencias salvas")
+      else toast.error(result.error)
+    })
+  }
 
   return (
     <div className="mx-auto max-w-5xl pb-20 lg:pb-0">
@@ -66,7 +84,10 @@ export function AlunoSettingsClient({
             Ajuste como voce quer acompanhar estudos, perfil publico e lembretes.
           </p>
         </div>
-        <Button className="bg-[#10B981] hover:bg-[#059669]">Salvar preferencias</Button>
+        <Button className="bg-[#10B981] hover:bg-[#059669] gap-2" onClick={handleSave} disabled={saving}>
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          Salvar preferencias
+        </Button>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
@@ -204,7 +225,7 @@ export function AlunoSettingsClient({
                 </Badge>
               </div>
               <p>
-                Este mockup prepara a futura persistencia dessas preferencias sem quebrar o padrao visual do dashboard.
+                Suas preferencias sao salvas na sua conta ao clicar em &quot;Salvar preferencias&quot;.
               </p>
             </CardContent>
           </Card>

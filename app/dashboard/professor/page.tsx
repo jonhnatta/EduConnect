@@ -42,8 +42,8 @@ function relativeTime(iso: string): string {
 
 export default async function ProfessorFeedPage() {
   const { userId } = await requireProfessorAccess()
-  const profile = await queryOne<{ full_name: string | null }>(
-    "select full_name from public.profiles where id = $1",
+  const profile = await queryOne<{ full_name: string | null; followers_count: number | null }>(
+    "select full_name, followers_count from public.profiles where id = $1",
     [userId]
   ).catch(() => null)
   const firstName = profile?.full_name?.split(" ")[0] ?? "Professor"
@@ -61,7 +61,7 @@ export default async function ProfessorFeedPage() {
 
   const stats = [
     { label: "Visualizacoes", value: formatCount(viewStats.totalViews), icon: Eye },
-    { label: "Seguidores", value: "—", icon: Users },
+    { label: "Seguidores", value: formatCount(Number(profile?.followers_count ?? 0)), icon: Users },
     { label: "Publicacoes", value: String(viewStats.totalPublications), icon: FileText },
     { label: "Curtidas", value: formatCount(viewStats.totalLikes), icon: Heart },
   ]

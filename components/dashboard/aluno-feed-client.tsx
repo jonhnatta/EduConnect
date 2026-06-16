@@ -54,6 +54,14 @@ function initials(name: string | null | undefined): string {
 
 const EXCERPT_MAX = 600
 
+const FEED_CATEGORIAS: { key: string; label: string; types?: string[] }[] = [
+  { key: "todos", label: "Todos" },
+  { key: "artigos", label: "Artigos", types: ["article"] },
+  { key: "exercicios", label: "Exercícios", types: ["exercise"] },
+  { key: "provas", label: "Provas", types: ["assessment", "simulado"] },
+  { key: "dicas", label: "Dicas", types: ["dica"] },
+]
+
 function plainText(html: string | null | undefined): string {
   if (!html?.trim()) return ""
   return html
@@ -92,6 +100,11 @@ export function AlunoFeedClient({
   weekStats,
 }: Props) {
   const router = useRouter()
+  const [categoria, setCategoria] = useState<string>("todos")
+  const visibleArticles =
+    categoria === "todos"
+      ? initialArticles
+      : initialArticles.filter((a) => FEED_CATEGORIAS.find((c) => c.key === categoria)?.types?.includes(a.type))
   const [savedMap, setSavedMap] = useState<Record<string, boolean>>(() => {
     const o: Record<string, boolean> = {}
     for (const id of initialSavedIds) o[id] = true
@@ -197,22 +210,27 @@ export function AlunoFeedClient({
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
           <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-            <Button size="sm" className="bg-[#10B981] hover:bg-[#059669]">
-              Todos
-            </Button>
-            <Button size="sm" variant="outline">
-              Artigos
-            </Button>
-            <Button size="sm" variant="outline">
-              Videos
-            </Button>
-            <Button size="sm" variant="outline">
-              Exercicios
-            </Button>
+            {FEED_CATEGORIAS.map((c) => (
+              <Button
+                key={c.key}
+                size="sm"
+                variant={categoria === c.key ? "default" : "outline"}
+                className={categoria === c.key ? "bg-[#10B981] hover:bg-[#059669]" : ""}
+                onClick={() => setCategoria(c.key)}
+              >
+                {c.label}
+              </Button>
+            ))}
           </div>
 
+          {visibleArticles.length === 0 && (
+            <div className="text-center py-12 bg-white rounded-xl border border-dashed border-gray-200 text-gray-500">
+              Nenhum conteúdo nesta categoria ainda.
+            </div>
+          )}
+
           <div className="space-y-4">
-            {initialArticles.map((item) => {
+            {visibleArticles.map((item) => {
               const c = counts[item.id] ?? { likes: item.like_count, shares: item.share_count, comments: item.comment_count }
               const liked = !!likedMap[item.id]
               const isExercise = item.type === "exercise"
