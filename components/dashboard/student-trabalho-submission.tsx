@@ -10,7 +10,6 @@ import { Badge } from "@/components/ui/badge"
 import { Paperclip, X, Loader2, CheckCircle2 } from "lucide-react"
 import { ActivityAttachmentsList } from "@/components/dashboard/activity-attachments-list"
 import {
-  uploadTrabalhoFiles,
   submitTrabalho,
   type ActivitySubmissionRow,
 } from "@/app/actions/activity-submissions"
@@ -146,21 +145,12 @@ export function StudentTrabalhoSubmission({
       return
     }
     start(async () => {
-      let attachments: { url: string; pathname: string; filename: string; contentType: string; size: number; uploadedAt: string }[] = []
-      if (needsFile && files.length > 0) {
-        const fd = new FormData()
+      const fd = new FormData()
+      fd.append("text", text.trim())
+      if (needsFile) {
         files.forEach((f) => fd.append("files", f))
-        const up = await uploadTrabalhoFiles(classroomId, activityId, fd)
-        if (!up.ok) {
-          toast.error(up.error)
-          return
-        }
-        attachments = up.attachments
       }
-      const res = await submitTrabalho(classroomId, activityId, {
-        text: text.trim(),
-        attachments,
-      })
+      const res = await submitTrabalho(classroomId, activityId, fd)
       if (!res.ok) {
         toast.error(res.error)
         return

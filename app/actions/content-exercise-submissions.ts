@@ -175,7 +175,7 @@ export async function getMyContentExerciseSubmission(
     if (!data) return { submission: null, error: null }
     return { submission: mapRow(data), error: null }
   } catch (e: any) {
-    return { submission: null, error: e?.message ?? "Erro" }
+    return { submission: null, error: "Erro" }
   }
 }
 
@@ -253,7 +253,7 @@ export async function saveContentExerciseDraft(
         [existing.id, user.id, JSON.stringify(sanitized)]
       )
     } catch (e: any) {
-      return { ok: false, error: e?.message ?? "Erro" }
+      return { ok: false, error: "Erro" }
     }
   } else {
     try {
@@ -267,7 +267,7 @@ export async function saveContentExerciseDraft(
         [contentItemId, user.id, JSON.stringify(sanitized)]
       )
     } catch (e: any) {
-      return { ok: false, error: e?.message ?? "Erro" }
+      return { ok: false, error: "Erro" }
     }
   }
 
@@ -369,7 +369,7 @@ export async function submitContentExercise(
         ]
       )
     } catch (e: any) {
-      return { ok: false, error: e?.message ?? "Erro" }
+      return { ok: false, error: "Erro" }
     }
   } else {
     try {
@@ -397,7 +397,7 @@ export async function submitContentExercise(
         ]
       )
     } catch (e: any) {
-      return { ok: false, error: e?.message ?? "Erro" }
+      return { ok: false, error: "Erro" }
     }
   }
 
@@ -452,7 +452,7 @@ export async function listContentExerciseSubmissionsForAuthor(
         [contentItemId]
       )) ?? []
   } catch (e: any) {
-    return { rows: [], error: e?.message ?? "Erro" }
+    return { rows: [], error: "Erro" }
   }
 
   const studentIds = [...new Set(subs.map((s) => s.student_id as string))]
@@ -542,7 +542,7 @@ export async function gradeContentExerciseOpenAnswers(
       [submissionId, JSON.stringify(nextOpen), scoreTotal]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro" }
+    return { ok: false, error: "Erro" }
   }
   revalidateContentExercisePaths(contentItemId)
   if (sub.student_id) {

@@ -260,6 +260,8 @@ export function mergeActivitySettings(
       delete base.exam
     } else {
       base.exam = patch.exam
+      // Exclusividade: uma atividade com exame não tem entrega de trabalho.
+      delete base.submission
     }
   }
   if (patch.submission !== undefined) {
@@ -267,6 +269,8 @@ export function mergeActivitySettings(
       delete base.submission
     } else {
       base.submission = patch.submission
+      // Exclusividade: uma atividade com entrega de trabalho não tem exame.
+      delete base.exam
     }
   }
   return base

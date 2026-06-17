@@ -157,6 +157,8 @@ export type StudentSubmissionGrade = {
   status: "rascunho" | "enviado"
   score_total: number | null
   score_mcq: number
+  /** true quando enviado mas ainda aguardando correção manual do professor. */
+  pendingCorrection: boolean
 }
 
 /** Notas do aluno nas atividades desta sala (para lista / resumo). */
@@ -169,18 +171,20 @@ export async function getMySubmissionGradesForClassroom(
   const member = await assertStudentMember(classroomId, user.id)
   if (!member) return { byActivity: {}, error: "Voce nao participa desta sala" }
 
-  const acts = await query<{ id: string }>(
-    "select id from public.classroom_activities where classroom_id = $1",
-    [classroomId]
-  ).catch((e: any) => {
-    throw e
-  })
-  const activityIds = (acts ?? []).map((a) => a.id)
-  if (activityIds.length === 0) return { byActivity: {}, error: null }
-
-  const subs = await query<{ activity_id: string; status: string; score_total: number | null; score_mcq: number }>(
-    "select activity_id, status, score_total, score_mcq from public.classroom_activity_submissions where student_id = $1 and activity_id = any($2::uuid[])",
-    [user.id, activityIds]
+  // Junta a submissão com o settings da atividade para decidir se ainda há correção pendente.
+  const subs = await query<{
+    activity_id: string
+    status: string
+    score_total: number | null
+    score_mcq: number
+    open_scores: unknown
+    settings: unknown
+  }>(
+    `select s.activity_id, s.status, s.score_total, s.score_mcq, s.open_scores, a.settings
+       from public.classroom_activity_submissions s
+       join public.classroom_activities a on a.id = s.activity_id
+      where s.student_id = $1 and a.classroom_id = $2`,
+    [user.id, classroomId]
   ).catch((e: any) => {
     throw e
   })
@@ -188,13 +192,29 @@ export async function getMySubmissionGradesForClassroom(
   const byActivity: Record<string, StudentSubmissionGrade> = {}
   for (const row of subs ?? []) {
     const aid = row.activity_id as string
+    const scoreTotal =
+      row.score_total === null || row.score_total === undefined
+        ? null
+        : Number(row.score_total)
+    const status = row.status as "rascunho" | "enviado"
+
+    // Correção pendente: exame com questões abertas sem nota, ou trabalho ainda sem nota.
+    let pendingCorrection = false
+    if (status === "enviado") {
+      const settings = asRecord(row.settings)
+      const exam = parseExamFromSettings(settings)
+      if (exam && exam.questions.some((q) => q.type === "open")) {
+        pendingCorrection = ungradedOpenCount(exam, parseOpenScores(row.open_scores)) > 0
+      } else if (parseTrabalhoConfig(settings)) {
+        pendingCorrection = scoreTotal == null
+      }
+    }
+
     byActivity[aid] = {
-      status: row.status as "rascunho" | "enviado",
-      score_total:
-        row.score_total === null || row.score_total === undefined
-          ? null
-          : Number(row.score_total),
+      status,
+      score_total: scoreTotal,
       score_mcq: Number(row.score_mcq ?? 0),
+      pendingCorrection,
     }
   }
 
@@ -310,7 +330,7 @@ export async function saveSubmissionDraft(
         [JSON.stringify(sanitized), existing.id]
       )
     } catch (e: any) {
-      return { ok: false, error: e?.message ?? "Erro ao salvar rascunho" }
+      return { ok: false, error: "Erro ao salvar rascunho" }
     }
   } else {
     try {
@@ -319,7 +339,7 @@ export async function saveSubmissionDraft(
         [activityId, user.id, JSON.stringify(sanitized)]
       )
     } catch (e: any) {
-      return { ok: false, error: e?.message ?? "Erro ao salvar rascunho" }
+      return { ok: false, error: "Erro ao salvar rascunho" }
     }
   }
 
@@ -393,7 +413,7 @@ export async function submitExam(
         [JSON.stringify(sanitized), scoreMcq, JSON.stringify(openScores), scoreTotal, now, existing.id]
       )
     } catch (e: any) {
-      return { ok: false, error: e?.message ?? "Erro ao enviar" }
+      return { ok: false, error: "Erro ao enviar" }
     }
   } else {
     try {
@@ -404,7 +424,7 @@ export async function submitExam(
         [activityId, user.id, JSON.stringify(sanitized), scoreMcq, JSON.stringify(openScores), scoreTotal, now]
       )
     } catch (e: any) {
-      return { ok: false, error: e?.message ?? "Erro ao enviar" }
+      return { ok: false, error: "Erro ao enviar" }
     }
   }
 
@@ -438,78 +458,19 @@ export async function submitExam(
 
 const TRABALHO_TEXT_MAX = 20_000
 
-/** Aluno faz upload dos arquivos da entrega de um trabalho (armazenados no MinIO). */
-export async function uploadTrabalhoFiles(
-  classroomId: string,
-  activityId: string,
-  formData: FormData
-): Promise<
-  { ok: true; attachments: ActivityAttachment[] } | { ok: false; error: string }
-> {
-  const token = process.env.BLOB_READ_WRITE_TOKEN
-  if (!token) return { ok: false, error: "BLOB_READ_WRITE_TOKEN nao configurado" }
-
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return { ok: false, error: "Nao autenticado" }
-
-  const member = await assertStudentMember(classroomId, user.id)
-  if (!member) return { ok: false, error: "Voce nao participa desta sala" }
-
-  const act = await queryOne<{ settings: any; type: string }>(
-    "select settings, type from public.classroom_activities where id = $1 and classroom_id = $2 and status <> 'rascunho'",
-    [activityId, classroomId]
-  )
-  if (!act || act.type !== "trabalho") return { ok: false, error: "Atividade nao encontrada" }
-
-  const cfg = parseTrabalhoConfig(asRecord(act.settings))
-  if (!cfg || !trabalhoModeRequiresFile(cfg.mode)) {
-    return { ok: false, error: "Esta atividade nao aceita arquivos" }
-  }
-
-  const raw = formData.getAll("files")
-  const files = raw.filter((x): x is File => x instanceof File && x.size > 0)
-  if (files.length === 0) return { ok: false, error: "Nenhum arquivo selecionado" }
-  if (files.length > cfg.maxFiles) {
-    return { ok: false, error: `No maximo ${cfg.maxFiles} arquivo(s)` }
-  }
-
-  const uploaded: ActivityAttachment[] = []
-  try {
-    for (const file of files) {
-      if (file.size > ACTIVITY_ATTACHMENT_MAX_BYTES) {
-        throw new Error(
-          `Arquivo muito grande (max ${Math.round(ACTIVITY_ATTACHMENT_MAX_BYTES / 1024 / 1024)} MB)`
-        )
-      }
-      if (!isAllowedActivityAttachmentType(file.type, file.name)) {
-        throw new Error("Tipo nao permitido. Use PDF, Word (.doc/.docx) ou imagem")
-      }
-      const safe = safeUploadFilename(file.name)
-      const pathname = `classroom-activities/${classroomId}/submissions/${activityId}/${user.id}/${randomUUID()}-${safe}`
-      const contentType = effectiveContentType(file)
-      const blob = await put(pathname, file, { access: "private", token, contentType })
-      uploaded.push({
-        url: blob.url,
-        pathname: blob.pathname,
-        filename: file.name,
-        contentType,
-        size: file.size,
-        uploadedAt: new Date().toISOString(),
-      })
-    }
-    return { ok: true, attachments: uploaded }
-  } catch (e) {
-    await Promise.all(uploaded.map((a) => del(a.url).catch(() => {})))
-    return { ok: false, error: e instanceof Error ? e.message : "Falha no upload" }
-  }
-}
-
-/** Aluno envia a entrega de um trabalho (texto e/ou arquivos, conforme o modo exigido). */
+/**
+ * Aluno envia a entrega de um trabalho (texto e/ou arquivos, conforme o modo exigido).
+ * Upload e persistência acontecem na MESMA action: se a gravação falhar, os arquivos
+ * recém-enviados são removidos do MinIO — não há janela para blobs órfãos.
+ */
 export async function submitTrabalho(
   classroomId: string,
   activityId: string,
-  input: { text: string; attachments: ActivityAttachment[] }
+  formData: FormData
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  const token = process.env.BLOB_READ_WRITE_TOKEN
+  if (!token) return { ok: false, error: "Armazenamento nao configurado" }
+
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return { ok: false, error: "Nao autenticado" }
 
@@ -529,35 +490,61 @@ export async function submitTrabalho(
   const cfg = parseTrabalhoConfig(asRecord(act.settings))
   if (!cfg) return { ok: false, error: "Esta atividade nao esta configurada para entrega" }
 
-  const text = (input.text ?? "").trim().slice(0, TRABALHO_TEXT_MAX)
-  const attachments = Array.isArray(input.attachments) ? input.attachments : []
+  const text = String(formData.get("text") ?? "").trim().slice(0, TRABALHO_TEXT_MAX)
+  const rawFiles = formData.getAll("files")
+  const files = rawFiles.filter((x): x is File => x instanceof File && x.size > 0)
 
   if (trabalhoModeRequiresText(cfg.mode) && !text) {
     return { ok: false, error: "Escreva sua resposta para enviar" }
   }
-  if (trabalhoModeRequiresFile(cfg.mode) && attachments.length === 0) {
+  if (trabalhoModeRequiresFile(cfg.mode) && files.length === 0) {
     return { ok: false, error: "Anexe ao menos um arquivo para enviar" }
   }
-  if (attachments.length > cfg.maxFiles) {
+  if (files.length > cfg.maxFiles) {
     return { ok: false, error: `No maximo ${cfg.maxFiles} arquivo(s)` }
   }
-  // Segurança: os anexos precisam pertencer ao caminho de entrega deste aluno
-  const prefix = `classroom-activities/${classroomId}/submissions/${activityId}/${user.id}/`
-  for (const a of attachments) {
-    const key = a.pathname || ""
-    if (!key.startsWith(prefix) || key.includes("..")) {
-      return { ok: false, error: "Anexo invalido" }
-    }
-  }
+  // Arquivos só importam quando o modo aceita arquivo (ignora anexos em modo só-texto).
+  const acceptsFiles = trabalhoModeRequiresFile(cfg.mode)
 
+  // Bloqueia reenvio ANTES de subir arquivos (evita upload desnecessário).
   const existing = await queryOne<{ id: string; status: string }>(
     "select id, status from public.classroom_activity_submissions where activity_id = $1 and student_id = $2",
     [activityId, user.id]
   )
   if (existing?.status === "enviado") return { ok: false, error: "Trabalho ja enviado" }
 
+  // Upload dos arquivos (com limpeza imediata em caso de falha no meio do lote).
+  const uploaded: ActivityAttachment[] = []
+  if (acceptsFiles && files.length > 0) {
+    try {
+      for (const file of files) {
+        if (file.size > ACTIVITY_ATTACHMENT_MAX_BYTES) {
+          throw new Error(`Arquivo muito grande (max ${Math.round(ACTIVITY_ATTACHMENT_MAX_BYTES / 1024 / 1024)} MB)`)
+        }
+        if (!isAllowedActivityAttachmentType(file.type, file.name)) {
+          throw new Error("Tipo nao permitido. Use PDF, Word (.doc/.docx) ou imagem")
+        }
+        const safe = safeUploadFilename(file.name)
+        const pathname = `classroom-activities/${classroomId}/submissions/${activityId}/${user.id}/${randomUUID()}-${safe}`
+        const contentType = effectiveContentType(file)
+        const blob = await put(pathname, file, { access: "private", token, contentType })
+        uploaded.push({
+          url: blob.url,
+          pathname: blob.pathname,
+          filename: file.name,
+          contentType,
+          size: file.size,
+          uploadedAt: new Date().toISOString(),
+        })
+      }
+    } catch (e) {
+      await Promise.all(uploaded.map((a) => del(a.pathname).catch(() => {})))
+      return { ok: false, error: e instanceof Error ? e.message : "Falha no upload" }
+    }
+  }
+
   const now = new Date().toISOString()
-  const attachJson = JSON.stringify(attachments)
+  const attachJson = JSON.stringify(uploaded)
   try {
     if (existing) {
       await query(
@@ -575,7 +562,10 @@ export async function submitTrabalho(
       )
     }
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao enviar" }
+    // Falha ao gravar: remove os arquivos recém-enviados para não deixar órfãos.
+    await Promise.all(uploaded.map((a) => del(a.pathname).catch(() => {})))
+    console.error("[submitTrabalho]", e)
+    return { ok: false, error: "Erro ao enviar" }
   }
 
   revalidateActivityPaths(classroomId, activityId)
@@ -641,7 +631,7 @@ export async function gradeTrabalho(
       [v, submissionId]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao corrigir" }
+    return { ok: false, error: "Erro ao corrigir" }
   }
 
   revalidateActivityPaths(classroomId, activityId)
@@ -687,7 +677,7 @@ export async function listSubmissionsForActivity(
       [activityId]
     )
   } catch (e: any) {
-    return { rows: [], error: e?.message ?? "Erro ao listar entregas" }
+    return { rows: [], error: "Erro ao listar entregas" }
   }
   const studentIds = [...new Set(subs.map((s) => s.student_id as string))]
   let nameById = new Map<string, string | null>()
@@ -814,10 +804,9 @@ export async function countSubmissionsForActivity(
     )
     return { enviados: row?.enviados ?? 0, total: row?.total ?? 0, error: null }
   } catch (e: any) {
-    return { enviados: 0, total: 0, error: e?.message ?? "Erro" }
+    console.error("[countSubmissionsForActivity]", e)
+    return { enviados: 0, total: 0, error: "Erro ao contar entregas" }
   }
-
-  // unreachable
 }
 
 export async function gradeOpenAnswers(
@@ -876,7 +865,7 @@ export async function gradeOpenAnswers(
       [JSON.stringify(nextOpen), scoreTotal, submissionId]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao corrigir" }
+    return { ok: false, error: "Erro ao corrigir" }
   }
   revalidateActivityPaths(classroomId, activityId)
   const sid = sub.student_id as string | undefined

@@ -172,8 +172,9 @@ export function AlunoSalaTabs({
                   const submittable = hasExam || hasTrabalho
                   const grade = submissionGradesByActivity[a.id]
                   const submitted = grade?.status === "enviado"
-                  const graded = submitted && grade.score_total != null
-                  const pendingCorrection = submitted && grade.score_total == null
+                  const pendingCorrection = !!(submitted && grade?.pendingCorrection)
+                  const graded =
+                    submitted && !grade?.pendingCorrection && grade?.score_total != null
                   const isDraft = grade?.status === "rascunho"
                   return (
                     <li
