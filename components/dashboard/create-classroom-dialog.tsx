@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Plus } from "lucide-react"
+import { Globe, Lock, Plus } from "lucide-react"
 import { createClassroom } from "@/app/actions/classrooms"
 import { useRouter } from "next/navigation"
 
@@ -49,6 +49,7 @@ export function CreateClassroomDialog({ canCreate, triggerClassName }: Props) {
   const [educationLevel, setEducationLevel] = useState("")
   const [description, setDescription] = useState("")
   const [maxStudents, setMaxStudents] = useState("")
+  const [isPublic, setIsPublic] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -66,6 +67,7 @@ export function CreateClassroomDialog({ canCreate, triggerClassName }: Props) {
       educationLevel,
       description,
       maxStudents: max,
+      isPublic,
     })
     setLoading(false)
     if (!result.ok) {
@@ -171,6 +173,30 @@ export function CreateClassroomDialog({ canCreate, triggerClassName }: Props) {
                 onChange={(e) => setMaxStudents(e.target.value)}
                 placeholder="Ilimitado se vazio"
               />
+            </div>
+            <div className="grid gap-2">
+              <Label>Tipo de sala</Label>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsPublic(false)}
+                  className={`flex-1 flex items-center gap-2 rounded-lg border p-3 text-sm transition-colors ${!isPublic ? "border-[#1D4ED8] bg-blue-50 text-[#1D4ED8] font-medium" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}
+                >
+                  <Lock className="h-4 w-4 shrink-0" />
+                  Fechada (por convite)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsPublic(true)}
+                  className={`flex-1 flex items-center gap-2 rounded-lg border p-3 text-sm transition-colors ${isPublic ? "border-[#10B981] bg-emerald-50 text-[#10B981] font-medium" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}
+                >
+                  <Globe className="h-4 w-4 shrink-0" />
+                  Aberta (publica)
+                </button>
+              </div>
+              <p className="text-xs text-gray-400">
+                {isPublic ? "Alunos poderao encontrar e entrar sem codigo de convite." : "Acesso somente via codigo de convite."}
+              </p>
             </div>
           </div>
           <DialogFooter>

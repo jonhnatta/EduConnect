@@ -1,4 +1,5 @@
 import { requireProfessorAccess } from "@/lib/auth/guards"
+import { getMyUnreadCount } from "@/app/actions/notifications"
 import { ProfessorLayoutClient } from "./_layout-client"
 
 export default async function ProfessorLayout({
@@ -6,9 +7,8 @@ export default async function ProfessorLayout({
 }: {
   children: React.ReactNode
 }) {
-  // Barreira de segurança real: consulta o banco, não o JWT.
-  // Redireciona para /dashboard/aluno se user_type !== 'professor'.
   await requireProfessorAccess()
+  const unreadCount = await getMyUnreadCount().catch(() => 0)
 
-  return <ProfessorLayoutClient>{children}</ProfessorLayoutClient>
+  return <ProfessorLayoutClient unreadNotifications={unreadCount}>{children}</ProfessorLayoutClient>
 }

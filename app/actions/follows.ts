@@ -1,7 +1,8 @@
 "use server"
 
 import { query, queryOne } from "@/lib/db/query"
-import { getAuthedUser } from "@/lib/auth/user"
+import { getAuthedUser, requireAuthedUser } from "@/lib/auth/user"
+import { createNotification } from "@/lib/notifications/event"
 
 type FollowState = {
   following: boolean
@@ -83,6 +84,17 @@ export async function toggleFollow(
       "INSERT INTO public.teacher_followers (teacher_id, student_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
       [teacherId, studentId]
     )
+    const studentRow = await queryOne<{ full_name: string | null }>(
+      "SELECT full_name FROM public.profiles WHERE id = $1",
+      [studentId]
+    )
+    const name = studentRow?.full_name?.trim() || "Um aluno"
+    await createNotification({
+      recipientId: teacherId,
+      type: "new_follower",
+      actorId: studentId,
+      message: `${name} começou a te seguir`,
+    }).catch(() => {})
   }
 
   const updated = await queryOne<{ followers_count: string }>(
@@ -95,6 +107,52 @@ export async function toggleFollow(
     following: !existing,
     followersCount: Number(updated?.followers_count ?? 0),
   }
+}
+
+export type FollowerItem = {
+  id: string
+  full_name: string
+  avatar_url: string | null
+  slug: string | null
+  followed_at: string
+}
+
+export async function getMyFollowers(): Promise<FollowerItem[]> {
+  const user = await requireAuthedUser().catch(() => null)
+  if (!user) return []
+
+  const rows = await query<FollowerItem>(
+    `SELECT p.id, p.full_name, p.avatar_url, p.slug, tf.created_at AS followed_at
+       FROM public.teacher_followers tf
+       JOIN public.profiles p ON p.id = tf.student_id
+      WHERE tf.teacher_id = $1
+      ORDER BY tf.created_at DESC`,
+    [user.id]
+  )
+  return rows ?? []
+}
+
+export type FollowingItem = {
+  id: string
+  full_name: string
+  avatar_url: string | null
+  slug: string | null
+  followed_at: string
+}
+
+export async function getMyFollowing(): Promise<FollowingItem[]> {
+  const user = await requireAuthedUser().catch(() => null)
+  if (!user) return []
+
+  const rows = await query<FollowingItem>(
+    `SELECT p.id, p.full_name, p.avatar_url, p.slug, tf.created_at AS followed_at
+       FROM public.teacher_followers tf
+       JOIN public.profiles p ON p.id = tf.teacher_id
+      WHERE tf.student_id = $1
+      ORDER BY tf.created_at DESC`,
+    [user.id]
+  )
+  return rows ?? []
 }
 
 export async function getProfileSocialStats(

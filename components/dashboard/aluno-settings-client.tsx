@@ -2,13 +2,16 @@
 
 import { useState, useTransition, type ComponentType } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
-import { Bell, Eye, Globe, Lock, Loader2, Shield, Sparkles } from "lucide-react"
+import { Bell, Eye, Globe, KeyRound, Lock, Loader2, Shield, Sparkles, Trash2 } from "lucide-react"
 import { updateMySettings, type NotificationPrefs } from "@/app/actions/settings"
+import { changePassword, deleteAccount } from "@/app/actions/account"
 
 type AlunoSettingsClientProps = {
   fullName: string
@@ -60,6 +63,14 @@ export function AlunoSettingsClient({
   const [publicProfile, setPublicProfile] = useState(profileVisibility === "public")
   const [mentorSuggestions, setMentorSuggestions] = useState(pref("mentorSuggestions"))
   const [saving, startSaving] = useTransition()
+  const [currentPwd, setCurrentPwd] = useState("")
+  const [newPwd, setNewPwd] = useState("")
+  const [confirmPwd, setConfirmPwd] = useState("")
+  const [changingPwd, startChangingPwd] = useTransition()
+  const [deletePwd, setDeletePwd] = useState("")
+  const [deleting, startDeleting] = useTransition()
+  const [showDeleteForm, setShowDeleteForm] = useState(false)
+  const router = useRouter()
 
   function handleSave() {
     startSaving(async () => {
@@ -214,19 +225,103 @@ export function AlunoSettingsClient({
 
           <Card className="border-gray-100">
             <CardHeader>
-              <CardTitle className="font-display text-lg text-gray-900">Privacidade</CardTitle>
-              <CardDescription>Como sua conta aparece para outras pessoas.</CardDescription>
+              <CardTitle className="font-display text-lg text-gray-900 flex items-center gap-2">
+                <KeyRound className="h-5 w-5 text-[#10B981]" />
+                Trocar senha
+              </CardTitle>
+              <CardDescription>Altere a senha da sua conta a qualquer momento.</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3 text-sm text-gray-600">
-              <div className="flex items-center justify-between rounded-xl bg-gray-50 px-4 py-3">
-                <span>Modo atual do perfil</span>
-                <Badge className={publicProfile ? "bg-emerald-100 text-emerald-700" : "bg-gray-200 text-gray-700"}>
-                  {publicProfile ? "Publico" : "Privado"}
-                </Badge>
-              </div>
-              <p>
-                Suas preferencias sao salvas na sua conta ao clicar em &quot;Salvar preferencias&quot;.
-              </p>
+            <CardContent className="space-y-3">
+              <Input
+                type="password"
+                placeholder="Senha atual"
+                value={currentPwd}
+                onChange={(e) => setCurrentPwd(e.target.value)}
+                autoComplete="current-password"
+              />
+              <Input
+                type="password"
+                placeholder="Nova senha (min. 8 caracteres)"
+                value={newPwd}
+                onChange={(e) => setNewPwd(e.target.value)}
+                autoComplete="new-password"
+              />
+              <Input
+                type="password"
+                placeholder="Confirmar nova senha"
+                value={confirmPwd}
+                onChange={(e) => setConfirmPwd(e.target.value)}
+                autoComplete="new-password"
+              />
+              <Button
+                className="w-full bg-[#10B981] hover:bg-[#059669] gap-2"
+                disabled={changingPwd}
+                onClick={() => {
+                  if (newPwd !== confirmPwd) { toast.error("As senhas nao coincidem"); return }
+                  startChangingPwd(async () => {
+                    const r = await changePassword(currentPwd, newPwd)
+                    if (r.ok) {
+                      toast.success("Senha alterada com sucesso")
+                      setCurrentPwd(""); setNewPwd(""); setConfirmPwd("")
+                    } else {
+                      toast.error(r.error)
+                    }
+                  })
+                }}
+              >
+                {changingPwd ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Alterar senha
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="border-red-100">
+            <CardHeader>
+              <CardTitle className="font-display text-lg text-red-700 flex items-center gap-2">
+                <Trash2 className="h-5 w-5" />
+                Excluir conta
+              </CardTitle>
+              <CardDescription>Solicitar exclusao permanente (LGPD Art. 18). Seus dados serao removidos em ate 30 dias.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {!showDeleteForm ? (
+                <Button variant="outline" className="border-red-200 text-red-700 hover:bg-red-50 w-full" onClick={() => setShowDeleteForm(true)}>
+                  Solicitar exclusao da conta
+                </Button>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-sm text-red-700 font-medium">Esta acao nao pode ser desfeita. Confirme com sua senha:</p>
+                  <Input
+                    type="password"
+                    placeholder="Sua senha"
+                    value={deletePwd}
+                    onChange={(e) => setDeletePwd(e.target.value)}
+                  />
+                  <div className="flex gap-2">
+                    <Button variant="outline" className="flex-1" onClick={() => { setShowDeleteForm(false); setDeletePwd("") }}>
+                      Cancelar
+                    </Button>
+                    <Button
+                      className="flex-1 bg-red-600 hover:bg-red-700 gap-2"
+                      disabled={deleting}
+                      onClick={() => {
+                        startDeleting(async () => {
+                          const r = await deleteAccount(deletePwd)
+                          if (r.ok) {
+                            toast.success("Conta marcada para exclusao. Voce sera desconectado.")
+                            router.push("/login")
+                          } else {
+                            toast.error(r.error)
+                          }
+                        })
+                      }}
+                    >
+                      {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      Confirmar exclusao
+                    </Button>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

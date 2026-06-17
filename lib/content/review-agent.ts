@@ -1,4 +1,5 @@
 import { query, queryOne } from "@/lib/db/query"
+import { notifyFollowersNewContent } from "@/lib/notifications/event"
 import type { ContentReviewFinding } from "./types"
 
 const XAI_API_URL = "https://api.x.ai/v1/chat/completions"
@@ -174,4 +175,24 @@ export async function runArticleReview(contentItemId: string): Promise<void> {
      where id = $1`,
     [contentItemId, newStatus, (statusPatch as any).published_at ?? null]
   )
+
+  if (newStatus === "published") {
+    const item = await queryOne<{ author_id: string; full_name: string | null; title: string; type: string }>(
+      `SELECT ci.author_id, p.full_name, ci.title, ci.type
+         FROM public.content_items ci
+         JOIN public.profiles p ON p.id = ci.author_id
+        WHERE ci.id = $1`,
+      [contentItemId]
+    )
+    if (item) {
+      const typeLabel = item.type === "article" ? "artigo" : item.type === "exercise" ? "exercício" : item.type === "assessment" ? "prova" : item.type === "simulado" ? "simulado" : "dica"
+      notifyFollowersNewContent({
+        teacherId: item.author_id,
+        teacherName: item.full_name?.trim() || "Professor",
+        entityId: contentItemId,
+        contentTypeLabel: typeLabel,
+        title: item.title,
+      }).catch(() => {})
+    }
+  }
 }

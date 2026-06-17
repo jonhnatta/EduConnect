@@ -67,6 +67,7 @@ export type CreateClassroomInput = {
   educationLevel: string
   description: string
   maxStudents: number | null
+  isPublic?: boolean
 }
 
 export async function createClassroom(
@@ -88,8 +89,8 @@ export async function createClassroom(
     try {
       const data = await queryOne<{ id: string; invite_code: string }>(
         `insert into public.classrooms
-          (professor_id, name, subject, education_level, description, invite_code, max_students, status, created_at, updated_at)
-         values ($1,$2,$3,$4,$5,$6,$7,'ativa', timezone('utc'::text, now()), timezone('utc'::text, now()))
+          (professor_id, name, subject, education_level, description, invite_code, max_students, is_public, status, created_at, updated_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,'ativa', timezone('utc'::text, now()), timezone('utc'::text, now()))
          returning id, invite_code`,
         [
           access.userId,
@@ -99,6 +100,7 @@ export async function createClassroom(
           input.description.trim() || null,
           inviteCode,
           input.maxStudents,
+          input.isPublic ?? false,
         ]
       )
       if (data) {
@@ -211,6 +213,34 @@ export async function listClassroomsForStudent(): Promise<{
   } catch (e: any) {
     return { rows: [], error: e?.message ?? "Erro ao carregar salas" }
   }
+}
+
+export type PublicClassroomItem = {
+  id: string
+  name: string
+  subject: string
+  education_level: string
+  description: string | null
+  professor_name: string
+  professor_slug: string | null
+  member_count: number
+}
+
+export async function listPublicClassrooms(limit = 30): Promise<PublicClassroomItem[]> {
+  const rows = await query<PublicClassroomItem>(
+    `SELECT c.id, c.name, c.subject, c.education_level, c.description,
+            p.full_name AS professor_name, p.slug AS professor_slug,
+            count(cm.id)::int AS member_count
+       FROM public.classrooms c
+       JOIN public.profiles p ON p.id = c.professor_id
+       LEFT JOIN public.classroom_members cm ON cm.classroom_id = c.id
+      WHERE c.is_public = true AND c.status = 'ativa'
+      GROUP BY c.id, p.full_name, p.slug
+      ORDER BY c.created_at DESC
+      LIMIT $1`,
+    [limit]
+  )
+  return rows ?? []
 }
 
 export async function getClassroomForProfessor(

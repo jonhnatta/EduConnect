@@ -8,6 +8,7 @@ import { getAuthedUser, requireAuthedUser } from "@/lib/auth/user"
 import { getApprovedProfessorActionAccess } from "@/lib/auth/guards"
 import { query, queryOne } from "@/lib/db/query"
 import { runArticleReview } from "@/lib/content/review-agent"
+import { notifyFollowersNewContent } from "@/lib/notifications/event"
 import {
   effectiveContentType,
   safeUploadFilename,
@@ -1094,6 +1095,23 @@ export async function publishDica(
     await replaceContentItemClassrooms(input.id, input.visibility === "classrooms" ? input.classroomIds : [])
   } catch (e: any) {
     return { ok: false, error: e?.message ?? "Erro ao publicar dica" }
+  }
+
+  const isFirstPublish = existingRow.status !== "published"
+  if (isFirstPublish) {
+    const teacherRow = await queryOne<{ full_name: string | null }>(
+      "SELECT full_name FROM public.profiles WHERE id = $1",
+      [p.user.id]
+    )
+    after(() =>
+      notifyFollowersNewContent({
+        teacherId: p.user.id,
+        teacherName: teacherRow?.full_name?.trim() || "Professor",
+        entityId: input.id,
+        contentTypeLabel: "dica",
+        title: title,
+      }).catch(() => {})
+    )
   }
 
   revalidatePath("/dashboard/aluno")
