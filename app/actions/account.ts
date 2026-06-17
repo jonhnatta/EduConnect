@@ -18,7 +18,7 @@ export async function changePassword(
   }
 
   const row = await queryOne<{ password_hash: string | null }>(
-    "SELECT password_hash FROM public.profiles WHERE id = $1",
+    "SELECT password_hash FROM public.users WHERE id = $1",
     [user.id]
   )
 
@@ -30,7 +30,7 @@ export async function changePassword(
   if (!valid) return { ok: false, error: "Senha atual incorreta" }
 
   const hash = await bcrypt.hash(newPassword, 12)
-  await query("UPDATE public.profiles SET password_hash = $1 WHERE id = $2", [hash, user.id])
+  await query("UPDATE public.users SET password_hash = $1 WHERE id = $2", [hash, user.id])
 
   return { ok: true }
 }
@@ -42,7 +42,7 @@ export async function deleteAccount(
   if (!user) return { ok: false, error: "Nao autenticado" }
 
   const row = await queryOne<{ password_hash: string | null; deleted_at: string | null; email: string }>(
-    `SELECT pr.password_hash, pr.deleted_at, u.email
+    `SELECT u.password_hash, pr.deleted_at, u.email
        FROM public.profiles pr
        JOIN public.users u ON u.id = pr.id
       WHERE pr.id = $1`,

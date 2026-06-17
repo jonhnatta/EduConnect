@@ -16,12 +16,13 @@ export default async function ProfessorConfiguracoesPage() {
 
   const profile = userId
     ? await queryOne<ProfileRow>(
-        `select full_name, professor_verification_status,
-                coalesce(profile_visibility, 'private') as profile_visibility,
-                notification_prefs,
-                (password_hash IS NOT NULL) as has_password
-           from public.profiles
-          where id = $1`,
+        `select pr.full_name, pr.professor_verification_status,
+                coalesce(pr.profile_visibility, 'private') as profile_visibility,
+                pr.notification_prefs,
+                (u.password_hash IS NOT NULL) as has_password
+           from public.profiles pr
+           join public.users u on u.id = pr.id
+          where pr.id = $1`,
         [userId]
       )
     : null
