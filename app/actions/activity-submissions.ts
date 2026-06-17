@@ -21,6 +21,21 @@ import {
   type StudentExamAnswers,
   validateExamDefinition,
 } from "@/lib/activities/exam"
+import {
+  type ActivityAttachment,
+  parseActivityAttachments,
+  isAllowedActivityAttachmentType,
+  effectiveContentType,
+  safeUploadFilename,
+  ACTIVITY_ATTACHMENT_MAX_BYTES,
+} from "@/lib/activities/attachments"
+import {
+  parseTrabalhoConfig,
+  trabalhoModeRequiresText,
+  trabalhoModeRequiresFile,
+} from "@/lib/activities/trabalho"
+import { put, del } from "@/lib/blob"
+import { randomUUID } from "crypto"
 export type ActivitySubmissionRow = {
   id: string
   activity_id: string
@@ -31,6 +46,10 @@ export type ActivitySubmissionRow = {
   open_scores: Record<string, number>
   score_total: number | null
   submitted_at: string | null
+  /** Entrega de trabalho: texto livre do aluno */
+  submission_text: string | null
+  /** Entrega de trabalho: arquivos anexados pelo aluno */
+  submission_attachments: ActivityAttachment[]
   created_at: string
   updated_at: string
 }
@@ -76,6 +95,11 @@ function mapSubmissionRow(data: Record<string, unknown>): ActivitySubmissionRow 
         : Number(data.score_total),
     submitted_at:
       typeof data.submitted_at === "string" ? data.submitted_at : null,
+    submission_text:
+      typeof data.submission_text === "string" ? data.submission_text : null,
+    submission_attachments: parseActivityAttachments({
+      attachments: data.submission_attachments,
+    }),
     created_at: String(data.created_at),
     updated_at: String(data.updated_at),
   }
@@ -412,6 +436,229 @@ export async function submitExam(
   return { ok: true }
 }
 
+const TRABALHO_TEXT_MAX = 20_000
+
+/** Aluno faz upload dos arquivos da entrega de um trabalho (armazenados no MinIO). */
+export async function uploadTrabalhoFiles(
+  classroomId: string,
+  activityId: string,
+  formData: FormData
+): Promise<
+  { ok: true; attachments: ActivityAttachment[] } | { ok: false; error: string }
+> {
+  const token = process.env.BLOB_READ_WRITE_TOKEN
+  if (!token) return { ok: false, error: "BLOB_READ_WRITE_TOKEN nao configurado" }
+
+  const user = await requireAuthedUser().catch(() => null)
+  if (!user) return { ok: false, error: "Nao autenticado" }
+
+  const member = await assertStudentMember(classroomId, user.id)
+  if (!member) return { ok: false, error: "Voce nao participa desta sala" }
+
+  const act = await queryOne<{ settings: any; type: string }>(
+    "select settings, type from public.classroom_activities where id = $1 and classroom_id = $2 and status <> 'rascunho'",
+    [activityId, classroomId]
+  )
+  if (!act || act.type !== "trabalho") return { ok: false, error: "Atividade nao encontrada" }
+
+  const cfg = parseTrabalhoConfig(asRecord(act.settings))
+  if (!cfg || !trabalhoModeRequiresFile(cfg.mode)) {
+    return { ok: false, error: "Esta atividade nao aceita arquivos" }
+  }
+
+  const raw = formData.getAll("files")
+  const files = raw.filter((x): x is File => x instanceof File && x.size > 0)
+  if (files.length === 0) return { ok: false, error: "Nenhum arquivo selecionado" }
+  if (files.length > cfg.maxFiles) {
+    return { ok: false, error: `No maximo ${cfg.maxFiles} arquivo(s)` }
+  }
+
+  const uploaded: ActivityAttachment[] = []
+  try {
+    for (const file of files) {
+      if (file.size > ACTIVITY_ATTACHMENT_MAX_BYTES) {
+        throw new Error(
+          `Arquivo muito grande (max ${Math.round(ACTIVITY_ATTACHMENT_MAX_BYTES / 1024 / 1024)} MB)`
+        )
+      }
+      if (!isAllowedActivityAttachmentType(file.type, file.name)) {
+        throw new Error("Tipo nao permitido. Use PDF, Word (.doc/.docx) ou imagem")
+      }
+      const safe = safeUploadFilename(file.name)
+      const pathname = `classroom-activities/${classroomId}/submissions/${activityId}/${user.id}/${randomUUID()}-${safe}`
+      const contentType = effectiveContentType(file)
+      const blob = await put(pathname, file, { access: "private", token, contentType })
+      uploaded.push({
+        url: blob.url,
+        pathname: blob.pathname,
+        filename: file.name,
+        contentType,
+        size: file.size,
+        uploadedAt: new Date().toISOString(),
+      })
+    }
+    return { ok: true, attachments: uploaded }
+  } catch (e) {
+    await Promise.all(uploaded.map((a) => del(a.url).catch(() => {})))
+    return { ok: false, error: e instanceof Error ? e.message : "Falha no upload" }
+  }
+}
+
+/** Aluno envia a entrega de um trabalho (texto e/ou arquivos, conforme o modo exigido). */
+export async function submitTrabalho(
+  classroomId: string,
+  activityId: string,
+  input: { text: string; attachments: ActivityAttachment[] }
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const user = await requireAuthedUser().catch(() => null)
+  if (!user) return { ok: false, error: "Nao autenticado" }
+
+  const member = await assertStudentMember(classroomId, user.id)
+  if (!member) return { ok: false, error: "Voce nao participa desta sala" }
+
+  const act = await queryOne<{ settings: any; type: string; status: string; starts_at: string | Date | null; due_at: string | Date | null; title: string | null }>(
+    "select settings, type, status, starts_at, due_at, title from public.classroom_activities where id = $1 and classroom_id = $2",
+    [activityId, classroomId]
+  )
+  if (!act || act.type !== "trabalho") return { ok: false, error: "Atividade nao encontrada" }
+  if (act.status === "rascunho") return { ok: false, error: "Atividade indisponivel" }
+  if (act.status === "encerrada") return { ok: false, error: "Atividade encerrada" }
+  const windowErr = assertActivityWindowAllowed(act.starts_at, act.due_at)
+  if (windowErr) return { ok: false, error: windowErr }
+
+  const cfg = parseTrabalhoConfig(asRecord(act.settings))
+  if (!cfg) return { ok: false, error: "Esta atividade nao esta configurada para entrega" }
+
+  const text = (input.text ?? "").trim().slice(0, TRABALHO_TEXT_MAX)
+  const attachments = Array.isArray(input.attachments) ? input.attachments : []
+
+  if (trabalhoModeRequiresText(cfg.mode) && !text) {
+    return { ok: false, error: "Escreva sua resposta para enviar" }
+  }
+  if (trabalhoModeRequiresFile(cfg.mode) && attachments.length === 0) {
+    return { ok: false, error: "Anexe ao menos um arquivo para enviar" }
+  }
+  if (attachments.length > cfg.maxFiles) {
+    return { ok: false, error: `No maximo ${cfg.maxFiles} arquivo(s)` }
+  }
+  // Segurança: os anexos precisam pertencer ao caminho de entrega deste aluno
+  const prefix = `classroom-activities/${classroomId}/submissions/${activityId}/${user.id}/`
+  for (const a of attachments) {
+    const key = a.pathname || ""
+    if (!key.startsWith(prefix) || key.includes("..")) {
+      return { ok: false, error: "Anexo invalido" }
+    }
+  }
+
+  const existing = await queryOne<{ id: string; status: string }>(
+    "select id, status from public.classroom_activity_submissions where activity_id = $1 and student_id = $2",
+    [activityId, user.id]
+  )
+  if (existing?.status === "enviado") return { ok: false, error: "Trabalho ja enviado" }
+
+  const now = new Date().toISOString()
+  const attachJson = JSON.stringify(attachments)
+  try {
+    if (existing) {
+      await query(
+        `update public.classroom_activity_submissions
+         set status = 'enviado', submission_text = $1, submission_attachments = $2::jsonb, submitted_at = $3
+         where id = $4 and status = 'rascunho'`,
+        [text || null, attachJson, now, existing.id]
+      )
+    } else {
+      await query(
+        `insert into public.classroom_activity_submissions
+         (activity_id, student_id, status, submission_text, submission_attachments, submitted_at)
+         values ($1,$2,'enviado',$3,$4::jsonb,$5)`,
+        [activityId, user.id, text || null, attachJson, now]
+      )
+    }
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? "Erro ao enviar" }
+  }
+
+  revalidateActivityPaths(classroomId, activityId)
+
+  // Notifica o professor da sala sobre a nova entrega
+  const info = await queryOne<{ professor_id: string; student_name: string | null }>(
+    `SELECT c.professor_id, p.full_name AS student_name
+       FROM public.classrooms c, public.profiles p
+      WHERE c.id = $1 AND p.id = $2`,
+    [classroomId, user.id]
+  )
+  if (info?.professor_id) {
+    const aluno = info.student_name?.trim() || "Um aluno"
+    const titulo = act.title?.trim() || "trabalho"
+    await createNotification({
+      recipientId: info.professor_id,
+      type: "submission_received",
+      actorId: user.id,
+      entityId: activityId,
+      entityType: "activity",
+      message: `${aluno} enviou "${titulo}" — requer correcao.`,
+    }).catch((err) => console.error("[submitTrabalho notify]", err))
+  }
+
+  return { ok: true }
+}
+
+/** Professor atribui a nota final de um trabalho (0..max_score). */
+export async function gradeTrabalho(
+  classroomId: string,
+  activityId: string,
+  submissionId: string,
+  score: number
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const access = await getApprovedProfessorActionAccess()
+  if (!access.ok) return { ok: false, error: access.error }
+
+  const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
+  if (!ok) return { ok: false, error: "Sala nao encontrada" }
+
+  const act = await queryOne<{ max_score: number | null; type: string; title: string | null }>(
+    "select max_score, type, title from public.classroom_activities where id = $1 and classroom_id = $2",
+    [activityId, classroomId]
+  )
+  if (!act || act.type !== "trabalho") return { ok: false, error: "Atividade nao encontrada" }
+
+  const max = act.max_score ?? 10
+  const v = Number(score)
+  if (!Number.isFinite(v) || v < 0 || v > max) {
+    return { ok: false, error: `Nota invalida (0 a ${max})` }
+  }
+
+  const sub = await queryOne<{ id: string; student_id: string; status: string }>(
+    "select id, student_id, status from public.classroom_activity_submissions where id = $1 and activity_id = $2",
+    [submissionId, activityId]
+  )
+  if (!sub) return { ok: false, error: "Entrega nao encontrada" }
+  if (sub.status !== "enviado") return { ok: false, error: "Apenas entregas enviadas podem ser corrigidas" }
+
+  try {
+    await query(
+      "update public.classroom_activity_submissions set score_total = $1 where id = $2 and status = 'enviado'",
+      [v, submissionId]
+    )
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? "Erro ao corrigir" }
+  }
+
+  revalidateActivityPaths(classroomId, activityId)
+  if (sub.student_id) {
+    revalidatePath(`/dashboard/professor/alunos/${sub.student_id}`)
+    await createNotification({
+      recipientId: sub.student_id,
+      type: "activity_graded",
+      actorId: access.userId,
+      entityId: activityId,
+      entityType: "activity",
+      message: `Seu trabalho "${act.title?.trim() || "trabalho"}" foi corrigido.`,
+    }).catch((err) => console.error("[gradeTrabalho notify]", err))
+  }
+  return { ok: true }
+}
+
 export type SubmissionListItem = ActivitySubmissionRow & {
   student_name: string | null
 }
@@ -509,24 +756,36 @@ export async function getPendingGradingByActivity(
   ).catch(() => [])
 
   const examByActivity = new Map<string, ActivityExamDefinition>()
+  const trabalhoActivities = new Set<string>()
   for (const a of acts ?? []) {
-    const exam = parseExamFromSettings(asRecord(a.settings))
+    const settings = asRecord(a.settings)
+    const exam = parseExamFromSettings(settings)
     if (exam && exam.questions.some((q) => q.type === "open")) {
       examByActivity.set(a.id as string, exam)
+    } else if (parseTrabalhoConfig(settings)) {
+      // Trabalho com entrega: pendente = enviado e ainda sem nota
+      trabalhoActivities.add(a.id as string)
     }
   }
 
   const counts: Record<string, number> = {}
   for (const id of activityIds) counts[id] = 0
-  if (examByActivity.size === 0) return counts
+  const relevant = [...examByActivity.keys(), ...trabalhoActivities]
+  if (relevant.length === 0) return counts
 
-  const subs = await query<{ activity_id: string; open_scores: unknown }>(
-    "select activity_id, open_scores from public.classroom_activity_submissions where activity_id = any($1::uuid[]) and status = 'enviado'",
-    [[...examByActivity.keys()]]
+  const subs = await query<{ activity_id: string; open_scores: unknown; score_total: number | null }>(
+    "select activity_id, open_scores, score_total from public.classroom_activity_submissions where activity_id = any($1::uuid[]) and status = 'enviado'",
+    [relevant]
   ).catch(() => [])
 
   for (const sub of subs ?? []) {
     const aid = sub.activity_id as string
+    if (trabalhoActivities.has(aid)) {
+      if (sub.score_total === null || sub.score_total === undefined) {
+        counts[aid] = (counts[aid] ?? 0) + 1
+      }
+      continue
+    }
     const exam = examByActivity.get(aid)
     if (!exam) continue
     if (ungradedOpenCount(exam, parseOpenScores(sub.open_scores)) > 0) {

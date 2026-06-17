@@ -28,6 +28,10 @@ import {
   validateExamDefinition,
   type ActivityExamDefinition,
 } from "@/lib/activities/exam"
+import {
+  clampTrabalhoMaxFiles,
+  type TrabalhoSubmissionConfig,
+} from "@/lib/activities/trabalho"
 import type {
   ClassroomActivityRow,
   ClassroomActivityStatus,
@@ -62,6 +66,8 @@ export type CreateActivityInput = {
   attachments?: ActivityAttachment[]
   /** Questoes da prova (settings.exam); null ou vazio = sem prova estruturada */
   exam?: ActivityExamDefinition | null
+  /** Modo de entrega do trabalho (settings.submission); null = sem entrega estruturada */
+  submission?: TrabalhoSubmissionConfig | null
 }
 
 export type UpdateActivityInput = {
@@ -76,6 +82,7 @@ export type UpdateActivityInput = {
   status?: ClassroomActivityStatus
   attachments?: ActivityAttachment[]
   exam?: ActivityExamDefinition | null
+  submission?: TrabalhoSubmissionConfig | null
 }
 
 async function assertProfessorOwnsClassroom(
@@ -320,11 +327,21 @@ export async function createActivity(
 
   const descriptionHtml = sanitizeActivityHtml(input.description.trim() || "")
 
+  // Entrega de trabalho: só faz sentido para o tipo "trabalho"
+  const submissionCfg =
+    input.type === "trabalho" && input.submission
+      ? {
+          mode: input.submission.mode,
+          maxFiles: clampTrabalhoMaxFiles(input.submission.maxFiles),
+        }
+      : null
+
   const settings = mergeActivitySettings(
     {},
     {
       attachments,
       exam: input.exam ?? null,
+      submission: submissionCfg,
     }
   )
 
@@ -394,7 +411,11 @@ export async function updateActivity(
     if (exErr) return { ok: false, error: exErr }
   }
 
-  if (input.attachments !== undefined || input.exam !== undefined) {
+  if (
+    input.attachments !== undefined ||
+    input.exam !== undefined ||
+    input.submission !== undefined
+  ) {
     if (input.attachments !== undefined) {
       if (input.attachments.length > ACTIVITY_ATTACHMENT_MAX_PER_ACTIVITY) {
         return { ok: false, error: "Numero de anexos acima do permitido" }
@@ -424,12 +445,21 @@ export async function updateActivity(
     const settingsPatch: {
       attachments?: ActivityAttachment[]
       exam?: ActivityExamDefinition | null
+      submission?: { mode: string; maxFiles: number } | null
     } = {}
     if (input.attachments !== undefined) {
       settingsPatch.attachments = input.attachments
     }
     if (input.exam !== undefined) {
       settingsPatch.exam = input.exam
+    }
+    if (input.submission !== undefined) {
+      settingsPatch.submission = input.submission
+        ? {
+            mode: input.submission.mode,
+            maxFiles: clampTrabalhoMaxFiles(input.submission.maxFiles),
+          }
+        : null
     }
     patch.settings = mergeActivitySettings(current, settingsPatch)
 

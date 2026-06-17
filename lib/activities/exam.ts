@@ -243,6 +243,8 @@ export function mergeActivitySettings(
   patch: {
     attachments?: ActivityAttachment[]
     exam?: ActivityExamDefinition | null
+    /** Configuração de entrega de trabalho (settings.submission); null remove. */
+    submission?: { mode: string; maxFiles: number } | null
   }
 ): Record<string, unknown> {
   const base: Record<string, unknown> = { ...(current ?? {}) }
@@ -258,6 +260,13 @@ export function mergeActivitySettings(
       delete base.exam
     } else {
       base.exam = patch.exam
+    }
+  }
+  if (patch.submission !== undefined) {
+    if (patch.submission === null) {
+      delete base.submission
+    } else {
+      base.submission = patch.submission
     }
   }
   return base

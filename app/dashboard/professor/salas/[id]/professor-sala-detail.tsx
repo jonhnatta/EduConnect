@@ -36,6 +36,7 @@ import { deleteActivity } from "@/app/actions/classroom-activities"
 import { deleteMaterial } from "@/app/actions/classroom-materials"
 import { parseActivityAttachments } from "@/lib/activities/attachments"
 import { parseExamFromSettings } from "@/lib/activities/exam"
+import { parseTrabalhoConfig } from "@/lib/activities/trabalho"
 import { ActivityAttachmentsList } from "@/components/dashboard/activity-attachments-list"
 import { toast } from "sonner"
 
@@ -332,6 +333,8 @@ export function ProfessorSalaDetail({
               ) : (
                 activities.map((ativ) => {
                   const hasExam = !!parseExamFromSettings(ativ.settings)
+                  const hasTrabalho = !!parseTrabalhoConfig(ativ.settings)
+                  const hasSubmissions = hasExam || hasTrabalho
                   const enviados = submissionEnvios[ativ.id] ?? 0
                   return (
                   <div
@@ -378,12 +381,12 @@ export function ProfessorSalaDetail({
                     <div className="flex items-center gap-4 shrink-0">
                       <div className="text-center md:text-right">
                         <p className="font-mono text-xl font-bold text-gray-900">
-                          {hasExam ? enviados : 0}/{classroom.member_count}
+                          {hasSubmissions ? enviados : 0}/{classroom.member_count}
                         </p>
                         <p className="text-xs text-gray-500">entregas</p>
                       </div>
                       <div className="flex gap-1 flex-wrap justify-end">
-                        {hasExam ? (
+                        {hasSubmissions ? (
                           <Button
                             type="button"
                             variant="secondary"
