@@ -287,10 +287,11 @@ export async function submitContentExercise(
     status: string
     type: string
     author_id: string
+    title: string | null
   }
 
   const item = await queryOne<ItemRow>(
-    "select settings, status, type, author_id from public.content_items where id = $1",
+    "select settings, status, type, author_id, title from public.content_items where id = $1",
     [contentItemId]
   )
 
@@ -401,6 +402,26 @@ export async function submitContentExercise(
   }
 
   revalidateContentExercisePaths(contentItemId)
+
+  // Notifica o autor (professor) sobre a nova entrega
+  const hasOpen = exam.questions.some((q) => q.type === "open")
+  const studentRow = await queryOne<{ full_name: string | null }>(
+    "select full_name from public.profiles where id = $1",
+    [user.id]
+  )
+  const aluno = studentRow?.full_name?.trim() || "Um aluno"
+  const titulo = item.title?.trim() || "atividade"
+  await createNotification({
+    recipientId: item.author_id,
+    type: "submission_received",
+    actorId: user.id,
+    entityId: contentItemId,
+    entityType: "content_item",
+    message: hasOpen
+      ? `${aluno} enviou "${titulo}" — requer correcao.`
+      : `${aluno} enviou "${titulo}".`,
+  }).catch((err) => console.error("[submitContentExercise notify]", err))
+
   return { ok: true }
 }
 

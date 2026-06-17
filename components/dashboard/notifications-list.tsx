@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
-import { Bell, BookOpen, Users, CheckCheck, FileCheck, Loader2 } from "lucide-react"
+import { Bell, BookOpen, Users, CheckCheck, FileCheck, Inbox, Loader2 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -18,6 +18,7 @@ const TYPE_CONFIG: Record<string, { icon: React.ReactNode; color: string }> = {
   new_follower: { icon: <Users className="h-5 w-5" />, color: "bg-blue-50 text-blue-600" },
   activity_graded: { icon: <CheckCheck className="h-5 w-5" />, color: "bg-amber-50 text-amber-600" },
   review_result: { icon: <FileCheck className="h-5 w-5" />, color: "bg-violet-50 text-violet-600" },
+  submission_received: { icon: <Inbox className="h-5 w-5" />, color: "bg-blue-50 text-blue-600" },
 }
 
 const PAGE_SIZE = 20

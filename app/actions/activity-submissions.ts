@@ -16,6 +16,7 @@ import {
   sanitizeOpenText,
   sumOpenScores,
   toPublicExam,
+  ungradedOpenCount,
   validateAnswersForSubmit,
   type StudentExamAnswers,
   validateExamDefinition,
@@ -313,8 +314,8 @@ export async function submitExam(
   const member = await assertStudentMember(classroomId, user.id)
   if (!member) return { ok: false, error: "Voce nao participa desta sala" }
 
-  const act = await queryOne<{ settings: any; status: string; starts_at: string | Date | null; due_at: string | Date | null }>(
-    "select settings, status, starts_at, due_at from public.classroom_activities where id = $1 and classroom_id = $2",
+  const act = await queryOne<{ settings: any; status: string; starts_at: string | Date | null; due_at: string | Date | null; title: string | null }>(
+    "select settings, status, starts_at, due_at, title from public.classroom_activities where id = $1 and classroom_id = $2",
     [activityId, classroomId]
   )
   if (!act) return { ok: false, error: "Atividade nao encontrada" }
@@ -384,6 +385,30 @@ export async function submitExam(
   }
 
   revalidateActivityPaths(classroomId, activityId)
+
+  // Notifica o professor da sala sobre a nova entrega
+  const hasOpen = exam.questions.some((q) => q.type === "open")
+  const info = await queryOne<{ professor_id: string; student_name: string | null }>(
+    `SELECT c.professor_id, p.full_name AS student_name
+       FROM public.classrooms c, public.profiles p
+      WHERE c.id = $1 AND p.id = $2`,
+    [classroomId, user.id]
+  )
+  if (info?.professor_id) {
+    const aluno = info.student_name?.trim() || "Um aluno"
+    const titulo = act.title?.trim() || "atividade"
+    await createNotification({
+      recipientId: info.professor_id,
+      type: "submission_received",
+      actorId: user.id,
+      entityId: activityId,
+      entityType: "activity",
+      message: hasOpen
+        ? `${aluno} enviou "${titulo}" — requer correcao.`
+        : `${aluno} enviou "${titulo}".`,
+    }).catch((err) => console.error("[submitExam notify]", err))
+  }
+
   return { ok: true }
 }
 
@@ -460,6 +485,53 @@ export async function getSubmissionEnviosByActivity(
   for (const row of data ?? []) {
     const aid = row.activity_id as string
     counts[aid] = (counts[aid] ?? 0) + 1
+  }
+  return counts
+}
+
+/**
+ * Para cada atividade, conta quantas entregas (status enviado) ainda têm questões
+ * abertas sem nota — ou seja, pendentes de correção manual do professor.
+ */
+export async function getPendingGradingByActivity(
+  classroomId: string,
+  activityIds: string[]
+): Promise<Record<string, number>> {
+  const access = await getProfessorActionAccess()
+  if (!access.ok || activityIds.length === 0) return {}
+
+  const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
+  if (!ok) return {}
+
+  const acts = await query<{ id: string; settings: unknown }>(
+    "select id, settings from public.classroom_activities where id = any($1::uuid[]) and classroom_id = $2",
+    [activityIds, classroomId]
+  ).catch(() => [])
+
+  const examByActivity = new Map<string, ActivityExamDefinition>()
+  for (const a of acts ?? []) {
+    const exam = parseExamFromSettings(asRecord(a.settings))
+    if (exam && exam.questions.some((q) => q.type === "open")) {
+      examByActivity.set(a.id as string, exam)
+    }
+  }
+
+  const counts: Record<string, number> = {}
+  for (const id of activityIds) counts[id] = 0
+  if (examByActivity.size === 0) return counts
+
+  const subs = await query<{ activity_id: string; open_scores: unknown }>(
+    "select activity_id, open_scores from public.classroom_activity_submissions where activity_id = any($1::uuid[]) and status = 'enviado'",
+    [[...examByActivity.keys()]]
+  ).catch(() => [])
+
+  for (const sub of subs ?? []) {
+    const aid = sub.activity_id as string
+    const exam = examByActivity.get(aid)
+    if (!exam) continue
+    if (ungradedOpenCount(exam, parseOpenScores(sub.open_scores)) > 0) {
+      counts[aid] = (counts[aid] ?? 0) + 1
+    }
   }
   return counts
 }

@@ -197,12 +197,12 @@ export default async function ProfessorFeedPage() {
                     </div>
                     <div className="mt-3 flex gap-2">
                       <Button size="sm" variant="outline" className="flex-1" asChild>
-                        <Link href={`/dashboard/professor/salas/${activity.classroomId}/atividades/${activity.activityId}`}>
+                        <Link href={`/dashboard/professor/salas/${activity.classroomId}?tab=atividades`}>
                           Ver entregas
                         </Link>
                       </Button>
                       <Button size="sm" className="flex-1 bg-[#1D4ED8] hover:bg-[#1E3A8A]" asChild>
-                        <Link href={`/dashboard/professor/salas/${activity.classroomId}/atividades/${activity.activityId}`}>
+                        <Link href={`/dashboard/professor/salas/${activity.classroomId}?tab=corrigir`}>
                           Corrigir
                         </Link>
                       </Button>

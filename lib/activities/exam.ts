@@ -186,6 +186,20 @@ export function sumOpenScores(
   return s
 }
 
+/** Quantidade de questões abertas ainda sem nota atribuída (correção manual pendente). */
+export function ungradedOpenCount(
+  exam: ActivityExamDefinition,
+  openScores: Record<string, number>
+): number {
+  let n = 0
+  for (const q of exam.questions) {
+    if (q.type !== "open") continue
+    const v = openScores[q.id]
+    if (typeof v !== "number" || Number.isNaN(v)) n++
+  }
+  return n
+}
+
 export function sanitizeOpenText(text: string): string {
   const t = text.trim().slice(0, EXAM_OPEN_TEXT_MAX)
   return t.replace(/\u0000/g, "")

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useTransition } from "react"
+import { useEffect, useMemo, useState, useTransition } from "react"
 import {
   Dialog,
   DialogContent,
@@ -10,7 +10,8 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
+import { Badge } from "@/components/ui/badge"
+import { CheckCircle2, Clock, Loader2 } from "lucide-react"
 import {
   gradeOpenAnswers,
   listSubmissionsForActivity,
@@ -19,6 +20,7 @@ import {
 import type { ClassroomActivityRow } from "@/lib/activities/types"
 import {
   parseExamFromSettings,
+  ungradedOpenCount,
   type ActivityExamDefinition,
 } from "@/lib/activities/exam"
 import { toast } from "sonner"
@@ -95,31 +97,68 @@ function GradeBlock({
   }
 
   return (
-    <div className="space-y-3 border-t border-gray-100 pt-3 mt-3">
-      <p className="text-xs font-medium text-gray-700">Dissertativas</p>
-      {opens.map((q) => {
+    <div className="space-y-4 border-t border-gray-100 pt-4 mt-3">
+      {opens.map((q, idx) => {
         const ans = submission.answers[q.id]
-        const text = ans?.type === "open" ? ans.text : "—"
+        const text = ans?.type === "open" ? ans.text : ""
+        const graded =
+          typeof submission.open_scores[q.id] === "number" &&
+          !Number.isNaN(submission.open_scores[q.id])
         return (
-          <div key={q.id} className="rounded-md bg-gray-50 p-3 space-y-2">
-            <p className="text-xs text-gray-600">{q.prompt}</p>
-            <p className="text-sm text-gray-900 whitespace-pre-wrap border border-gray-100 rounded bg-white p-2">
-              {text}
-            </p>
-            <div className="flex flex-wrap items-end gap-2">
-              <div className="grid gap-1">
-                <Label className="text-xs">Nota (max {q.points})</Label>
-                <Input
-                  type="number"
-                  min={0}
-                  max={q.points}
-                  step={0.5}
-                  className="h-9 w-24"
-                  value={scores[q.id] ?? ""}
-                  onChange={(e) =>
-                    setScores((s) => ({ ...s, [q.id]: e.target.value }))
-                  }
-                />
+          <div
+            key={q.id}
+            className="rounded-lg border border-gray-200 overflow-hidden"
+          >
+            <div className="flex items-center justify-between gap-2 bg-gray-50 px-3 py-2 border-b border-gray-100">
+              <span className="text-xs font-semibold text-gray-700">
+                Questao aberta {idx + 1} de {opens.length}
+              </span>
+              {graded ? (
+                <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> Corrigida
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-600">
+                  <Clock className="h-3.5 w-3.5" /> Pendente
+                </span>
+              )}
+            </div>
+            <div className="p-3 space-y-3">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-gray-400 mb-1">
+                  Enunciado
+                </p>
+                <p className="text-sm text-gray-700">{q.prompt}</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-gray-400 mb-1">
+                  Resposta do aluno
+                </p>
+                <div className="min-h-[72px] max-h-64 overflow-y-auto whitespace-pre-wrap rounded-md border border-gray-200 bg-white p-3 text-sm text-gray-900">
+                  {text.trim() ? text : <span className="text-gray-400">— sem resposta —</span>}
+                </div>
+              </div>
+              <div className="flex items-end gap-2">
+                <div className="grid gap-1">
+                  <label className="text-xs font-medium text-gray-600">
+                    Nota
+                  </label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={q.points}
+                    step={0.5}
+                    className="h-10 w-28 text-base"
+                    placeholder="0"
+                    value={scores[q.id] ?? ""}
+                    onChange={(e) =>
+                      setScores((s) => ({ ...s, [q.id]: e.target.value }))
+                    }
+                  />
+                </div>
+                <span className="pb-2 text-sm text-gray-400">
+                  de {q.points} pts
+                </span>
               </div>
             </div>
           </div>
@@ -127,12 +166,12 @@ function GradeBlock({
       })}
       <Button
         type="button"
-        size="sm"
-        className="bg-[#1D4ED8] hover:bg-[#1E3A8A]"
+        className="bg-[#1D4ED8] hover:bg-[#1E3A8A] gap-2"
         disabled={pending}
         onClick={save}
       >
-        Salvar notas dissertativas
+        {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+        Salvar correcao
       </Button>
     </div>
   )
@@ -147,9 +186,7 @@ export function ActivitySubmissionsDialog({
   const [rows, setRows] = useState<SubmissionListItem[]>([])
   const [loading, setLoading] = useState(false)
 
-  const exam = activity
-    ? parseExamFromSettings(activity.settings)
-    : null
+  const exam = activity ? parseExamFromSettings(activity.settings) : null
 
   const load = () => {
     if (!activity) return
@@ -168,9 +205,24 @@ export function ActivitySubmissionsDialog({
 
   useEffect(() => {
     if (open && activity) load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, activity?.id, classroomId])
 
+  // Pendentes de correcao primeiro, depois corrigidos, depois rascunhos
+  const sortedRows = useMemo(() => {
+    if (!exam) return rows
+    const rank = (sub: SubmissionListItem) => {
+      if (sub.status !== "enviado") return 2 // rascunho por ultimo
+      return ungradedOpenCount(exam, sub.open_scores) > 0 ? 0 : 1
+    }
+    return [...rows].sort((a, b) => rank(a) - rank(b))
+  }, [rows, exam])
+
   if (!activity || !exam) return null
+
+  const pendingTotal = rows.filter(
+    (s) => s.status === "enviado" && ungradedOpenCount(exam, s.open_scores) > 0
+  ).length
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -178,51 +230,63 @@ export function ActivitySubmissionsDialog({
         <DialogHeader>
           <DialogTitle className="font-display">Entregas — {activity.title}</DialogTitle>
           <DialogDescription>
-            Provas enviadas e correcao das dissertativas. Objetivas ja entram na
-            nota automaticamente.
+            {pendingTotal > 0
+              ? `${pendingTotal} entrega(s) aguardando correcao. Objetivas ja entram na nota automaticamente.`
+              : "Nenhuma correcao pendente. Objetivas ja entram na nota automaticamente."}
           </DialogDescription>
         </DialogHeader>
         {loading ? (
           <p className="text-sm text-gray-500 py-6">Carregando...</p>
-        ) : rows.length === 0 ? (
+        ) : sortedRows.length === 0 ? (
           <p className="text-sm text-gray-500 py-6">Nenhuma entrega ainda.</p>
         ) : (
           <ul className="space-y-6">
-            {rows.map((sub) => (
-              <li
-                key={sub.id}
-                className="border border-gray-100 rounded-lg p-4 space-y-2"
-              >
-                <div className="flex flex-wrap justify-between gap-2">
-                  <p className="font-medium text-gray-900">
-                    {sub.student_name ?? "Aluno"}
-                  </p>
-                  <div className="text-sm text-gray-600">
-                    {sub.status === "enviado" ? (
-                      <>
-                        Objetiva: {sub.score_mcq}
-                        {sub.score_total != null && (
-                          <span className="ml-2 font-semibold text-gray-900">
-                            Total: {sub.score_total}
-                          </span>
-                        )}
-                      </>
-                    ) : (
-                      <span className="text-amber-700">Rascunho</span>
-                    )}
+            {sortedRows.map((sub) => {
+              const isDraft = sub.status !== "enviado"
+              const pendentes = isDraft ? 0 : ungradedOpenCount(exam, sub.open_scores)
+              return (
+                <li
+                  key={sub.id}
+                  className="border border-gray-100 rounded-lg p-4 space-y-2"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-medium text-gray-900">
+                      {sub.student_name ?? "Aluno"}
+                    </p>
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                      {isDraft ? (
+                        <Badge className="bg-amber-100 text-amber-800">Rascunho</Badge>
+                      ) : pendentes > 0 ? (
+                        <Badge className="bg-red-100 text-red-700">
+                          {pendentes} pendente(s)
+                        </Badge>
+                      ) : (
+                        <Badge className="bg-emerald-100 text-emerald-700">Corrigida</Badge>
+                      )}
+                      {!isDraft && (
+                        <span>
+                          Objetiva: {sub.score_mcq}
+                          {sub.score_total != null && (
+                            <span className="ml-2 font-semibold text-gray-900">
+                              Total: {sub.score_total}
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
-                {sub.status === "enviado" ? (
-                  <GradeBlock
-                    classroomId={classroomId}
-                    activityId={activity.id}
-                    exam={exam}
-                    submission={sub}
-                    onSaved={load}
-                  />
-                ) : null}
-              </li>
-            ))}
+                  {!isDraft ? (
+                    <GradeBlock
+                      classroomId={classroomId}
+                      activityId={activity.id}
+                      exam={exam}
+                      submission={sub}
+                      onSaved={load}
+                    />
+                  ) : null}
+                </li>
+              )
+            })}
           </ul>
         )}
       </DialogContent>

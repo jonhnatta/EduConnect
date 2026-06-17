@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -15,6 +15,7 @@ import {
   Plus,
   Trash2,
   Pencil,
+  ClipboardCheck,
 } from "lucide-react"
 import { format } from "date-fns"
 import { ptBR } from "date-fns/locale"
@@ -47,6 +48,7 @@ type Member = {
 const TABS = [
   { id: "alunos", label: "Alunos", icon: Users },
   { id: "atividades", label: "Atividades", icon: FileText },
+  { id: "corrigir", label: "Para corrigir", icon: ClipboardCheck },
   { id: "materiais", label: "Material Extra", icon: FolderOpen },
   { id: "mural", label: "Mural", icon: MessageSquare },
   { id: "desempenho", label: "Desempenho", icon: BarChart },
@@ -59,6 +61,8 @@ type Props = {
   materials: ClassroomMaterialRow[]
   /** Contagem de provas enviadas (status enviado) por activity id */
   submissionEnvios: Record<string, number>
+  /** Entregas pendentes de correção manual (questões abertas sem nota) por activity id */
+  pendingGrading: Record<string, number>
   performance: ClassroomPerformanceForProfessor
 }
 
@@ -77,10 +81,16 @@ export function ProfessorSalaDetail({
   activities,
   materials,
   submissionEnvios,
+  pendingGrading,
   performance,
 }: Props) {
   const router = useRouter()
-  const [activeTab, setActiveTab] = useState("alunos")
+  const searchParams = useSearchParams()
+  const initialTab = searchParams.get("tab")
+  const [activeTab, setActiveTab] = useState(
+    initialTab && TABS.some((t) => t.id === initialTab) ? initialTab : "alunos"
+  )
+  const totalPending = Object.values(pendingGrading).reduce((a, b) => a + b, 0)
   const [removing, setRemoving] = useState<string | null>(null)
   const [activityDialogOpen, setActivityDialogOpen] = useState(false)
   const [editingActivity, setEditingActivity] =
@@ -208,6 +218,11 @@ export function ProfessorSalaDetail({
                 className={`h-4 w-4 ${isActive ? "text-[#1D4ED8]" : "text-gray-400"}`}
               />
               {tab.label}
+              {tab.id === "corrigir" && totalPending > 0 && (
+                <span className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-xs font-semibold text-white">
+                  {totalPending}
+                </span>
+              )}
             </button>
           )
         })}
@@ -407,6 +422,75 @@ export function ProfessorSalaDetail({
                   )
                 })
               )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === "corrigir" && (
+          <div>
+            <div className="p-4 sm:p-6 border-b border-gray-100">
+              <h2 className="font-display font-semibold text-lg text-gray-900">
+                Avaliacoes para corrigir
+              </h2>
+              <p className="text-sm text-gray-500">
+                Entregas com questoes abertas aguardando sua correcao manual. As objetivas ja sao corrigidas automaticamente.
+              </p>
+            </div>
+            <div className="p-4 sm:p-6 grid gap-4">
+              {(() => {
+                const toGrade = activities.filter((a) => (pendingGrading[a.id] ?? 0) > 0)
+                if (toGrade.length === 0) {
+                  return (
+                    <div className="text-center py-10">
+                      <ClipboardCheck className="h-12 w-12 text-gray-200 mx-auto mb-3" />
+                      <p className="font-medium text-gray-900">Tudo em dia!</p>
+                      <p className="mt-1 text-sm text-gray-500">
+                        Nenhuma entrega aguardando correcao manual no momento.
+                      </p>
+                    </div>
+                  )
+                }
+                return toGrade.map((ativ) => {
+                  const pendentes = pendingGrading[ativ.id] ?? 0
+                  return (
+                    <div
+                      key={ativ.id}
+                      className="border border-gray-100 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2 mb-1">
+                          <span className="text-xs font-semibold px-2 py-0.5 rounded bg-blue-50 text-[#1D4ED8] uppercase tracking-wider">
+                            {ACTIVITY_TYPE_LABELS[ativ.type]}
+                          </span>
+                          <Badge className="bg-red-100 text-red-700">
+                            {pendentes} para corrigir
+                          </Badge>
+                        </div>
+                        <h3 className="font-medium text-gray-900 text-lg">{ativ.title}</h3>
+                        <p className="text-sm text-gray-500 mt-1">
+                          Prazo: {formatActivityWhen(ativ.due_at)}
+                          {ativ.max_score != null && (
+                            <span className="ml-2">· Nota max. {ativ.max_score}</span>
+                          )}
+                        </p>
+                      </div>
+                      <div className="shrink-0">
+                        <Button
+                          type="button"
+                          className="bg-[#1D4ED8] hover:bg-[#1E3A8A] gap-2"
+                          onClick={() => {
+                            setSubmissionsActivity(ativ)
+                            setSubmissionsOpen(true)
+                          }}
+                        >
+                          <ClipboardCheck className="h-4 w-4" />
+                          Corrigir agora
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                })
+              })()}
             </div>
           </div>
         )}
