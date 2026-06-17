@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache"
 import { requireAuthedUser } from "@/lib/auth/user"
 import { query, queryOne } from "@/lib/db/query"
+import { createNotification } from "@/lib/notifications/event"
 import {
   type ActivityExamDefinition,
   type ActivityExamPublic,
@@ -464,8 +465,8 @@ export async function gradeContentExerciseOpenAnswers(
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return { ok: false, error: "Nao autenticado" }
 
-  const ci = await queryOne<{ settings: Record<string, unknown>; author_id: string; type: string }>(
-    "select settings, author_id, type from public.content_items where id = $1",
+  const ci = await queryOne<{ settings: Record<string, unknown>; author_id: string; type: string; title: string | null }>(
+    "select settings, author_id, type, title from public.content_items where id = $1",
     [contentItemId]
   )
 
@@ -523,6 +524,16 @@ export async function gradeContentExerciseOpenAnswers(
     return { ok: false, error: e?.message ?? "Erro" }
   }
   revalidateContentExercisePaths(contentItemId)
+  if (sub.student_id) {
+    await createNotification({
+      recipientId: sub.student_id,
+      type: "activity_graded",
+      actorId: user.id,
+      entityId: contentItemId,
+      entityType: "content_item",
+      message: `Seu exercicio "${ci.title?.trim() || "exercicio"}" foi corrigido.`,
+    }).catch((err) => console.error("[gradeContentExerciseOpenAnswers notify]", err))
+  }
   return { ok: true }
 }
 

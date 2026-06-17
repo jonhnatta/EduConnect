@@ -7,6 +7,7 @@ import {
   getApprovedProfessorActionAccess,
 } from "@/lib/auth/guards"
 import { query, queryOne } from "@/lib/db/query"
+import { createNotification } from "@/lib/notifications/event"
 import {
   type ActivityExamDefinition,
   type ActivityExamPublic,
@@ -501,8 +502,8 @@ export async function gradeOpenAnswers(
   const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
   if (!ok) return { ok: false, error: "Sala nao encontrada" }
 
-  const act = await queryOne<{ settings: any }>(
-    "select settings from public.classroom_activities where id = $1 and classroom_id = $2",
+  const act = await queryOne<{ settings: any; title: string | null }>(
+    "select settings, title from public.classroom_activities where id = $1 and classroom_id = $2",
     [activityId, classroomId]
   )
   if (!act) return { ok: false, error: "Atividade nao encontrada" }
@@ -550,6 +551,14 @@ export async function gradeOpenAnswers(
   const sid = sub.student_id as string | undefined
   if (sid) {
     revalidatePath(`/dashboard/professor/alunos/${sid}`)
+    await createNotification({
+      recipientId: sid,
+      type: "activity_graded",
+      actorId: access.userId,
+      entityId: activityId,
+      entityType: "activity",
+      message: `Sua atividade "${act.title?.trim() || "atividade"}" foi corrigida.`,
+    }).catch((err) => console.error("[gradeOpenAnswers notify]", err))
   }
   return { ok: true }
 }

@@ -16,6 +16,10 @@ export async function changePassword(
   if (!newPassword || newPassword.length < 8) {
     return { ok: false, error: "A nova senha deve ter ao menos 8 caracteres" }
   }
+  // bcrypt trunca em 72 bytes; rejeita entradas absurdas (anti-DoS)
+  if (newPassword.length > 72) {
+    return { ok: false, error: "A nova senha deve ter no maximo 72 caracteres" }
+  }
 
   const row = await queryOne<{ password_hash: string | null }>(
     "SELECT password_hash FROM public.users WHERE id = $1",
@@ -26,11 +30,36 @@ export async function changePassword(
     return { ok: false, error: "Esta conta usa login social e nao possui senha" }
   }
 
+  // Rate limit: máx. 5 tentativas por janela de 15 min (anti brute-force da senha atual)
+  const limitRow = await queryOne<{ attempt_count: number }>(
+    `insert into public.password_change_limits (user_id, window_started_at, attempt_count, updated_at)
+     values ($1, timezone('utc'::text, now()), 1, timezone('utc'::text, now()))
+     on conflict (user_id) do update set
+       updated_at = timezone('utc'::text, now()),
+       window_started_at = case
+         when public.password_change_limits.window_started_at <= timezone('utc'::text, now()) - interval '15 minutes'
+           then timezone('utc'::text, now())
+         else public.password_change_limits.window_started_at
+       end,
+       attempt_count = case
+         when public.password_change_limits.window_started_at <= timezone('utc'::text, now()) - interval '15 minutes'
+           then 1
+         else public.password_change_limits.attempt_count + 1
+       end
+     returning attempt_count`,
+    [user.id]
+  )
+  if ((limitRow?.attempt_count ?? 1) > 5) {
+    return { ok: false, error: "Muitas tentativas. Aguarde alguns minutos e tente novamente." }
+  }
+
   const valid = await bcrypt.compare(currentPassword, row.password_hash)
   if (!valid) return { ok: false, error: "Senha atual incorreta" }
 
   const hash = await bcrypt.hash(newPassword, 12)
   await query("UPDATE public.users SET password_hash = $1 WHERE id = $2", [hash, user.id])
+  // Sucesso: zera o contador de tentativas
+  await query("DELETE FROM public.password_change_limits WHERE user_id = $1", [user.id]).catch(() => {})
 
   return { ok: true }
 }
