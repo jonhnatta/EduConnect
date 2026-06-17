@@ -35,11 +35,12 @@ export async function updateMySettings(input: {
   const user = await getAuthedUser()
   if (!user) return { ok: false, error: "Nao autenticado" }
 
-  // Sanitiza as preferências para um mapa simples de booleanos.
+  // Sanitiza as preferências: apenas chaves alfanuméricas simples e valores booleanos.
+  const VALID_PREF_KEY = /^[a-zA-Z][a-zA-Z0-9_-]{0,59}$/
   const prefs: NotificationPrefs = {}
   if (input.notificationPrefs && typeof input.notificationPrefs === "object") {
     for (const [k, v] of Object.entries(input.notificationPrefs)) {
-      if (typeof k === "string" && k.length <= 60) prefs[k] = Boolean(v)
+      if (typeof k === "string" && VALID_PREF_KEY.test(k)) prefs[k] = Boolean(v)
     }
   }
 
@@ -57,7 +58,8 @@ export async function updateMySettings(input: {
       [user.id, visibility, JSON.stringify(prefs)]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao salvar" }
+    console.error("[updateMySettings]", e)
+    return { ok: false, error: "Erro ao salvar configuracoes" }
   }
   return { ok: true }
 }

@@ -6,6 +6,7 @@ type ProfileRow = {
   full_name: string | null
   profile_visibility: "public" | "private" | null
   notification_prefs: Record<string, boolean> | null
+  has_password: boolean
 }
 
 export default async function AlunoConfiguracoesPage() {
@@ -14,7 +15,12 @@ export default async function AlunoConfiguracoesPage() {
 
   const profile = userId
     ? await queryOne<ProfileRow>(
-        "select full_name, coalesce(profile_visibility, 'private') as profile_visibility, notification_prefs from public.profiles where id = $1",
+        `select full_name,
+                coalesce(profile_visibility, 'private') as profile_visibility,
+                notification_prefs,
+                (password_hash IS NOT NULL) as has_password
+           from public.profiles
+          where id = $1`,
         [userId]
       )
     : null
@@ -25,6 +31,7 @@ export default async function AlunoConfiguracoesPage() {
       email={session?.user?.email || "sem-email"}
       profileVisibility={profile?.profile_visibility === "public" ? "public" : "private"}
       notificationPrefs={profile?.notification_prefs ?? {}}
+      hasPassword={profile?.has_password ?? false}
     />
   )
 }

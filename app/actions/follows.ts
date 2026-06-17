@@ -80,21 +80,24 @@ export async function toggleFollow(
       [teacherId, studentId]
     )
   } else {
-    await query(
-      "INSERT INTO public.teacher_followers (teacher_id, student_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    // RETURNING confirma inserção real (vs. conflito em duplo-click)
+    const inserted = await queryOne<{ student_id: string }>(
+      "INSERT INTO public.teacher_followers (teacher_id, student_id) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING student_id",
       [teacherId, studentId]
     )
-    const studentRow = await queryOne<{ full_name: string | null }>(
-      "SELECT full_name FROM public.profiles WHERE id = $1",
-      [studentId]
-    )
-    const name = studentRow?.full_name?.trim() || "Um aluno"
-    await createNotification({
-      recipientId: teacherId,
-      type: "new_follower",
-      actorId: studentId,
-      message: `${name} começou a te seguir`,
-    }).catch(() => {})
+    if (inserted) {
+      const studentRow = await queryOne<{ full_name: string | null }>(
+        "SELECT full_name FROM public.profiles WHERE id = $1",
+        [studentId]
+      )
+      const name = studentRow?.full_name?.trim() || "Um aluno"
+      await createNotification({
+        recipientId: teacherId,
+        type: "new_follower",
+        actorId: studentId,
+        message: `${name} começou a te seguir`,
+      }).catch(err => console.error("[follows notify]", err))
+    }
   }
 
   const updated = await queryOne<{ followers_count: string }>(
@@ -121,12 +124,19 @@ export async function getMyFollowers(): Promise<FollowerItem[]> {
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return []
 
+  const profile = await queryOne<{ user_type: string | null }>(
+    "SELECT user_type FROM public.profiles WHERE id = $1",
+    [user.id]
+  )
+  if (profile?.user_type !== "professor") return []
+
   const rows = await query<FollowerItem>(
     `SELECT p.id, p.full_name, p.avatar_url, p.slug, tf.created_at AS followed_at
        FROM public.teacher_followers tf
        JOIN public.profiles p ON p.id = tf.student_id
       WHERE tf.teacher_id = $1
-      ORDER BY tf.created_at DESC`,
+      ORDER BY tf.created_at DESC
+      LIMIT 500`,
     [user.id]
   )
   return rows ?? []
@@ -144,12 +154,19 @@ export async function getMyFollowing(): Promise<FollowingItem[]> {
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return []
 
+  const profile = await queryOne<{ user_type: string | null }>(
+    "SELECT user_type FROM public.profiles WHERE id = $1",
+    [user.id]
+  )
+  if (profile?.user_type !== "aluno") return []
+
   const rows = await query<FollowingItem>(
     `SELECT p.id, p.full_name, p.avatar_url, p.slug, tf.created_at AS followed_at
        FROM public.teacher_followers tf
        JOIN public.profiles p ON p.id = tf.teacher_id
       WHERE tf.student_id = $1
-      ORDER BY tf.created_at DESC`,
+      ORDER BY tf.created_at DESC
+      LIMIT 500`,
     [user.id]
   )
   return rows ?? []

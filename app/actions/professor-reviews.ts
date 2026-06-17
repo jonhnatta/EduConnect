@@ -29,16 +29,20 @@ export async function getProfessorReviews(teacherId: string): Promise<ProfessorR
     "select avg(rating)::numeric(10,2) as avg, count(*)::int as cnt from public.professor_reviews where teacher_id = $1",
     [teacherId]
   )
-  const reviews = await query<ProfessorReview>(
-    `select r.id, r.rating, r.comment, r.created_at,
-            p.full_name as student_name, p.avatar_url as student_avatar
-       from public.professor_reviews r
-       join public.profiles p on p.id = r.student_id
-      where r.teacher_id = $1
-      order by r.created_at desc
-      limit 50`,
-    [teacherId]
-  )
+
+  // Reviews com PII só para usuários autenticados (LGPD: não expor nomes/avatares publicamente)
+  const reviews: ProfessorReview[] = user
+    ? (await query<ProfessorReview>(
+        `select r.id, r.rating, r.comment, r.created_at,
+                p.full_name as student_name, p.avatar_url as student_avatar
+           from public.professor_reviews r
+           join public.profiles p on p.id = r.student_id
+          where r.teacher_id = $1
+          order by r.created_at desc
+          limit 50`,
+        [teacherId]
+      )) ?? []
+    : []
 
   let myReview: { rating: number; comment: string | null } | null = null
   let canReview = false
@@ -86,8 +90,8 @@ export async function submitProfessorReview(
   )
   if (me?.user_type !== "aluno") return { ok: false, error: "Apenas alunos podem avaliar professores" }
 
-  const teacher = await queryOne<{ user_type: string }>(
-    "select user_type from public.profiles where id = $1",
+  const teacher = await queryOne<{ user_type: string; slug: string | null }>(
+    "select user_type, slug from public.profiles where id = $1",
     [teacherId]
   )
   if (teacher?.user_type !== "professor") return { ok: false, error: "Professor nao encontrado" }
@@ -101,8 +105,10 @@ export async function submitProfessorReview(
       [teacherId, user.id, r, cleanComment]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao salvar avaliacao" }
+    console.error("[submitProfessorReview]", e)
+    return { ok: false, error: "Erro ao salvar avaliacao" }
   }
 
+  if (teacher.slug) revalidatePath(`/professor/${teacher.slug}`)
   return { ok: true }
 }

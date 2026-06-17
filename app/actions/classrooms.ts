@@ -227,6 +227,7 @@ export type PublicClassroomItem = {
 }
 
 export async function listPublicClassrooms(limit = 30): Promise<PublicClassroomItem[]> {
+  const safeLimit = Math.min(Math.max(1, Math.floor(Number(limit)) || 30), 100)
   const rows = await query<PublicClassroomItem>(
     `SELECT c.id, c.name, c.subject, c.education_level, c.description,
             p.full_name AS professor_name, p.slug AS professor_slug,
@@ -238,7 +239,7 @@ export async function listPublicClassrooms(limit = 30): Promise<PublicClassroomI
       GROUP BY c.id, p.full_name, p.slug
       ORDER BY c.created_at DESC
       LIMIT $1`,
-    [limit]
+    [safeLimit]
   )
   return rows ?? []
 }

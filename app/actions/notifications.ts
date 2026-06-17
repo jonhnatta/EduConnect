@@ -37,7 +37,7 @@ export async function getMyNotifications(limit = 50): Promise<NotificationSummar
     [user.id, limit]
   )
 
-  const countRow = await queryOne<{ cnt: string }>(
+  const countRow = await queryOne<{ cnt: number }>(
     "SELECT COUNT(*)::int AS cnt FROM public.notifications WHERE recipient_id = $1 AND read_at IS NULL",
     [user.id]
   )
@@ -52,7 +52,7 @@ export async function getMyUnreadCount(): Promise<number> {
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return 0
 
-  const row = await queryOne<{ cnt: string }>(
+  const row = await queryOne<{ cnt: number }>(
     "SELECT COUNT(*)::int AS cnt FROM public.notifications WHERE recipient_id = $1 AND read_at IS NULL",
     [user.id]
   )
@@ -71,6 +71,8 @@ export async function markNotificationRead(
 
   revalidatePath("/dashboard/aluno/notificacoes")
   revalidatePath("/dashboard/professor/notificacoes")
+  revalidatePath("/dashboard/aluno", "layout")
+  revalidatePath("/dashboard/professor", "layout")
   return { ok: true }
 }
 
@@ -84,6 +86,8 @@ export async function markAllNotificationsRead(): Promise<{ ok: boolean }> {
 
   revalidatePath("/dashboard/aluno/notificacoes")
   revalidatePath("/dashboard/professor/notificacoes")
+  revalidatePath("/dashboard/aluno", "layout")
+  revalidatePath("/dashboard/professor", "layout")
   return { ok: true }
 }
 

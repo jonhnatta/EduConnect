@@ -1,6 +1,6 @@
 import Link from "next/link"
 import { Users, ChevronLeft } from "lucide-react"
-import { requireApprovedProfessorAccess } from "@/lib/auth/guards"
+import { requireProfessorAccess } from "@/lib/auth/guards"
 import { getMyFollowers } from "@/app/actions/follows"
 
 export const dynamic = "force-dynamic"
@@ -16,7 +16,7 @@ function formatDate(iso: string) {
 }
 
 export default async function ProfessorSeguidoresPage() {
-  await requireApprovedProfessorAccess()
+  await requireProfessorAccess()
   const followers = await getMyFollowers()
 
   return (

@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { BookOpen, Users, GraduationCap } from "lucide-react"
+import { BookOpen, Users, GraduationCap, ExternalLink } from "lucide-react"
 import { requireAlunoAccess } from "@/lib/auth/guards"
 import { listPublicClassrooms } from "@/app/actions/classrooms"
 import { JoinByCodeForm } from "@/app/dashboard/aluno/salas/join-by-code-form"
@@ -55,7 +55,13 @@ export default async function ExplorarSalasPage() {
                 <div className="flex items-center justify-between text-xs text-gray-400 pt-2 border-t border-gray-50">
                   <span className="flex items-center gap-1">
                     <GraduationCap className="h-3.5 w-3.5" />
-                    {c.professor_name}
+                    {c.professor_slug ? (
+                      <Link href={`/professor/${c.professor_slug}`} className="hover:underline">
+                        {c.professor_name}
+                      </Link>
+                    ) : (
+                      c.professor_name
+                    )}
                   </span>
                   <span className="flex items-center gap-1">
                     <Users className="h-3.5 w-3.5" />

@@ -18,6 +18,7 @@ type AlunoSettingsClientProps = {
   email: string
   profileVisibility: "public" | "private"
   notificationPrefs?: NotificationPrefs
+  hasPassword?: boolean
 }
 
 function SettingRow({
@@ -54,6 +55,7 @@ export function AlunoSettingsClient({
   email,
   profileVisibility,
   notificationPrefs = {},
+  hasPassword = false,
 }: AlunoSettingsClientProps) {
   const pref = (key: string, fallback = true) =>
     typeof notificationPrefs[key] === "boolean" ? notificationPrefs[key] : fallback
@@ -290,10 +292,13 @@ export function AlunoSettingsClient({
                 </Button>
               ) : (
                 <div className="space-y-3">
-                  <p className="text-sm text-red-700 font-medium">Esta acao nao pode ser desfeita. Confirme com sua senha:</p>
+                  <p className="text-sm text-red-700 font-medium">
+                    Esta acao nao pode ser desfeita.{" "}
+                    {hasPassword ? "Confirme com sua senha:" : "Digite seu e-mail para confirmar:"}
+                  </p>
                   <Input
-                    type="password"
-                    placeholder="Sua senha"
+                    type={hasPassword ? "password" : "email"}
+                    placeholder={hasPassword ? "Sua senha" : email}
                     value={deletePwd}
                     onChange={(e) => setDeletePwd(e.target.value)}
                   />

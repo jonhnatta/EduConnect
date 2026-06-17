@@ -7,11 +7,12 @@ export type ProfessorVerificationStatus = "none" | "pending" | "approved" | "rej
 export type ProfileAccessRow = QueryResultRow & {
   user_type: UserType | null
   professor_verification_status: ProfessorVerificationStatus | null
+  deleted_at: string | null
 }
 
 export async function getProfileAccess(userId: string) {
   return queryOne<ProfileAccessRow>(
-    "select user_type, professor_verification_status from public.profiles where id = $1",
+    "select user_type, professor_verification_status, deleted_at from public.profiles where id = $1",
     [userId],
   )
 }

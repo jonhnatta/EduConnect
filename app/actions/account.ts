@@ -36,21 +36,30 @@ export async function changePassword(
 }
 
 export async function deleteAccount(
-  password: string
+  confirmation: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return { ok: false, error: "Nao autenticado" }
 
-  const row = await queryOne<{ password_hash: string | null; deleted_at: string | null }>(
-    "SELECT password_hash, deleted_at FROM public.profiles WHERE id = $1",
+  const row = await queryOne<{ password_hash: string | null; deleted_at: string | null; email: string }>(
+    `SELECT pr.password_hash, pr.deleted_at, u.email
+       FROM public.profiles pr
+       JOIN public.users u ON u.id = pr.id
+      WHERE pr.id = $1`,
     [user.id]
   )
 
   if (row?.deleted_at) return { ok: false, error: "Conta ja marcada para exclusao" }
 
   if (row?.password_hash) {
-    const valid = await bcrypt.compare(password, row.password_hash)
+    // Conta com senha: verificar bcrypt
+    const valid = await bcrypt.compare(confirmation, row.password_hash)
     if (!valid) return { ok: false, error: "Senha incorreta" }
+  } else {
+    // Conta OAuth (sem senha): exigir confirmação por e-mail
+    if (!row?.email || confirmation.toLowerCase().trim() !== row.email.toLowerCase().trim()) {
+      return { ok: false, error: "E-mail incorreto. Digite seu e-mail para confirmar." }
+    }
   }
 
   await query(
