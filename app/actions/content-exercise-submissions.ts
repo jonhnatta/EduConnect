@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache"
 import { requireAuthedUser } from "@/lib/auth/user"
 import { query, queryOne } from "@/lib/db/query"
+import { createNotification } from "@/lib/notifications/event"
 import {
   type ActivityExamDefinition,
   type ActivityExamPublic,
@@ -92,7 +93,7 @@ function mapRow(data: Record<string, unknown>): ContentExerciseSubmissionRow {
 function revalidateContentExercisePaths(contentItemId: string) {
   revalidatePath(`/conteudo/${contentItemId}`)
   revalidatePath("/dashboard/aluno")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
 }
 
 /** Prova sem gabarito (aluno com acesso ao conteudo). */
@@ -174,7 +175,7 @@ export async function getMyContentExerciseSubmission(
     if (!data) return { submission: null, error: null }
     return { submission: mapRow(data), error: null }
   } catch (e: any) {
-    return { submission: null, error: e?.message ?? "Erro" }
+    return { submission: null, error: "Erro" }
   }
 }
 
@@ -252,7 +253,7 @@ export async function saveContentExerciseDraft(
         [existing.id, user.id, JSON.stringify(sanitized)]
       )
     } catch (e: any) {
-      return { ok: false, error: e?.message ?? "Erro" }
+      return { ok: false, error: "Erro" }
     }
   } else {
     try {
@@ -266,7 +267,7 @@ export async function saveContentExerciseDraft(
         [contentItemId, user.id, JSON.stringify(sanitized)]
       )
     } catch (e: any) {
-      return { ok: false, error: e?.message ?? "Erro" }
+      return { ok: false, error: "Erro" }
     }
   }
 
@@ -286,10 +287,11 @@ export async function submitContentExercise(
     status: string
     type: string
     author_id: string
+    title: string | null
   }
 
   const item = await queryOne<ItemRow>(
-    "select settings, status, type, author_id from public.content_items where id = $1",
+    "select settings, status, type, author_id, title from public.content_items where id = $1",
     [contentItemId]
   )
 
@@ -367,7 +369,7 @@ export async function submitContentExercise(
         ]
       )
     } catch (e: any) {
-      return { ok: false, error: e?.message ?? "Erro" }
+      return { ok: false, error: "Erro" }
     }
   } else {
     try {
@@ -395,11 +397,31 @@ export async function submitContentExercise(
         ]
       )
     } catch (e: any) {
-      return { ok: false, error: e?.message ?? "Erro" }
+      return { ok: false, error: "Erro" }
     }
   }
 
   revalidateContentExercisePaths(contentItemId)
+
+  // Notifica o autor (professor) sobre a nova entrega
+  const hasOpen = exam.questions.some((q) => q.type === "open")
+  const studentRow = await queryOne<{ full_name: string | null }>(
+    "select full_name from public.profiles where id = $1",
+    [user.id]
+  )
+  const aluno = studentRow?.full_name?.trim() || "Um aluno"
+  const titulo = item.title?.trim() || "atividade"
+  await createNotification({
+    recipientId: item.author_id,
+    type: "submission_received",
+    actorId: user.id,
+    entityId: contentItemId,
+    entityType: "content_item",
+    message: hasOpen
+      ? `${aluno} enviou "${titulo}" — requer correcao.`
+      : `${aluno} enviou "${titulo}".`,
+  }).catch((err) => console.error("[submitContentExercise notify]", err))
+
   return { ok: true }
 }
 
@@ -430,7 +452,7 @@ export async function listContentExerciseSubmissionsForAuthor(
         [contentItemId]
       )) ?? []
   } catch (e: any) {
-    return { rows: [], error: e?.message ?? "Erro" }
+    return { rows: [], error: "Erro" }
   }
 
   const studentIds = [...new Set(subs.map((s) => s.student_id as string))]
@@ -464,8 +486,8 @@ export async function gradeContentExerciseOpenAnswers(
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return { ok: false, error: "Nao autenticado" }
 
-  const ci = await queryOne<{ settings: Record<string, unknown>; author_id: string; type: string }>(
-    "select settings, author_id, type from public.content_items where id = $1",
+  const ci = await queryOne<{ settings: Record<string, unknown>; author_id: string; type: string; title: string | null }>(
+    "select settings, author_id, type, title from public.content_items where id = $1",
     [contentItemId]
   )
 
@@ -520,9 +542,19 @@ export async function gradeContentExerciseOpenAnswers(
       [submissionId, JSON.stringify(nextOpen), scoreTotal]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro" }
+    return { ok: false, error: "Erro" }
   }
   revalidateContentExercisePaths(contentItemId)
+  if (sub.student_id) {
+    await createNotification({
+      recipientId: sub.student_id,
+      type: "activity_graded",
+      actorId: user.id,
+      entityId: contentItemId,
+      entityType: "content_item",
+      message: `Seu exercicio "${ci.title?.trim() || "exercicio"}" foi corrigido.`,
+    }).catch((err) => console.error("[gradeContentExerciseOpenAnswers notify]", err))
+  }
   return { ok: true }
 }
 

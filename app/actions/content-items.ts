@@ -8,6 +8,7 @@ import { getAuthedUser, requireAuthedUser } from "@/lib/auth/user"
 import { getApprovedProfessorActionAccess } from "@/lib/auth/guards"
 import { query, queryOne } from "@/lib/db/query"
 import { runArticleReview } from "@/lib/content/review-agent"
+import { notifyFollowersNewContent } from "@/lib/notifications/event"
 import {
   effectiveContentType,
   safeUploadFilename,
@@ -28,8 +29,15 @@ import {
   type ContentItemStatus,
   type ContentItemType,
   type ContentVisibility,
+  type ContentAudience,
   type ShareMethod,
 } from "@/lib/content/types"
+
+/** Audiência efetiva: só vale para conteúdo público; senão 'all'. */
+function effectiveAudience(visibility: ContentVisibility, audience?: ContentAudience): ContentAudience {
+  if (visibility !== "public") return "all"
+  return audience === "students" || audience === "teachers" ? audience : "all"
+}
 
 const TRIX_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 /** Capa em video (MP4/WebM/MOV) */
@@ -434,7 +442,7 @@ export async function saveExerciseDraft(
     return { ok: false, error: e?.message ?? "Erro ao salvar rascunho" }
   }
   revalidatePath("/dashboard/professor/criar")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -503,7 +511,7 @@ export async function saveAssessmentDraft(
     return { ok: false, error: e?.message ?? "Erro ao salvar rascunho" }
   }
   revalidatePath("/dashboard/professor/criar")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -567,7 +575,7 @@ export async function saveSimuladoDraft(
     return { ok: false, error: e?.message ?? "Erro ao salvar rascunho" }
   }
   revalidatePath("/dashboard/professor/criar")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -577,6 +585,8 @@ export type PublishExerciseInput = {
   title: string
   bodyHtml: string
   visibility: ContentVisibility
+  /** Audiência (só relevante quando visibility === 'public'). */
+  audience?: ContentAudience
   classroomIds?: string[]
   settings: ContentItemSettings
 }
@@ -634,9 +644,9 @@ export async function publishExercise(
   try {
     await query(
       `update public.content_items
-       set title = $1, body_html = $2, status = 'published', visibility = $3, published_at = $4, settings = $5::jsonb
+       set title = $1, body_html = $2, status = 'published', visibility = $3, published_at = $4, settings = $5::jsonb, audience = $8
        where id = $6 and author_id = $7 and type = 'exercise'`,
-      [title, bodyHtml || null, input.visibility, publishedAt, JSON.stringify(settings), input.id, p.user.id]
+      [title, bodyHtml || null, input.visibility, publishedAt, JSON.stringify(settings), input.id, p.user.id, effectiveAudience(input.visibility, input.audience)]
     )
     await replaceContentItemClassrooms(input.id, input.visibility === "classrooms" ? input.classroomIds : [])
   } catch (e: any) {
@@ -645,7 +655,7 @@ export async function publishExercise(
 
   revalidatePath("/dashboard/aluno")
   revalidatePath("/dashboard/professor")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -733,9 +743,9 @@ export async function publishAssessment(
   try {
     await query(
       `update public.content_items
-       set title = $1, body_html = $2, status = 'published', visibility = $3, published_at = $4, settings = $5::jsonb
+       set title = $1, body_html = $2, status = 'published', visibility = $3, published_at = $4, settings = $5::jsonb, audience = $8
        where id = $6 and author_id = $7 and type = 'assessment'`,
-      [title, bodyHtml || null, input.visibility, publishedAt, JSON.stringify(settings), input.id, p.user.id]
+      [title, bodyHtml || null, input.visibility, publishedAt, JSON.stringify(settings), input.id, p.user.id, effectiveAudience(input.visibility, input.audience)]
     )
     await replaceContentItemClassrooms(input.id, input.visibility === "classrooms" ? input.classroomIds : [])
   } catch (e: any) {
@@ -744,7 +754,7 @@ export async function publishAssessment(
 
   revalidatePath("/dashboard/aluno")
   revalidatePath("/dashboard/professor")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -829,9 +839,9 @@ export async function publishSimulado(
   try {
     await query(
       `update public.content_items
-       set title = $1, body_html = $2, status = 'published', visibility = $3, published_at = $4, settings = $5::jsonb
+       set title = $1, body_html = $2, status = 'published', visibility = $3, published_at = $4, settings = $5::jsonb, audience = $8
        where id = $6 and author_id = $7 and type = 'simulado'`,
-      [title, bodyHtml || null, input.visibility, publishedAt, JSON.stringify(settings), input.id, p.user.id]
+      [title, bodyHtml || null, input.visibility, publishedAt, JSON.stringify(settings), input.id, p.user.id, effectiveAudience(input.visibility, input.audience)]
     )
     await replaceContentItemClassrooms(input.id, input.visibility === "classrooms" ? input.classroomIds : [])
   } catch (e: any) {
@@ -840,7 +850,7 @@ export async function publishSimulado(
 
   revalidatePath("/dashboard/aluno")
   revalidatePath("/dashboard/professor")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -874,7 +884,7 @@ export async function closeContentAssessment(
     return { ok: false, error: e?.message ?? "Erro ao encerrar avaliacao" }
   }
   revalidatePath("/dashboard/professor/criar")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${contentItemId}`)
   return { ok: true }
 }
@@ -884,6 +894,8 @@ export type PublishArticleInput = {
   title: string
   bodyHtml: string
   visibility: ContentVisibility
+  /** Audiência (só relevante quando visibility === 'public'). */
+  audience?: ContentAudience
   /** Obrigatorio se visibility === 'classrooms' */
   classroomIds?: string[]
   settings: ContentItemSettings
@@ -922,9 +934,9 @@ export async function publishArticle(
   try {
     await query(
       `update public.content_items
-       set title = $1, body_html = $2, status = 'verificando', visibility = $3, published_at = null, settings = $4::jsonb
+       set title = $1, body_html = $2, status = 'verificando', visibility = $3, published_at = null, settings = $4::jsonb, audience = $7
        where id = $5 and author_id = $6 and type = 'article'`,
-      [title, bodyHtml || null, input.visibility, JSON.stringify(settings), input.id, p.user.id]
+      [title, bodyHtml || null, input.visibility, JSON.stringify(settings), input.id, p.user.id, effectiveAudience(input.visibility, input.audience)]
     )
     await replaceContentItemClassrooms(input.id, input.visibility === "classrooms" ? input.classroomIds : [])
   } catch (e: any) {
@@ -942,7 +954,7 @@ export async function publishArticle(
   })
 
   revalidatePath("/dashboard/professor")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -1023,7 +1035,7 @@ export async function saveDicaDraft(
     return { ok: false, error: e?.message ?? "Erro ao salvar dica" }
   }
   revalidatePath("/dashboard/professor/criar")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -1087,18 +1099,35 @@ export async function publishDica(
   try {
     await query(
       `update public.content_items
-       set title = $1, body_html = $2, status = 'published', visibility = $3, published_at = $4, settings = $5::jsonb
+       set title = $1, body_html = $2, status = 'published', visibility = $3, published_at = $4, settings = $5::jsonb, audience = $8
        where id = $6 and author_id = $7 and type = 'dica'`,
-      [title, bodyHtml, input.visibility, publishedAt, JSON.stringify(settings), input.id, p.user.id]
+      [title, bodyHtml, input.visibility, publishedAt, JSON.stringify(settings), input.id, p.user.id, effectiveAudience(input.visibility, input.audience)]
     )
     await replaceContentItemClassrooms(input.id, input.visibility === "classrooms" ? input.classroomIds : [])
   } catch (e: any) {
     return { ok: false, error: e?.message ?? "Erro ao publicar dica" }
   }
 
+  const isFirstPublish = existingRow.status !== "published"
+  if (isFirstPublish) {
+    const teacherRow = await queryOne<{ full_name: string | null }>(
+      "SELECT full_name FROM public.profiles WHERE id = $1",
+      [p.user.id]
+    )
+    after(() =>
+      notifyFollowersNewContent({
+        teacherId: p.user.id,
+        teacherName: teacherRow?.full_name?.trim() || "Professor",
+        entityId: input.id,
+        contentTypeLabel: "dica",
+        title: title,
+      }).catch(() => {})
+    )
+  }
+
   revalidatePath("/dashboard/aluno")
   revalidatePath("/dashboard/professor")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -1109,6 +1138,7 @@ export type ArticleForEdit = {
   body_html: string | null
   status: ContentItemStatus
   visibility: ContentVisibility
+  audience: ContentAudience
   settings: ContentItemSettings
   classroomIds: string[]
 }
@@ -1119,8 +1149,8 @@ export async function getArticleForEdit(
   const p = await assertProfessor()
   if (!p.user) return { ok: false, error: p.error ?? "Nao autenticado" }
 
-  const row = await queryOne<Pick<ContentItemRow, "id" | "title" | "body_html" | "status" | "visibility" | "settings">>(
-    "select id, title, body_html, status, visibility, settings from public.content_items where id = $1 and author_id = $2 and type = 'article'",
+  const row = await queryOne<Pick<ContentItemRow, "id" | "title" | "body_html" | "status" | "visibility" | "audience" | "settings">>(
+    "select id, title, body_html, status, visibility, audience, settings from public.content_items where id = $1 and author_id = $2 and type = 'article'",
     [id, p.user.id]
   )
   if (!row) return { ok: false, error: "Artigo nao encontrado" }
@@ -1140,6 +1170,7 @@ export async function getArticleForEdit(
       body_html: r.body_html,
       status: r.status,
       visibility: r.visibility,
+      audience: (r.audience ?? "all") as ContentAudience,
       settings: asRecord(r.settings) as ContentItemSettings,
       classroomIds: (cicRows ?? []).map((c) => c.classroom_id as string),
     },
@@ -1167,8 +1198,8 @@ export async function loadProfessorContentForEdit(
   const p = await assertProfessor()
   if (!p.user) return { ok: false, error: p.error ?? "Nao autenticado" }
 
-  const row = await queryOne<Pick<ContentItemRow, "id" | "type" | "title" | "body_html" | "status" | "visibility" | "settings">>(
-    "select id, type, title, body_html, status, visibility, settings from public.content_items where id = $1 and author_id = $2",
+  const row = await queryOne<Pick<ContentItemRow, "id" | "type" | "title" | "body_html" | "status" | "visibility" | "audience" | "settings">>(
+    "select id, type, title, body_html, status, visibility, audience, settings from public.content_items where id = $1 and author_id = $2",
     [id, p.user.id]
   )
   if (!row) return { ok: false, error: "Conteudo nao encontrado" }
@@ -1197,6 +1228,7 @@ export async function loadProfessorContentForEdit(
     body_html: r.body_html,
     status: r.status,
     visibility: r.visibility,
+    audience: (r.audience ?? "all") as ContentAudience,
     settings: asRecord(r.settings) as ContentItemSettings,
     classroomIds,
   }
@@ -1241,7 +1273,7 @@ export async function deleteContentItem(
 
   revalidatePath("/dashboard/aluno")
   revalidatePath("/dashboard/professor")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${id}`)
   return { ok: true }
 }
@@ -1506,6 +1538,109 @@ export async function getFeedArticlesForCurrentUser(limit = 20): Promise<FeedCon
     }))
 }
 
+export type CommunityFeedItem = FeedContentItem & {
+  author_slug: string | null
+  is_following: boolean
+}
+
+/**
+ * Feed da comunidade de professores: posts públicos de OUTROS professores
+ * (audiência 'all' ou 'teachers'), com quem o professor segue no topo.
+ */
+export async function getProfessorCommunityFeed(limit = 30): Promise<CommunityFeedItem[]> {
+  const user = await requireAuthedUser().catch(() => null)
+  if (!user) return []
+
+  const me = await queryOne<{ user_type: string }>(
+    "select user_type from public.profiles where id = $1",
+    [user.id]
+  )
+  if (me?.user_type !== "professor") return []
+
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 30, 100))
+  let rows: any[] = []
+  try {
+    rows = await query<any>(
+      `select ci.*,
+              p.full_name as author_name,
+              p.avatar_url as author_avatar,
+              p.slug as author_slug,
+              exists (
+                select 1 from public.teacher_followers tf
+                where tf.teacher_id = ci.author_id and tf.student_id = $1
+              ) as is_following
+         from public.content_items ci
+         join public.profiles p on p.id = ci.author_id
+        where ci.status = 'published'
+          and ci.visibility = 'public'
+          and ci.audience in ('all','teachers')
+          and ci.author_id <> $1
+          and p.user_type = 'professor'
+        order by is_following desc, ci.published_at desc nulls last
+        limit $2`,
+      [user.id, safeLimit]
+    )
+  } catch {
+    return []
+  }
+
+  return rows
+    .filter((a) => a && (a.type === "article" || a.type === "exercise" || a.type === "assessment" || a.type === "simulado" || a.type === "dica"))
+    .map((a) => ({
+      ...(a as ContentItemRow),
+      settings: asRecord(a.settings) as ContentItemSettings,
+      author: {
+        full_name: a.author_name ?? null,
+        avatar_url: a.author_avatar ?? null,
+      },
+      author_slug: a.author_slug ?? null,
+      is_following: a.is_following === true,
+    }))
+}
+
+/** Conteúdos que o usuário salvou (para a página "Salvos"). */
+export async function listMySavedContent(limit = 50): Promise<FeedContentItem[]> {
+  const user = await requireAuthedUser().catch(() => null)
+  if (!user) return []
+
+  let rows: any[] = []
+  try {
+    rows = await query<any>(
+      `select ci.*
+       from public.content_items ci
+       join public.content_saves cs on cs.content_item_id = ci.id
+       where cs.user_id = $1 and ci.status = 'published'
+       order by cs.created_at desc
+       limit $2`,
+      [user.id, Math.max(1, Math.min(limit, 100))]
+    )
+  } catch {
+    return []
+  }
+  if (rows.length === 0) return []
+
+  const authorIds = [
+    ...new Set(rows.map((a) => a.author_id).filter((id: any) => typeof id === "string" && id.length > 0)),
+  ]
+  let profiles: { id: string; full_name: string | null; avatar_url: string | null }[] = []
+  if (authorIds.length > 0) {
+    profiles = await query<{ id: string; full_name: string | null; avatar_url: string | null }>(
+      "select id, full_name, avatar_url from public.profiles where id = any($1::uuid[])",
+      [authorIds]
+    )
+  }
+  const byId = new Map(profiles.map((p) => [p.id, p]))
+
+  return rows.map((a) => ({
+    ...(a as ContentItemRow),
+    settings: asRecord((a as any).settings) as ContentItemSettings,
+    author: {
+      full_name: byId.get((a as any).author_id)?.full_name ?? null,
+      avatar_url: byId.get((a as any).author_id)?.avatar_url ?? null,
+    },
+  }))
+}
+
 export async function getMyLikesForContentIds(
   contentIds: string[]
 ): Promise<Set<string>> {
@@ -1721,7 +1856,7 @@ export async function createContentComment(
 
     revalidatePath("/dashboard/aluno")
     revalidatePath("/dashboard/professor")
-    revalidatePath("/dashboard/professor/conteudos")
+    revalidatePath("/dashboard/professor/perfil")
     revalidatePath(`/conteudo/${contentItemId}`)
 
     return {
@@ -1797,7 +1932,7 @@ export async function deleteContentComment(
 
     revalidatePath("/dashboard/aluno")
     revalidatePath("/dashboard/professor")
-    revalidatePath("/dashboard/professor/conteudos")
+    revalidatePath("/dashboard/professor/perfil")
     revalidatePath(`/conteudo/${deleted.content_item_id}`)
 
     return {

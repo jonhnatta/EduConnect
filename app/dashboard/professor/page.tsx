@@ -42,8 +42,8 @@ function relativeTime(iso: string): string {
 
 export default async function ProfessorFeedPage() {
   const { userId } = await requireProfessorAccess()
-  const profile = await queryOne<{ full_name: string | null }>(
-    "select full_name from public.profiles where id = $1",
+  const profile = await queryOne<{ full_name: string | null; followers_count: number | null }>(
+    "select full_name, followers_count from public.profiles where id = $1",
     [userId]
   ).catch(() => null)
   const firstName = profile?.full_name?.split(" ")[0] ?? "Professor"
@@ -61,7 +61,7 @@ export default async function ProfessorFeedPage() {
 
   const stats = [
     { label: "Visualizacoes", value: formatCount(viewStats.totalViews), icon: Eye },
-    { label: "Seguidores", value: "—", icon: Users },
+    { label: "Seguidores", value: formatCount(Number(profile?.followers_count ?? 0)), icon: Users },
     { label: "Publicacoes", value: String(viewStats.totalPublications), icon: FileText },
     { label: "Curtidas", value: formatCount(viewStats.totalLikes), icon: Heart },
   ]
@@ -100,7 +100,7 @@ export default async function ProfessorFeedPage() {
           <div className="bg-white rounded-xl border border-gray-100">
             <div className="p-4 border-b border-gray-100 flex items-center justify-between">
               <h2 className="font-display font-semibold text-gray-900">Minhas Publicacoes</h2>
-              <Link href="/dashboard/professor/conteudos" className="text-sm text-[#1D4ED8] hover:underline flex items-center gap-1">
+              <Link href="/dashboard/professor/perfil" className="text-sm text-[#1D4ED8] hover:underline flex items-center gap-1">
                 Ver todas <ChevronRight className="h-4 w-4" />
               </Link>
             </div>
@@ -197,12 +197,12 @@ export default async function ProfessorFeedPage() {
                     </div>
                     <div className="mt-3 flex gap-2">
                       <Button size="sm" variant="outline" className="flex-1" asChild>
-                        <Link href={`/dashboard/professor/salas/${activity.classroomId}/atividades/${activity.activityId}`}>
+                        <Link href={`/dashboard/professor/salas/${activity.classroomId}?tab=atividades`}>
                           Ver entregas
                         </Link>
                       </Button>
                       <Button size="sm" className="flex-1 bg-[#1D4ED8] hover:bg-[#1E3A8A]" asChild>
-                        <Link href={`/dashboard/professor/salas/${activity.classroomId}/atividades/${activity.activityId}`}>
+                        <Link href={`/dashboard/professor/salas/${activity.classroomId}?tab=corrigir`}>
                           Corrigir
                         </Link>
                       </Button>

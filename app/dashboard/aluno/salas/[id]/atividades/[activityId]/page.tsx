@@ -7,7 +7,9 @@ import { getActivityForStudent } from "@/app/actions/classroom-activities"
 import { getMySubmission } from "@/app/actions/activity-submissions"
 import { getClassroomForStudent } from "@/app/actions/classrooms"
 import { StudentActivityExam } from "@/components/dashboard/student-activity-exam"
+import { StudentTrabalhoSubmission } from "@/components/dashboard/student-trabalho-submission"
 import { parseExamFromSettings, toPublicExam } from "@/lib/activities/exam"
+import { parseTrabalhoConfig } from "@/lib/activities/trabalho"
 import { ActivityAttachmentsList } from "@/components/dashboard/activity-attachments-list"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -56,6 +58,8 @@ export default async function AlunoAtividadeDetalhePage({
       : undefined
 
   const attachments = parseActivityAttachments(activity.settings)
+  const trabalhoConfig =
+    activity.type === "trabalho" ? parseTrabalhoConfig(activity.settings) : null
   const backHref = `/dashboard/aluno/salas/${classroomId}?tab=atividades`
 
   return (
@@ -156,6 +160,15 @@ export default async function AlunoAtividadeDetalhePage({
             activityClosed={activity.status === "encerrada"}
             maxScore={activity.max_score}
             mcqSolutionsAfterSubmit={mcqSolutionsAfterSubmit}
+          />
+        ) : trabalhoConfig ? (
+          <StudentTrabalhoSubmission
+            classroomId={classroomId}
+            activityId={activityId}
+            config={trabalhoConfig}
+            initialSubmission={initialSubmission}
+            activityClosed={activity.status === "encerrada"}
+            maxScore={activity.max_score}
           />
         ) : null}
 

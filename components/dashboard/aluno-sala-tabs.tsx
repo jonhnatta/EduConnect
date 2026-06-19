@@ -10,6 +10,7 @@ import type { StudentSelfPerformance } from "@/lib/classrooms/performance"
 import { AlunoPerformancePanel } from "@/components/dashboard/aluno-performance-panel"
 import { parseActivityAttachments } from "@/lib/activities/attachments"
 import { parseExamFromSettings } from "@/lib/activities/exam"
+import { parseTrabalhoConfig } from "@/lib/activities/trabalho"
 import type { ClassroomActivityRow } from "@/lib/activities/types"
 import { ACTIVITY_TYPE_LABELS } from "@/lib/activities/types"
 import type { ClassroomRow } from "@/lib/classrooms/types"
@@ -167,11 +168,14 @@ export function AlunoSalaTabs({
               <ul className="grid gap-3">
                 {activities.map((a) => {
                   const hasExam = !!parseExamFromSettings(a.settings)
+                  const hasTrabalho = !!parseTrabalhoConfig(a.settings)
+                  const submittable = hasExam || hasTrabalho
                   const grade = submissionGradesByActivity[a.id]
-                  const showNota =
-                    hasExam &&
-                    grade?.status === "enviado" &&
-                    grade.score_total != null
+                  const submitted = grade?.status === "enviado"
+                  const pendingCorrection = !!(submitted && grade?.pendingCorrection)
+                  const graded =
+                    submitted && !grade?.pendingCorrection && grade?.score_total != null
+                  const isDraft = grade?.status === "rascunho"
                   return (
                     <li
                       key={a.id}
@@ -182,24 +186,43 @@ export function AlunoSalaTabs({
                           <span className="text-[10px] sm:text-xs font-semibold px-2 py-0.5 rounded bg-blue-50 text-[#1D4ED8] uppercase tracking-wider">
                             {ACTIVITY_TYPE_LABELS[a.type]}
                           </span>
-                          <Badge
-                            variant="secondary"
-                            className={
-                              a.status === "encerrada"
-                                ? "text-[10px] sm:text-xs bg-gray-100 text-gray-700"
-                                : "text-[10px] sm:text-xs bg-green-100 text-green-800"
-                            }
-                          >
-                            {a.status === "encerrada" ? "Encerrada" : "Aberta"}
-                          </Badge>
+                          {/* Estado da entrega do aluno (prioridade) ou status da atividade */}
+                          {graded ? (
+                            <Badge className="text-[10px] sm:text-xs bg-emerald-100 text-emerald-800">
+                              Respondido · corrigido
+                            </Badge>
+                          ) : pendingCorrection ? (
+                            <Badge className="text-[10px] sm:text-xs bg-blue-100 text-blue-800">
+                              Já respondido
+                            </Badge>
+                          ) : isDraft ? (
+                            <Badge className="text-[10px] sm:text-xs bg-amber-100 text-amber-800">
+                              Rascunho salvo
+                            </Badge>
+                          ) : (
+                            <Badge
+                              variant="secondary"
+                              className={
+                                a.status === "encerrada"
+                                  ? "text-[10px] sm:text-xs bg-gray-100 text-gray-700"
+                                  : "text-[10px] sm:text-xs bg-green-100 text-green-800"
+                              }
+                            >
+                              {a.status === "encerrada" ? "Encerrada" : "Aberta"}
+                            </Badge>
+                          )}
                         </div>
                         <h2 className="font-medium text-gray-900 text-base sm:text-lg mt-2">
                           {a.title}
                         </h2>
-                        {showNota ? (
+                        {graded ? (
                           <p className="text-sm font-semibold text-[#1D4ED8] mt-1.5 tabular-nums">
                             Sua nota: {grade?.score_total}
                             {a.max_score != null ? ` / ${a.max_score}` : ""}
+                          </p>
+                        ) : pendingCorrection ? (
+                          <p className="text-sm text-blue-700 mt-1.5">
+                            Entrega enviada — na esteira do professor para correção.
                           </p>
                         ) : null}
                         <p className="text-sm text-gray-500 mt-1.5">
@@ -217,14 +240,22 @@ export function AlunoSalaTabs({
                       <div className="flex flex-col gap-2 shrink-0 sm:items-end">
                         <Button
                           type="button"
-                          variant="default"
-                          className="bg-[#1D4ED8] hover:bg-[#1E3A8A]"
+                          variant={submitted ? "outline" : "default"}
+                          className={
+                            submitted
+                              ? "border-gray-200"
+                              : "bg-[#1D4ED8] hover:bg-[#1E3A8A]"
+                          }
                           asChild
                         >
                           <Link
                             href={`/dashboard/aluno/salas/${sala.id}/atividades/${a.id}`}
                           >
-                            Ver detalhes
+                            {submitted
+                              ? "Ver atividade"
+                              : submittable && a.status !== "encerrada"
+                                ? "Fazer atividade"
+                                : "Ver detalhes"}
                           </Link>
                         </Button>
                       </div>

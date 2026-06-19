@@ -15,6 +15,7 @@ import {
   UsersRound,
   BarChart3,
   Bot,
+  Rss,
   Settings,
   User,
   Bell,
@@ -38,8 +39,10 @@ import {
 const navigation = [
   { name: "Inicio", href: "/dashboard/professor", icon: Home },
   { name: "Criar Conteudo", href: "/dashboard/professor/criar", icon: PenSquare },
+  { name: "Feed", href: "/dashboard/professor/feed", icon: Rss },
   { name: "Minhas Salas", href: "/dashboard/professor/salas", icon: Users },
   { name: "Meus Alunos", href: "/dashboard/professor/alunos", icon: UsersRound },
+  { name: "Seguidores", href: "/dashboard/professor/seguidores", icon: UsersRound },
   { name: "Analise de Desempenho", href: "/dashboard/professor/analise", icon: BarChart3 },
   { name: "Revisoes pela IA", href: "/dashboard/professor/revisoes", icon: Bot },
 ]
@@ -51,8 +54,10 @@ const bottomNav = [
 
 function ProfessorLayoutContent({
   children,
+  unreadNotifications = 0,
 }: {
   children: React.ReactNode
+  unreadNotifications?: number
 }) {
   const pathname = usePathname()
   const router = useRouter()
@@ -169,7 +174,9 @@ function ProfessorLayoutContent({
             <Button asChild variant="ghost" size="icon" className="relative">
               <Link href="/dashboard/professor/notificacoes" aria-label="Abrir notificacoes">
                 <Bell className="h-5 w-5 text-gray-600" />
-                <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500" />
+                {unreadNotifications > 0 && (
+                  <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500" />
+                )}
               </Link>
             </Button>
             <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)}>
@@ -323,7 +330,9 @@ function ProfessorLayoutContent({
             <Button asChild variant="ghost" size="icon" className="relative">
               <Link href="/dashboard/professor/notificacoes" aria-label="Abrir notificacoes">
                 <Bell className="h-5 w-5 text-gray-600" />
-                <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500" />
+                {unreadNotifications > 0 && (
+                  <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500" />
+                )}
               </Link>
             </Button>
             <Avatar className="h-9 w-9">
@@ -377,8 +386,10 @@ function ProfessorLayoutContent({
 
 export function ProfessorLayoutClient({
   children,
+  unreadNotifications = 0,
 }: {
   children: React.ReactNode
+  unreadNotifications?: number
 }) {
   return (
     <Suspense fallback={
@@ -386,7 +397,7 @@ export function ProfessorLayoutClient({
         <div className="animate-spin h-8 w-8 border-4 border-[#1D4ED8] border-t-transparent rounded-full" />
       </div>
     }>
-      <ProfessorLayoutContent>{children}</ProfessorLayoutContent>
+      <ProfessorLayoutContent unreadNotifications={unreadNotifications}>{children}</ProfessorLayoutContent>
     </Suspense>
   )
 }

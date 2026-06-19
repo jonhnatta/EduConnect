@@ -1,4 +1,5 @@
 import { query, queryOne } from "@/lib/db/query"
+import { createNotification, notifyFollowersNewContent } from "@/lib/notifications/event"
 import type { ContentReviewFinding } from "./types"
 
 const XAI_API_URL = "https://api.x.ai/v1/chat/completions"
@@ -83,8 +84,8 @@ function parseReview(raw: XaiRawReview): {
 }
 
 export async function runArticleReview(contentItemId: string): Promise<void> {
-  const item = await queryOne<{ id: string; title: string; body_html: string | null }>(
-    "select id, title, body_html from public.content_items where id = $1 and status = 'verificando'",
+  const item = await queryOne<{ id: string; title: string; body_html: string | null; published_at: string | null; author_id: string }>(
+    "select id, title, body_html, published_at, author_id from public.content_items where id = $1 and status = 'verificando'",
     [contentItemId]
   )
 
@@ -162,16 +163,49 @@ export async function runArticleReview(contentItemId: string): Promise<void> {
     ]
   )
 
-  const statusPatch: Record<string, unknown> = { status: newStatus }
-  if (newStatus === "published") {
-    statusPatch.published_at = new Date().toISOString()
-  }
+  // published_at só é definido na primeira publicação — preserva data original em re-publicações
+  const isFirstPublish = newStatus === "published" && !item.published_at
 
   await query(
     `update public.content_items
      set status = $2,
          published_at = coalesce($3, published_at)
      where id = $1`,
-    [contentItemId, newStatus, (statusPatch as any).published_at ?? null]
+    [contentItemId, newStatus, isFirstPublish ? new Date().toISOString() : null]
   )
+
+  // Notifica professor quando artigo é reprovado ou aguarda decisão manual
+  if (newStatus === "revisao" || newStatus === "aguardando_decisao") {
+    const msg = newStatus === "revisao"
+      ? `Seu artigo "${item.title}" foi reprovado na revisão automática.`
+      : `Seu artigo "${item.title}" precisa de revisão manual antes de ser publicado.`
+    await createNotification({
+      recipientId: item.author_id,
+      type: "review_result",
+      entityId: contentItemId,
+      entityType: "content_item",
+      message: msg,
+    }).catch(err => console.error("[review-agent notify]", err))
+  }
+
+  // Notifica seguidores na primeira publicação
+  if (isFirstPublish) {
+    const publishInfo = await queryOne<{ full_name: string | null; type: string }>(
+      `SELECT p.full_name, ci.type
+         FROM public.content_items ci
+         JOIN public.profiles p ON p.id = ci.author_id
+        WHERE ci.id = $1`,
+      [contentItemId]
+    )
+    if (publishInfo) {
+      const typeLabel = publishInfo.type === "article" ? "artigo" : publishInfo.type === "exercise" ? "exercício" : publishInfo.type === "assessment" ? "prova" : publishInfo.type === "simulado" ? "simulado" : "dica"
+      await notifyFollowersNewContent({
+        teacherId: item.author_id,
+        teacherName: publishInfo.full_name?.trim() || "Professor",
+        entityId: contentItemId,
+        contentTypeLabel: typeLabel,
+        title: item.title,
+      }).catch(err => console.error("[review-agent notify followers]", err))
+    }
+  }
 }

@@ -4,6 +4,7 @@ import {
   deleteContentItem,
   recordContentShare,
   toggleContentLike,
+  toggleContentSave,
   type ProfessorContentListItem,
 } from "@/app/actions/content-items"
 import { ContentExerciseSubmissionsDialog } from "@/components/dashboard/content-exercise-submissions-dialog"
@@ -48,12 +49,12 @@ import { useRouter } from "next/navigation"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
-const stories = [
-  { id: 1, name: "Prof. Maria", avatar: "MS", color: "from-pink-500 to-purple-500", hasNew: true },
-  { id: 2, name: "Prof. Carlos", avatar: "CO", color: "from-blue-500 to-cyan-500", hasNew: true },
-  { id: 3, name: "Prof. Ana", avatar: "AP", color: "from-green-500 to-teal-500", hasNew: false },
-  { id: 4, name: "Prof. Roberto", avatar: "RL", color: "from-orange-500 to-red-500", hasNew: true },
-  { id: 5, name: "Prof. Julia", avatar: "JC", color: "from-indigo-500 to-purple-500", hasNew: false },
+const FEED_CATEGORIAS: { key: string; label: string; types?: string[] }[] = [
+  { key: "todos", label: "Todos" },
+  { key: "artigos", label: "Artigos", types: ["article"] },
+  { key: "exercicios", label: "Exercícios", types: ["exercise"] },
+  { key: "provas", label: "Provas", types: ["assessment", "simulado"] },
+  { key: "dicas", label: "Dicas", types: ["dica"] },
 ]
 
 type Props = {
@@ -82,6 +83,12 @@ export function ProfessorContentFeed({
 }: Props) {
   const router = useRouter()
   const items = useMemo(() => initialItems ?? [], [initialItems])
+  const [categoria, setCategoria] = useState<string>("todos")
+  const visibleItems = useMemo(() => {
+    if (categoria === "todos") return items
+    const types = FEED_CATEGORIAS.find((c) => c.key === categoria)?.types ?? []
+    return items.filter((i) => types.includes(i.type))
+  }, [items, categoria])
   const [savedItems, setSavedItems] = useState<string[]>([])
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [submissionsDialog, setSubmissionsDialog] = useState<{
@@ -101,8 +108,16 @@ export function ProfessorContentFeed({
     return o
   })
 
-  const toggleSave = (id: string) => {
-    setSavedItems((prev) => (prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]))
+  const toggleSave = async (id: string) => {
+    const wasSaved = savedItems.includes(id)
+    // otimista
+    setSavedItems((prev) => (wasSaved ? prev.filter((i) => i !== id) : [...prev, id]))
+    const res = await toggleContentSave(id)
+    if (!res.ok) {
+      // reverte em caso de erro
+      setSavedItems((prev) => (wasSaved ? [...prev, id] : prev.filter((i) => i !== id)))
+      toast.error(res.error)
+    }
   }
 
   const updateCommentCount = (id: string, count: number) => {
@@ -179,42 +194,18 @@ export function ProfessorContentFeed({
 
   return (
     <>
-      <div className="bg-white rounded-xl p-4 border border-gray-100">
-        <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
-          {stories.map((story) => (
-            <button
-              key={story.id}
-              type="button"
-              className="flex flex-col items-center gap-2 flex-shrink-0"
-            >
-              <div
-                className={`p-0.5 rounded-full bg-gradient-to-br ${story.color} ${story.hasNew ? "" : "opacity-50"}`}
-              >
-                <div className="p-0.5 rounded-full bg-white">
-                  <Avatar className="h-14 w-14">
-                    <AvatarFallback className="bg-gray-100 text-gray-600 text-sm">{story.avatar}</AvatarFallback>
-                  </Avatar>
-                </div>
-              </div>
-              <span className="text-xs text-gray-600 max-w-[60px] truncate">{story.name}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
       <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-        <Button size="sm" className="bg-[#10B981] hover:bg-[#059669]">
-          Todos
-        </Button>
-        <Button size="sm" variant="outline">
-          Artigos
-        </Button>
-        <Button size="sm" variant="outline" disabled>
-          Videos
-        </Button>
-        <Button size="sm" variant="outline">
-          Exercicios
-        </Button>
+        {FEED_CATEGORIAS.map((c) => (
+          <Button
+            key={c.key}
+            size="sm"
+            variant={categoria === c.key ? "default" : "outline"}
+            className={categoria === c.key ? "bg-[#1D4ED8] hover:bg-[#1E3A8A]" : ""}
+            onClick={() => setCategoria(c.key)}
+          >
+            {c.label}
+          </Button>
+        ))}
       </div>
 
       <div className="space-y-4">
@@ -229,8 +220,12 @@ export function ProfessorContentFeed({
               <Link href="/dashboard/professor/criar">Criar conteúdo</Link>
             </Button>
           </div>
+        ) : visibleItems.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-gray-200 bg-white p-10 text-center text-gray-500">
+            Nenhum conteúdo nesta categoria.
+          </div>
         ) : (
-          items.map((item) => {
+          visibleItems.map((item) => {
             const c = counts[item.id] ?? { likes: item.like_count, shares: item.share_count, comments: item.comment_count }
             const liked = !!likedMap[item.id]
             const isExercise = item.type === "exercise"

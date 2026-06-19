@@ -48,6 +48,13 @@ import {
   validateExamDefinition,
   type ActivityExamDefinition,
 } from "@/lib/activities/exam"
+import {
+  parseTrabalhoConfig,
+  clampTrabalhoMaxFiles,
+  TRABALHO_MAX_FILES_LIMIT,
+  TRABALHO_DEFAULT_MAX_FILES,
+  type TrabalhoMode,
+} from "@/lib/activities/trabalho"
 
 const TYPES: ClassroomActivityType[] = [
   "trabalho",
@@ -112,6 +119,8 @@ export function ClassroomActivityFormDialog({
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
   const [descriptionEditorKey, setDescriptionEditorKey] = useState(0)
   const [examDef, setExamDef] = useState<ActivityExamDefinition | null>(null)
+  const [submissionMode, setSubmissionMode] = useState<TrabalhoMode>("texto")
+  const [maxFiles, setMaxFiles] = useState(String(TRABALHO_DEFAULT_MAX_FILES))
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -128,6 +137,9 @@ export function ClassroomActivityFormDialog({
       setStatus(activity.status)
       setKeptAttachments(parseActivityAttachments(activity.settings))
       setExamDef(parseExamFromSettings(activity.settings))
+      const sub = parseTrabalhoConfig(activity.settings)
+      setSubmissionMode(sub?.mode ?? "texto")
+      setMaxFiles(String(sub?.maxFiles ?? TRABALHO_DEFAULT_MAX_FILES))
     } else {
       setType("trabalho")
       setTitle("")
@@ -138,6 +150,8 @@ export function ClassroomActivityFormDialog({
       setStatus("aberta")
       setKeptAttachments([])
       setExamDef(null)
+      setSubmissionMode("texto")
+      setMaxFiles(String(TRABALHO_DEFAULT_MAX_FILES))
     }
     setPendingFiles([])
     if (fileInputRef.current) fileInputRef.current.value = ""
@@ -216,6 +230,12 @@ export function ClassroomActivityFormDialog({
       maxFinal = totalExamPoints(examPayload)
     }
 
+    // Entrega de trabalho: só para o tipo "trabalho"; demais tipos limpam (null)
+    const submissionPayload =
+      type === "trabalho"
+        ? { mode: submissionMode, maxFiles: clampTrabalhoMaxFiles(maxFiles) }
+        : null
+
     let newUploaded: ActivityAttachment[] = []
     if (pendingFiles.length > 0) {
       const fd = new FormData()
@@ -254,6 +274,7 @@ export function ClassroomActivityFormDialog({
         status,
         attachments,
         exam: examPayload,
+        submission: submissionPayload,
       })
       setLoading(false)
       if (!res.ok) {
@@ -273,6 +294,7 @@ export function ClassroomActivityFormDialog({
         status,
         attachments,
         exam: examPayload,
+        submission: submissionPayload,
       })
       setLoading(false)
       if (!res.ok) {
@@ -346,6 +368,45 @@ export function ClassroomActivityFormDialog({
             </div>
             {EXAM_TYPES.includes(type) ? (
               <ActivityExamEditor value={examDef} onChange={setExamDef} />
+            ) : null}
+            {type === "trabalho" ? (
+              <div className="grid gap-3 rounded-lg border border-blue-100 bg-blue-50/40 p-4">
+                <div className="grid gap-2">
+                  <Label>Como o aluno deve entregar</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Define o que o aluno preenche para enviar o trabalho.
+                  </p>
+                  <Select
+                    value={submissionMode}
+                    onValueChange={(v) => setSubmissionMode(v as TrabalhoMode)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="texto">Texto na plataforma</SelectItem>
+                      <SelectItem value="arquivo">Arquivo anexado</SelectItem>
+                      <SelectItem value="ambos">Texto e arquivo</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {(submissionMode === "arquivo" || submissionMode === "ambos") && (
+                  <div className="grid gap-2">
+                    <Label htmlFor="act-maxfiles">
+                      Máximo de arquivos (1 a {TRABALHO_MAX_FILES_LIMIT})
+                    </Label>
+                    <Input
+                      id="act-maxfiles"
+                      type="number"
+                      min={1}
+                      max={TRABALHO_MAX_FILES_LIMIT}
+                      step={1}
+                      value={maxFiles}
+                      onChange={(e) => setMaxFiles(e.target.value)}
+                    />
+                  </div>
+                )}
+              </div>
             ) : null}
             <div className="grid gap-2">
               <Label htmlFor="act-files">Anexos (opcional)</Label>

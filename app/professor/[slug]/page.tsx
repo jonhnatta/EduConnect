@@ -12,6 +12,7 @@ import {
 } from "lucide-react"
 import { getProfessorProfile } from "@/app/actions/professors"
 import { getFollowState } from "@/app/actions/follows"
+import { getProfessorReviews } from "@/app/actions/professor-reviews"
 import { FollowButton } from "./_follow-button"
 import { PublicProfileTabs } from "./_public-profile-tabs"
 
@@ -38,6 +39,13 @@ export default async function PerfilProfessorPublico({
   if (!profile) notFound()
 
   const followState = await getFollowState(profile.id).catch(() => ({ following: false, followersCount: 0 }))
+  const reviews = await getProfessorReviews(profile.id).catch(() => ({
+    average: 0,
+    count: 0,
+    reviews: [],
+    myReview: null,
+    canReview: false,
+  }))
 
   return (
     <div className="min-h-screen bg-gray-50 pb-20">
@@ -204,7 +212,7 @@ export default async function PerfilProfessorPublico({
 
           {/* Publicações */}
           <div className="md:col-span-2">
-            <PublicProfileTabs posts={profile.posts} />
+            <PublicProfileTabs posts={profile.posts} teacherId={profile.id} reviews={reviews} />
           </div>
         </div>
       </div>

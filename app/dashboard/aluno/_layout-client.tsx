@@ -14,6 +14,7 @@ import {
   Bot,
   Search,
   Trophy,
+  Bookmark,
   Settings,
   User,
   Bell,
@@ -37,6 +38,9 @@ const navigation = [
   { name: "Minhas Salas", href: "/dashboard/aluno/salas", icon: Users },
   { name: "Tutor IA", href: "/dashboard/aluno/tutor", icon: Bot },
   { name: "Explorar Professores", href: "/dashboard/aluno/explorar", icon: Search },
+  { name: "Seguindo", href: "/dashboard/aluno/seguindo", icon: Users },
+  { name: "Explorar Salas", href: "/dashboard/aluno/explorar-salas", icon: BookOpen },
+  { name: "Salvos", href: "/dashboard/aluno/salvos", icon: Bookmark },
   { name: "Meu Progresso", href: "/dashboard/aluno/progresso", icon: Trophy },
 ]
 
@@ -47,8 +51,10 @@ const bottomNav = [
 
 export function AlunoLayoutClient({
   children,
+  unreadNotifications = 0,
 }: {
   children: React.ReactNode
+  unreadNotifications?: number
 }) {
   const pathname = usePathname()
   const router = useRouter()
@@ -94,7 +100,9 @@ export function AlunoLayoutClient({
             <Button asChild variant="ghost" size="icon" className="relative">
               <Link href="/dashboard/aluno/notificacoes" aria-label="Abrir notificacoes">
                 <Bell className="h-5 w-5 text-gray-600" />
-                <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500" />
+                {unreadNotifications > 0 && (
+                  <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500" />
+                )}
               </Link>
             </Button>
             <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)}>
@@ -232,7 +240,9 @@ export function AlunoLayoutClient({
             <Button asChild variant="ghost" size="icon" className="relative">
               <Link href="/dashboard/aluno/notificacoes" aria-label="Abrir notificacoes">
                 <Bell className="h-5 w-5 text-gray-600" />
-                <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500" />
+                {unreadNotifications > 0 && (
+                  <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500" />
+                )}
               </Link>
             </Button>
             <Avatar className="h-9 w-9">

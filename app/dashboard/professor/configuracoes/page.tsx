@@ -6,6 +6,8 @@ type ProfileRow = {
   full_name: string | null
   professor_verification_status: string | null
   profile_visibility: "public" | "private" | null
+  notification_prefs: Record<string, boolean> | null
+  has_password: boolean
 }
 
 export default async function ProfessorConfiguracoesPage() {
@@ -14,10 +16,13 @@ export default async function ProfessorConfiguracoesPage() {
 
   const profile = userId
     ? await queryOne<ProfileRow>(
-        `select full_name, professor_verification_status,
-                coalesce(profile_visibility, 'private') as profile_visibility
-           from public.profiles
-          where id = $1`,
+        `select pr.full_name, pr.professor_verification_status,
+                coalesce(pr.profile_visibility, 'private') as profile_visibility,
+                pr.notification_prefs,
+                (u.password_hash IS NOT NULL) as has_password
+           from public.profiles pr
+           join public.users u on u.id = pr.id
+          where pr.id = $1`,
         [userId]
       )
     : null
@@ -28,6 +33,8 @@ export default async function ProfessorConfiguracoesPage() {
       email={session?.user?.email || "sem-email"}
       verificationStatus={profile?.professor_verification_status ?? null}
       profileVisibility={profile?.profile_visibility === "public" ? "public" : "private"}
+      notificationPrefs={profile?.notification_prefs ?? {}}
+      hasPassword={profile?.has_password ?? false}
     />
   )
 }

@@ -1,18 +1,25 @@
 "use client"
 
-import { useState, type ComponentType } from "react"
+import { useState, useTransition, type ComponentType } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
-import { Bell, Bot, Globe, Settings2, ShieldCheck, Users } from "lucide-react"
+import { Bell, Bot, Globe, KeyRound, Loader2, Settings2, ShieldCheck, Trash2, Users } from "lucide-react"
+import { updateMySettings, type NotificationPrefs } from "@/app/actions/settings"
+import { changePassword, deleteAccount } from "@/app/actions/account"
 
 type ProfessorSettingsClientProps = {
   fullName: string
   email: string
   verificationStatus: string | null
   profileVisibility: "public" | "private"
+  notificationPrefs?: NotificationPrefs
+  hasPassword?: boolean
 }
 
 function SettingRow({
@@ -49,12 +56,41 @@ export function ProfessorSettingsClient({
   email,
   verificationStatus,
   profileVisibility,
+  notificationPrefs = {},
+  hasPassword = false,
 }: ProfessorSettingsClientProps) {
-  const [reviewBeforePublish, setReviewBeforePublish] = useState(true)
-  const [studentSubmissionAlerts, setStudentSubmissionAlerts] = useState(true)
+  const pref = (key: string, fallback = true) =>
+    typeof notificationPrefs[key] === "boolean" ? notificationPrefs[key] : fallback
+  const [reviewBeforePublish, setReviewBeforePublish] = useState(pref("reviewBeforePublish"))
+  const [studentSubmissionAlerts, setStudentSubmissionAlerts] = useState(pref("studentSubmissionAlerts"))
   const [publicProfile, setPublicProfile] = useState(profileVisibility === "public")
-  const [weeklyDigest, setWeeklyDigest] = useState(true)
-  const [classroomAnnouncements, setClassroomAnnouncements] = useState(true)
+  const [weeklyDigest, setWeeklyDigest] = useState(pref("weeklyDigest"))
+  const [classroomAnnouncements, setClassroomAnnouncements] = useState(pref("classroomAnnouncements"))
+  const [saving, startSaving] = useTransition()
+  const [currentPwd, setCurrentPwd] = useState("")
+  const [newPwd, setNewPwd] = useState("")
+  const [confirmPwd, setConfirmPwd] = useState("")
+  const [changingPwd, startChangingPwd] = useTransition()
+  const [deletePwd, setDeletePwd] = useState("")
+  const [deleting, startDeleting] = useTransition()
+  const [showDeleteForm, setShowDeleteForm] = useState(false)
+  const router = useRouter()
+
+  function handleSave() {
+    startSaving(async () => {
+      const result = await updateMySettings({
+        profileVisibility: publicProfile ? "public" : "private",
+        notificationPrefs: {
+          reviewBeforePublish,
+          studentSubmissionAlerts,
+          weeklyDigest,
+          classroomAnnouncements,
+        },
+      })
+      if (result.ok) toast.success("Preferencias salvas")
+      else toast.error(result.error)
+    })
+  }
 
   const approvalLabel =
     verificationStatus === "approved"
@@ -75,7 +111,10 @@ export function ProfessorSettingsClient({
             Ajuste como voce publica conteudos, recebe alertas e apresenta seu perfil.
           </p>
         </div>
-        <Button className="bg-[#1D4ED8] hover:bg-[#1E3A8A]">Salvar preferencias</Button>
+        <Button className="bg-[#1D4ED8] hover:bg-[#1E3A8A] gap-2" onClick={handleSave} disabled={saving}>
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          Salvar preferencias
+        </Button>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
@@ -199,18 +238,106 @@ export function ProfessorSettingsClient({
 
           <Card className="border-gray-100">
             <CardHeader>
-              <CardTitle className="font-display text-lg text-gray-900">Confianca da conta</CardTitle>
-              <CardDescription>Indicadores que afetam a experiencia profissional.</CardDescription>
+              <CardTitle className="font-display text-lg text-gray-900 flex items-center gap-2">
+                <KeyRound className="h-5 w-5 text-[#1D4ED8]" />
+                Trocar senha
+              </CardTitle>
+              <CardDescription>Altere a senha da sua conta a qualquer momento.</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3 text-sm text-gray-600">
-              <div className="flex items-center justify-between rounded-xl bg-gray-50 px-4 py-3">
-                <span>Status operacional</span>
-                <Badge className="bg-blue-100 text-blue-700">Professor</Badge>
-              </div>
-              <div className="flex items-center gap-2 rounded-xl border border-dashed border-blue-200 bg-blue-50/60 p-4">
-                <ShieldCheck className="h-4 w-4 text-[#1D4ED8]" />
-                <p>Este mockup prepara o terreno para persistir preferencias sem quebrar o padrao existente.</p>
-              </div>
+            <CardContent className="space-y-3">
+              <Input
+                type="password"
+                placeholder="Senha atual"
+                value={currentPwd}
+                onChange={(e) => setCurrentPwd(e.target.value)}
+                autoComplete="current-password"
+              />
+              <Input
+                type="password"
+                placeholder="Nova senha (min. 8 caracteres)"
+                value={newPwd}
+                onChange={(e) => setNewPwd(e.target.value)}
+                autoComplete="new-password"
+              />
+              <Input
+                type="password"
+                placeholder="Confirmar nova senha"
+                value={confirmPwd}
+                onChange={(e) => setConfirmPwd(e.target.value)}
+                autoComplete="new-password"
+              />
+              <Button
+                className="w-full bg-[#1D4ED8] hover:bg-[#1E3A8A] gap-2"
+                disabled={changingPwd}
+                onClick={() => {
+                  if (newPwd !== confirmPwd) { toast.error("As senhas nao coincidem"); return }
+                  startChangingPwd(async () => {
+                    const r = await changePassword(currentPwd, newPwd)
+                    if (r.ok) {
+                      toast.success("Senha alterada com sucesso")
+                      setCurrentPwd(""); setNewPwd(""); setConfirmPwd("")
+                    } else {
+                      toast.error(r.error)
+                    }
+                  })
+                }}
+              >
+                {changingPwd ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Alterar senha
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="border-red-100">
+            <CardHeader>
+              <CardTitle className="font-display text-lg text-red-700 flex items-center gap-2">
+                <Trash2 className="h-5 w-5" />
+                Excluir conta
+              </CardTitle>
+              <CardDescription>Solicitar exclusao permanente (LGPD Art. 18). Seus dados serao removidos em ate 30 dias.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {!showDeleteForm ? (
+                <Button variant="outline" className="border-red-200 text-red-700 hover:bg-red-50 w-full" onClick={() => setShowDeleteForm(true)}>
+                  Solicitar exclusao da conta
+                </Button>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-sm text-red-700 font-medium">
+                    Esta acao nao pode ser desfeita.{" "}
+                    {hasPassword ? "Confirme com sua senha:" : "Digite seu e-mail para confirmar:"}
+                  </p>
+                  <Input
+                    type={hasPassword ? "password" : "email"}
+                    placeholder={hasPassword ? "Sua senha" : email}
+                    value={deletePwd}
+                    onChange={(e) => setDeletePwd(e.target.value)}
+                  />
+                  <div className="flex gap-2">
+                    <Button variant="outline" className="flex-1" onClick={() => { setShowDeleteForm(false); setDeletePwd("") }}>
+                      Cancelar
+                    </Button>
+                    <Button
+                      className="flex-1 bg-red-600 hover:bg-red-700 gap-2"
+                      disabled={deleting}
+                      onClick={() => {
+                        startDeleting(async () => {
+                          const r = await deleteAccount(deletePwd)
+                          if (r.ok) {
+                            toast.success("Conta marcada para exclusao. Voce sera desconectado.")
+                            router.push("/login")
+                          } else {
+                            toast.error(r.error)
+                          }
+                        })
+                      }}
+                    >
+                      {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      Confirmar exclusao
+                    </Button>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

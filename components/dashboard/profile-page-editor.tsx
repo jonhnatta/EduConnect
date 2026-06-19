@@ -265,20 +265,15 @@ export function ProfilePageEditor({
             <h2 className="font-display text-2xl font-bold text-gray-900">{fullName || "Seu nome"}</h2>
             {socialStats ? (
               <div className="flex items-center gap-5 mt-2">
+                {/* Mostra só a métrica relevante ao papel: professor é seguido; aluno segue. */}
                 <div className="text-center">
                   <p className="font-display font-bold text-lg text-gray-900 leading-tight">
-                    {profileType === "professor" ? socialStats.followersCount : 0}
+                    {profileType === "professor" ? socialStats.followersCount : socialStats.followingCount}
                   </p>
                   <p className="text-xs text-gray-500 flex items-center gap-1 justify-center">
-                    <Users className="h-3 w-3" /> seguidores
+                    <Users className="h-3 w-3" />
+                    {profileType === "professor" ? "seguidores" : "seguindo"}
                   </p>
-                </div>
-                <div className="w-px h-8 bg-gray-200" />
-                <div className="text-center">
-                  <p className="font-display font-bold text-lg text-gray-900 leading-tight">
-                    {profileType === "aluno" ? socialStats.followingCount : 0}
-                  </p>
-                  <p className="text-xs text-gray-500">seguindo</p>
                 </div>
               </div>
             ) : (

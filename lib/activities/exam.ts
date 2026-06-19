@@ -186,6 +186,20 @@ export function sumOpenScores(
   return s
 }
 
+/** Quantidade de questões abertas ainda sem nota atribuída (correção manual pendente). */
+export function ungradedOpenCount(
+  exam: ActivityExamDefinition,
+  openScores: Record<string, number>
+): number {
+  let n = 0
+  for (const q of exam.questions) {
+    if (q.type !== "open") continue
+    const v = openScores[q.id]
+    if (typeof v !== "number" || Number.isNaN(v)) n++
+  }
+  return n
+}
+
 export function sanitizeOpenText(text: string): string {
   const t = text.trim().slice(0, EXAM_OPEN_TEXT_MAX)
   return t.replace(/\u0000/g, "")
@@ -229,6 +243,8 @@ export function mergeActivitySettings(
   patch: {
     attachments?: ActivityAttachment[]
     exam?: ActivityExamDefinition | null
+    /** Configuração de entrega de trabalho (settings.submission); null remove. */
+    submission?: { mode: string; maxFiles: number } | null
   }
 ): Record<string, unknown> {
   const base: Record<string, unknown> = { ...(current ?? {}) }
@@ -244,6 +260,17 @@ export function mergeActivitySettings(
       delete base.exam
     } else {
       base.exam = patch.exam
+      // Exclusividade: uma atividade com exame não tem entrega de trabalho.
+      delete base.submission
+    }
+  }
+  if (patch.submission !== undefined) {
+    if (patch.submission === null) {
+      delete base.submission
+    } else {
+      base.submission = patch.submission
+      // Exclusividade: uma atividade com entrega de trabalho não tem exame.
+      delete base.exam
     }
   }
   return base

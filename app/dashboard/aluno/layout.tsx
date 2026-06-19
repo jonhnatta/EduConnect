@@ -1,4 +1,5 @@
 import { requireAlunoAccess } from "@/lib/auth/guards"
+import { getMyUnreadCount } from "@/app/actions/notifications"
 import { AlunoLayoutClient } from "./_layout-client"
 
 export default async function AlunoLayout({
@@ -6,9 +7,8 @@ export default async function AlunoLayout({
 }: {
   children: React.ReactNode
 }) {
-  // Barreira de segurança real: consulta o banco, não o JWT.
-  // Redireciona para /dashboard/professor se user_type !== 'aluno'.
   await requireAlunoAccess()
+  const unreadCount = await getMyUnreadCount().catch(() => 0)
 
-  return <AlunoLayoutClient>{children}</AlunoLayoutClient>
+  return <AlunoLayoutClient unreadNotifications={unreadCount}>{children}</AlunoLayoutClient>
 }

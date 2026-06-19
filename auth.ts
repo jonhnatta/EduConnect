@@ -39,8 +39,8 @@ const providers = [
       if (!parsed.success) return null
 
       const { email, password } = parsed.data
-      const user = await queryOne<DbUser>(
-        `select u.id, u.email, u.password_hash, p.user_type
+      const user = await queryOne<DbUser & { deleted_at: string | null }>(
+        `select u.id, u.email, u.password_hash, p.user_type, p.deleted_at
            from public.users u
            left join public.profiles p on p.id = u.id
           where u.email = $1`,
@@ -50,6 +50,7 @@ const providers = [
       const hashToCompare = user?.password_hash ?? DUMMY_BCRYPT_HASH
       const ok = await bcrypt.compare(password, hashToCompare)
       if (!user?.password_hash || !ok) return null
+      if (user.deleted_at) return null
 
       return { id: user.id, email: user.email, userType: user.user_type ?? null }
     },
@@ -96,10 +97,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
       user.id = dbUser.id
       user.email = dbUser.email
-      const profileRow = await queryOne<{ user_type: string | null }>(
-        "select user_type from public.profiles where id = $1",
+      const profileRow = await queryOne<{ user_type: string | null; deleted_at: string | null }>(
+        "select user_type, deleted_at from public.profiles where id = $1",
         [dbUser.id]
       )
+      if (profileRow?.deleted_at) return "/login?error=AccountDeleted"
       ;(user as any).userType = profileRow?.user_type ?? null
       return true
     },

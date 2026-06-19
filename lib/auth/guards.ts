@@ -21,6 +21,7 @@ export async function requireProfessorAccess(): Promise<GuardedAccess> {
   if (!user) redirect("/login")
 
   const profile = await getProfileAccess(user.id)
+  if (profile?.deleted_at) redirect("/login?error=AccountDeleted")
   if (!profile?.user_type) redirect("/cadastro/tipo-conta")
   if (profile.user_type !== "professor") redirect("/dashboard/aluno")
 
@@ -36,6 +37,7 @@ export async function requireApprovedProfessorAccess(): Promise<GuardedAccess> {
   if (!user) redirect("/login")
 
   const profile = await getProfileAccess(user.id)
+  if (profile?.deleted_at) redirect("/login?error=AccountDeleted")
   if (!profile?.user_type) redirect("/cadastro/tipo-conta")
   if (profile.user_type !== "professor") redirect("/dashboard/aluno")
   if (!isApprovedProfessor(profile)) redirect("/dashboard/professor?status=pendente")
@@ -52,6 +54,7 @@ export async function requireAlunoAccess(): Promise<GuardedAccess> {
   if (!user) redirect("/login")
 
   const profile = await getProfileAccess(user.id)
+  if (profile?.deleted_at) redirect("/login?error=AccountDeleted")
   if (!profile?.user_type) redirect("/cadastro/tipo-conta")
   if (profile.user_type !== "aluno") redirect("/dashboard/professor")
 

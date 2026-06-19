@@ -65,6 +65,15 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // Entregas de aluno (submissions/{activityId}/{studentId}/...) são confidenciais:
+  // só o próprio aluno dono ou o professor da sala podem baixar.
+  const submissionMatch = pathname.match(
+    /^classroom-activities\/[^/]+\/submissions\/[^/]+\/([^/]+)\//
+  )
+  if (submissionMatch && !isProfessor && submissionMatch[1] !== user.id) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  }
+
   const token = process.env.BLOB_READ_WRITE_TOKEN
   if (!token) {
     return NextResponse.json({ error: "Server misconfiguration" }, { status: 500 })
