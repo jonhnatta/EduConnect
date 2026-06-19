@@ -2,20 +2,37 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 import bcrypt from "bcryptjs"
 import { dbPool } from "@/lib/db/pool"
+import { checkRateLimit } from "@/lib/security/rate-limit"
 
 export const runtime = "nodejs"
 
 const schema = z.object({
   email: z.string().email(),
-  password: z.string().min(6),
+  password: z.string().min(8).max(72),
   fullName: z.string().min(1).max(200),
   userType: z.enum(["aluno", "professor"]),
-  interests: z.array(z.string()).optional().default([]),
+  interests: z.array(z.string().max(60)).max(20).optional().default([]),
   // Aceite obrigatório de Termos + Privacidade (consentimento LGPD registrado no servidor).
   acceptedTerms: z.literal(true),
 })
 
+function clientIp(request: Request): string {
+  const fwd = request.headers.get("x-forwarded-for")
+  if (fwd) return fwd.split(",")[0]!.trim()
+  return request.headers.get("x-real-ip") ?? "unknown"
+}
+
 export async function POST(request: Request) {
+  // Rate limit por IP: freia criação em massa e enumeração via tentativa repetida.
+  const ip = clientIp(request)
+  const allowed = await checkRateLimit(`signup:${ip}`, 10, 3600)
+  if (!allowed) {
+    return NextResponse.json(
+      { ok: false, error: "Muitas tentativas. Tente novamente mais tarde." },
+      { status: 429 }
+    )
+  }
+
   let body: unknown
   try {
     body = await request.json()

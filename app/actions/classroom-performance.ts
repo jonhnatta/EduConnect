@@ -141,7 +141,7 @@ export async function getClassroomPerformanceForProfessor(
         [classroomId]
       )) ?? []
   } catch (e: any) {
-    return emptyProf(e?.message ?? "Erro ao carregar atividades")
+    return emptyProf("Erro ao carregar atividades")
   }
 
   const activities = filterEvaluativeActivities(actRows)
@@ -157,7 +157,7 @@ export async function getClassroomPerformanceForProfessor(
       )) ?? []
   } catch (e: any) {
     return {
-      ...emptyProf(e?.message ?? "Erro ao carregar membros"),
+      ...emptyProf("Erro ao carregar membros"),
       evaluativeActivityCount: evalCount,
     }
   }
@@ -238,7 +238,7 @@ export async function getClassroomPerformanceForProfessor(
       )) ?? []
   } catch (e: any) {
     return {
-      ...emptyProf(e?.message ?? "Erro ao carregar entregas"),
+      ...emptyProf("Erro ao carregar entregas"),
       evaluativeActivityCount: evalCount,
       memberCount,
     }
@@ -389,7 +389,7 @@ async function loadStudentSelfPerformanceForClassroom(
       myOverallPercent: null,
       classOverallAverage: null,
       activities: [],
-      error: e?.message ?? "Erro ao carregar atividades",
+      error: "Erro ao carregar atividades",
     }
   }
 
@@ -431,7 +431,7 @@ async function loadStudentSelfPerformanceForClassroom(
       myOverallPercent: null,
       classOverallAverage: null,
       activities: [],
-      error: e?.message ?? "Erro ao carregar suas entregas",
+      error: "Erro ao carregar suas entregas",
     }
   }
 
@@ -456,7 +456,7 @@ async function loadStudentSelfPerformanceForClassroom(
         [classroomId]
       )) ?? []
   } catch (e: any) {
-    rpcErr = { message: e?.message ?? "Erro" }
+    rpcErr = { message: "Erro" }
   }
 
   const statsByActivity = new Map<string, { avg: number; count: number }>()
@@ -604,7 +604,7 @@ export async function getProfessorStudentOverview(
       studentId,
       fullName: null,
       classrooms: [],
-      error: e?.message ?? "Erro ao carregar salas",
+      error: "Erro ao carregar salas",
     }
   }
 
@@ -630,7 +630,7 @@ export async function getProfessorStudentOverview(
       studentId,
       fullName: null,
       classrooms: [],
-      error: e?.message ?? "Erro ao carregar membros",
+      error: "Erro ao carregar membros",
     }
   }
 

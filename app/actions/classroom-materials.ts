@@ -149,7 +149,7 @@ export async function listMaterialsForClassroomAsProfessor(
     )
     return { rows: data ?? [], error: null }
   } catch (e: any) {
-    return { rows: [], error: e?.message ?? "Erro ao listar materiais" }
+    return { rows: [], error: "Erro ao listar materiais" }
   }
 }
 
@@ -173,7 +173,7 @@ export async function listMaterialsForClassroomAsStudent(
     )
     return { rows: data ?? [], error: null }
   } catch (e: any) {
-    return { rows: [], error: e?.message ?? "Erro ao listar materiais" }
+    return { rows: [], error: "Erro ao listar materiais" }
   }
 }
 
@@ -222,7 +222,7 @@ export async function createMaterial(
       ]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao criar" }
+    return { ok: false, error: "Erro ao criar" }
   }
   if (!data) return { ok: false, error: "Erro ao criar" }
   revalidatePath(`/dashboard/professor/salas/${input.classroomId}`)
@@ -305,7 +305,7 @@ export async function updateMaterial(
       values
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao atualizar" }
+    return { ok: false, error: "Erro ao atualizar" }
   }
   revalidatePath(`/dashboard/professor/salas/${input.classroomId}`)
   revalidatePath(`/dashboard/aluno/salas/${input.classroomId}`)
@@ -338,7 +338,7 @@ export async function deleteMaterial(
       classroomId,
     ])
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao excluir" }
+    return { ok: false, error: "Erro ao excluir" }
   }
   revalidatePath(`/dashboard/professor/salas/${classroomId}`)
   revalidatePath(`/dashboard/aluno/salas/${classroomId}`)

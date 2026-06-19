@@ -9,6 +9,7 @@ import { getApprovedProfessorActionAccess } from "@/lib/auth/guards"
 import { query, queryOne } from "@/lib/db/query"
 import { runArticleReview } from "@/lib/content/review-agent"
 import { notifyFollowersNewContent } from "@/lib/notifications/event"
+import { checkRateLimit } from "@/lib/security/rate-limit"
 import {
   effectiveContentType,
   safeUploadFilename,
@@ -292,7 +293,7 @@ export async function createArticleDraft(): Promise<
     if (!row?.id) return { ok: false, error: "Erro ao criar rascunho" }
     return { ok: true, id: row.id }
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao criar rascunho" }
+    return { ok: false, error: "Erro ao criar rascunho" }
   }
 }
 
@@ -312,7 +313,7 @@ export async function createExerciseDraft(): Promise<
     if (!row?.id) return { ok: false, error: "Erro ao criar rascunho" }
     return { ok: true, id: row.id }
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao criar rascunho" }
+    return { ok: false, error: "Erro ao criar rascunho" }
   }
 }
 
@@ -332,7 +333,7 @@ export async function createAssessmentDraft(): Promise<
     if (!row?.id) return { ok: false, error: "Erro ao criar rascunho" }
     return { ok: true, id: row.id }
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao criar rascunho" }
+    return { ok: false, error: "Erro ao criar rascunho" }
   }
 }
 
@@ -352,7 +353,7 @@ export async function createSimuladoDraft(): Promise<
     if (!row?.id) return { ok: false, error: "Erro ao criar rascunho" }
     return { ok: true, id: row.id }
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao criar rascunho" }
+    return { ok: false, error: "Erro ao criar rascunho" }
   }
 }
 
@@ -372,7 +373,7 @@ export async function createDicaDraft(): Promise<
     if (!row?.id) return { ok: false, error: "Erro ao criar rascunho" }
     return { ok: true, id: row.id }
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao criar rascunho" }
+    return { ok: false, error: "Erro ao criar rascunho" }
   }
 }
 
@@ -439,7 +440,7 @@ export async function saveExerciseDraft(
       ]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao salvar rascunho" }
+    return { ok: false, error: "Erro ao salvar rascunho" }
   }
   revalidatePath("/dashboard/professor/criar")
   revalidatePath("/dashboard/professor/perfil")
@@ -508,7 +509,7 @@ export async function saveAssessmentDraft(
       ]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao salvar rascunho" }
+    return { ok: false, error: "Erro ao salvar rascunho" }
   }
   revalidatePath("/dashboard/professor/criar")
   revalidatePath("/dashboard/professor/perfil")
@@ -572,7 +573,7 @@ export async function saveSimuladoDraft(
       ]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao salvar rascunho" }
+    return { ok: false, error: "Erro ao salvar rascunho" }
   }
   revalidatePath("/dashboard/professor/criar")
   revalidatePath("/dashboard/professor/perfil")
@@ -650,7 +651,7 @@ export async function publishExercise(
     )
     await replaceContentItemClassrooms(input.id, input.visibility === "classrooms" ? input.classroomIds : [])
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao publicar exercicio" }
+    return { ok: false, error: "Erro ao publicar exercicio" }
   }
 
   revalidatePath("/dashboard/aluno")
@@ -749,7 +750,7 @@ export async function publishAssessment(
     )
     await replaceContentItemClassrooms(input.id, input.visibility === "classrooms" ? input.classroomIds : [])
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao publicar avaliacao" }
+    return { ok: false, error: "Erro ao publicar avaliacao" }
   }
 
   revalidatePath("/dashboard/aluno")
@@ -845,7 +846,7 @@ export async function publishSimulado(
     )
     await replaceContentItemClassrooms(input.id, input.visibility === "classrooms" ? input.classroomIds : [])
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao publicar simulado" }
+    return { ok: false, error: "Erro ao publicar simulado" }
   }
 
   revalidatePath("/dashboard/aluno")
@@ -881,7 +882,7 @@ export async function closeContentAssessment(
       [JSON.stringify(merged), contentItemId, p.user.id, ["assessment", "simulado"]]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao encerrar avaliacao" }
+    return { ok: false, error: "Erro ao encerrar avaliacao" }
   }
   revalidatePath("/dashboard/professor/criar")
   revalidatePath("/dashboard/professor/perfil")
@@ -940,7 +941,7 @@ export async function publishArticle(
     )
     await replaceContentItemClassrooms(input.id, input.visibility === "classrooms" ? input.classroomIds : [])
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao publicar artigo" }
+    return { ok: false, error: "Erro ao publicar artigo" }
   }
 
   // Agente roda em background após resposta enviada ao cliente
@@ -1032,7 +1033,7 @@ export async function saveDicaDraft(
       ]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao salvar dica" }
+    return { ok: false, error: "Erro ao salvar dica" }
   }
   revalidatePath("/dashboard/professor/criar")
   revalidatePath("/dashboard/professor/perfil")
@@ -1105,7 +1106,7 @@ export async function publishDica(
     )
     await replaceContentItemClassrooms(input.id, input.visibility === "classrooms" ? input.classroomIds : [])
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao publicar dica" }
+    return { ok: false, error: "Erro ao publicar dica" }
   }
 
   const isFirstPublish = existingRow.status !== "published"
@@ -1268,7 +1269,7 @@ export async function deleteContentItem(
   try {
     await query("delete from public.content_items where id = $1 and author_id = $2", [id, p.user.id])
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao excluir" }
+    return { ok: false, error: "Erro ao excluir" }
   }
 
   revalidatePath("/dashboard/aluno")
@@ -1814,6 +1815,10 @@ export async function createContentComment(
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return { ok: false, error: "Nao autenticado" }
 
+  if (!(await checkRateLimit(`comment:${user.id}`, 10, 60))) {
+    return { ok: false, error: "Voce esta comentando rapido demais. Aguarde um momento." }
+  }
+
   const cleanBody = body.trim()
   if (!cleanBody) return { ok: false, error: "Escreva um comentario" }
   if (cleanBody.length > COMMENT_MAX_LENGTH) {
@@ -1865,7 +1870,7 @@ export async function createContentComment(
       commentCount: countRow?.comment_count ?? 0,
     }
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao comentar" }
+    return { ok: false, error: "Erro ao comentar" }
   }
 }
 
@@ -1903,7 +1908,7 @@ export async function updateContentComment(
     revalidatePath(`/conteudo/${row.content_item_id}`)
     return { ok: true, comment: mapComment(row) }
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao editar comentario" }
+    return { ok: false, error: "Erro ao editar comentario" }
   }
 }
 
@@ -1942,7 +1947,7 @@ export async function deleteContentComment(
       commentCount: countRow?.comment_count ?? 0,
     }
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao excluir comentario" }
+    return { ok: false, error: "Erro ao excluir comentario" }
   }
 }
 
@@ -1954,6 +1959,10 @@ export async function toggleContentLike(
 > {
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return { ok: false, error: "Nao autenticado" }
+
+  if (!(await checkRateLimit(`like:${user.id}`, 60, 60))) {
+    return { ok: false, error: "Acao repetida rapido demais. Aguarde um momento." }
+  }
 
   const canView = await canViewContentItem(contentItemId, user.id)
   if (!canView) return { ok: false, error: "Conteudo nao encontrado" }
@@ -1973,7 +1982,7 @@ export async function toggleContentLike(
       )
     }
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao reagir" }
+    return { ok: false, error: "Erro ao reagir" }
   }
 
   const row = await queryOne<{ like_count: number }>(
@@ -2033,7 +2042,7 @@ export async function toggleContentSave(
       )
     }
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao salvar" }
+    return { ok: false, error: "Erro ao salvar" }
   }
 
   const row = await queryOne<{ save_count: number }>(
@@ -2123,7 +2132,7 @@ export async function recordContentShare(
       [contentItemId, user?.id ?? null, method]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao registrar compartilhamento" }
+    return { ok: false, error: "Erro ao registrar compartilhamento" }
   }
 
   const row = await queryOne<{ share_count: number }>(

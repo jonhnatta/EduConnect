@@ -164,7 +164,7 @@ export async function professorDecideAfterReview(
       )
     }
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro" }
+    return { ok: false, error: "Erro" }
   }
 
   revalidatePath("/dashboard/professor")

@@ -170,7 +170,7 @@ export async function getPlannerWeek(
         classroomSubmitted: 0,
         streakDays,
       },
-      error: e?.message ?? "Erro ao carregar salas",
+      error: "Erro ao carregar salas",
     }
   }
 
@@ -220,7 +220,7 @@ export async function getPlannerWeek(
           classroomSubmitted: 0,
           streakDays,
         },
-        error: e?.message ?? "Erro ao carregar atividades",
+        error: "Erro ao carregar atividades",
       }
     }
     activities = (actRows as any) ?? []
@@ -314,7 +314,7 @@ export async function getPlannerWeek(
         classroomSubmitted: 0,
         streakDays,
       },
-      error: e?.message ?? "Erro",
+      error: "Erro",
     }
   }
 
@@ -427,7 +427,7 @@ export async function createPersonalPlannerTask(input: {
     revalidatePath(PLAN_PATH)
     return { ok: true, id: data.id }
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro" }
+    return { ok: false, error: "Erro" }
   }
 }
 
@@ -468,7 +468,7 @@ export async function updatePersonalPlannerTask(
       params
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro" }
+    return { ok: false, error: "Erro" }
   }
   revalidatePath(PLAN_PATH)
   return { ok: true }
@@ -486,7 +486,7 @@ export async function deletePersonalPlannerTask(
       [id, user.id]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro" }
+    return { ok: false, error: "Erro" }
   }
   revalidatePath(PLAN_PATH)
   return { ok: true }
@@ -510,7 +510,7 @@ export async function togglePersonalPlannerTaskDone(
       [id, user.id, isDone, doneAt]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro" }
+    return { ok: false, error: "Erro" }
   }
   revalidatePath(PLAN_PATH)
   return { ok: true }
@@ -552,6 +552,6 @@ export async function saveOnboardingAnswers(answers: {
     )
     return { ok: true }
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao salvar" }
+    return { ok: false, error: "Erro ao salvar" }
   }
 }
