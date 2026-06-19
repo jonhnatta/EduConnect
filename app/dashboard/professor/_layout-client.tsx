@@ -15,6 +15,7 @@ import {
   UsersRound,
   BarChart3,
   Bot,
+  Rss,
   Settings,
   User,
   Bell,
@@ -38,6 +39,7 @@ import {
 const navigation = [
   { name: "Inicio", href: "/dashboard/professor", icon: Home },
   { name: "Criar Conteudo", href: "/dashboard/professor/criar", icon: PenSquare },
+  { name: "Feed", href: "/dashboard/professor/feed", icon: Rss },
   { name: "Minhas Salas", href: "/dashboard/professor/salas", icon: Users },
   { name: "Meus Alunos", href: "/dashboard/professor/alunos", icon: UsersRound },
   { name: "Seguidores", href: "/dashboard/professor/seguidores", icon: UsersRound },

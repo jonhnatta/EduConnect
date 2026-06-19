@@ -112,6 +112,64 @@ export async function toggleFollow(
   }
 }
 
+/**
+ * Professor segue / deixa de seguir outro professor (comunidade).
+ * Reaproveita teacher_followers (student_id = id do professor seguidor).
+ */
+export async function toggleProfessorFollow(
+  targetProfessorId: string
+): Promise<{ ok: true; following: boolean } | { ok: false; error: string }> {
+  const user = await getAuthedUser().catch(() => null)
+  if (!user) return { ok: false, error: "Nao autenticado" }
+  if (user.id === targetProfessorId) return { ok: false, error: "Operação inválida" }
+
+  const me = await queryOne<{ user_type: string }>(
+    "SELECT user_type FROM public.profiles WHERE id = $1",
+    [user.id]
+  )
+  if (me?.user_type !== "professor") {
+    return { ok: false, error: "Apenas professores podem seguir colegas por aqui" }
+  }
+
+  const target = await queryOne<{ user_type: string }>(
+    "SELECT user_type FROM public.profiles WHERE id = $1",
+    [targetProfessorId]
+  )
+  if (target?.user_type !== "professor") return { ok: false, error: "Professor não encontrado" }
+
+  const existing = await queryOne<{ id: string }>(
+    "SELECT id FROM public.teacher_followers WHERE teacher_id = $1 AND student_id = $2",
+    [targetProfessorId, user.id]
+  )
+
+  if (existing) {
+    await query(
+      "DELETE FROM public.teacher_followers WHERE teacher_id = $1 AND student_id = $2",
+      [targetProfessorId, user.id]
+    )
+    return { ok: true, following: false }
+  }
+
+  const inserted = await queryOne<{ student_id: string }>(
+    "INSERT INTO public.teacher_followers (teacher_id, student_id) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING student_id",
+    [targetProfessorId, user.id]
+  )
+  if (inserted) {
+    const meRow = await queryOne<{ full_name: string | null }>(
+      "SELECT full_name FROM public.profiles WHERE id = $1",
+      [user.id]
+    )
+    const name = meRow?.full_name?.trim() || "Um professor"
+    await createNotification({
+      recipientId: targetProfessorId,
+      type: "new_follower",
+      actorId: user.id,
+      message: `${name} começou a te seguir`,
+    }).catch((err) => console.error("[professor follow notify]", err))
+  }
+  return { ok: true, following: true }
+}
+
 export type FollowerItem = {
   id: string
   full_name: string

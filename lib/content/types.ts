@@ -37,6 +37,9 @@ export type ContentReviewResult = {
 
 export type ContentVisibility = "public" | "classrooms" | "private"
 
+/** Audiência de conteúdo público: todos · só alunos · só professores (comunidade). */
+export type ContentAudience = "all" | "students" | "teachers"
+
 export type ContentItemSettings = {
   tags?: string[]
   disciplina?: string
@@ -70,6 +73,7 @@ export type ContentItemRow = {
   body_html: string | null
   status: ContentItemStatus
   visibility: ContentVisibility
+  audience: ContentAudience
   published_at: string | null
   settings: ContentItemSettings
   like_count: number

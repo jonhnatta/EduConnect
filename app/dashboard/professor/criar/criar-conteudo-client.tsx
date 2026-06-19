@@ -41,7 +41,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { DICA_MAX_IMAGES, type ContentVisibility } from "@/lib/content/types"
+import { DICA_MAX_IMAGES, type ContentVisibility, type ContentAudience } from "@/lib/content/types"
 import {
   parseExamFromSettings,
   totalExamPoints,
@@ -248,6 +248,7 @@ export function CriarConteudoClient({
   const [articleDraftId, setArticleDraftId] = useState<string | null>(null)
   const [articleBodyHtml, setArticleBodyHtml] = useState("")
   const [visibility, setVisibility] = useState<ContentVisibility>("public")
+  const [audience, setAudience] = useState<ContentAudience>("all")
   const [classrooms, setClassrooms] = useState<ClassroomOpt[]>([])
   const [selectedClassroomIds, setSelectedClassroomIds] = useState<string[]>([])
   const [publishing, setPublishing] = useState(false)
@@ -333,6 +334,7 @@ export function CriarConteudoClient({
         })
         setTags(a.settings.tags ?? [])
         setVisibility(a.visibility)
+        setAudience(a.audience ?? "all")
         setSelectedClassroomIds(a.classroomIds)
         setLoadedArticleStatus(a.status)
         setCoverUrl(a.settings.coverUrl ?? null)
@@ -364,6 +366,7 @@ export function CriarConteudoClient({
         })
         setTags(d.settings.tags ?? [])
         setVisibility(d.visibility)
+        setAudience(d.audience ?? "all")
         setSelectedClassroomIds(d.classroomIds)
         setLoadedArticleStatus(d.status)
         setCoverUrl(null)
@@ -381,6 +384,7 @@ export function CriarConteudoClient({
         })
         setTags(e.settings.tags ?? [])
         setVisibility(e.visibility)
+        setAudience(e.audience ?? "all")
         setSelectedClassroomIds(e.classroomIds)
         setLoadedArticleStatus(e.status)
         setCoverUrl(e.settings.coverUrl ?? null)
@@ -402,6 +406,7 @@ export function CriarConteudoClient({
         })
         setTags(e.settings.tags ?? [])
         setVisibility(e.visibility)
+        setAudience(e.audience ?? "all")
         setSelectedClassroomIds(e.classroomIds)
         setLoadedArticleStatus(e.status)
         setCoverUrl(e.settings.coverUrl ?? null)
@@ -423,6 +428,7 @@ export function CriarConteudoClient({
         })
         setTags(e.settings.tags ?? [])
         setVisibility(e.visibility)
+        setAudience(e.audience ?? "all")
         setSelectedClassroomIds(e.classroomIds)
         setLoadedArticleStatus(e.status)
         setCoverUrl(e.settings.coverUrl ?? null)
@@ -582,6 +588,7 @@ export function CriarConteudoClient({
       title,
       bodyHtml: articleBodyHtml,
       visibility,
+      audience: visibility === "public" ? audience : "all",
       classroomIds: visibility === "classrooms" ? selectedClassroomIds : undefined,
       settings: {
         tags,
@@ -700,6 +707,7 @@ export function CriarConteudoClient({
       title,
       bodyHtml: exerciseIntroHtml,
       visibility,
+      audience: visibility === "public" ? audience : "all",
       classroomIds: visibility === "classrooms" ? selectedClassroomIds : undefined,
       settings: {
         tags,
@@ -834,6 +842,7 @@ export function CriarConteudoClient({
       title,
       bodyHtml: assessmentIntroHtml,
       visibility,
+      audience: visibility === "public" ? audience : "all",
       classroomIds: visibility === "classrooms" ? selectedClassroomIds : undefined,
       settings: {
         tags,
@@ -970,6 +979,7 @@ export function CriarConteudoClient({
       title,
       bodyHtml: simuladoIntroHtml,
       visibility,
+      audience: visibility === "public" ? audience : "all",
       classroomIds: visibility === "classrooms" ? selectedClassroomIds : undefined,
       settings: {
         tags,
@@ -1060,6 +1070,7 @@ export function CriarConteudoClient({
       title,
       bodyHtml: dicaBodyText,
       visibility,
+      audience: visibility === "public" ? audience : "all",
       classroomIds: visibility === "classrooms" ? selectedClassroomIds : undefined,
       settings: {
         tags,
@@ -1636,6 +1647,39 @@ export function CriarConteudoClient({
                     </label>
                   </div>
 
+                  {visibility === "public" && (
+                    <div className="pt-3 space-y-2 border-t border-gray-200 mt-2">
+                      <Label className="text-sm">Para quem publicar</Label>
+                      <div className="grid sm:grid-cols-3 gap-2">
+                        {[
+                          { key: "all", label: "Todos", desc: "Alunos e professores" },
+                          { key: "students", label: "So alunos", desc: "Aparece no feed dos alunos" },
+                          { key: "teachers", label: "So professores", desc: "Comunidade de professores" },
+                        ].map((opt) => (
+                          <label
+                            key={opt.key}
+                            className={`flex flex-col gap-0.5 rounded-lg border p-3 cursor-pointer transition-colors ${
+                              audience === opt.key
+                                ? "border-[#1D4ED8] bg-blue-50"
+                                : "border-gray-200 hover:bg-gray-50"
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              <input
+                                type="radio"
+                                name="audience"
+                                checked={audience === opt.key}
+                                onChange={() => setAudience(opt.key as ContentAudience)}
+                              />
+                              <span className="font-medium text-sm text-gray-900">{opt.label}</span>
+                            </span>
+                            <span className="text-xs text-gray-500 pl-6">{opt.desc}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {visibility === "classrooms" && (
                     <div className="pt-2 space-y-2 border-t border-gray-200 mt-2">
                       <p className="text-sm text-gray-600">Selecione as turmas</p>
@@ -1826,6 +1870,39 @@ export function CriarConteudoClient({
                     </label>
                   </div>
 
+                  {visibility === "public" && (
+                    <div className="pt-3 space-y-2 border-t border-gray-200 mt-2">
+                      <Label className="text-sm">Para quem publicar</Label>
+                      <div className="grid sm:grid-cols-3 gap-2">
+                        {[
+                          { key: "all", label: "Todos", desc: "Alunos e professores" },
+                          { key: "students", label: "So alunos", desc: "Aparece no feed dos alunos" },
+                          { key: "teachers", label: "So professores", desc: "Comunidade de professores" },
+                        ].map((opt) => (
+                          <label
+                            key={opt.key}
+                            className={`flex flex-col gap-0.5 rounded-lg border p-3 cursor-pointer transition-colors ${
+                              audience === opt.key
+                                ? "border-[#1D4ED8] bg-blue-50"
+                                : "border-gray-200 hover:bg-gray-50"
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              <input
+                                type="radio"
+                                name="audience"
+                                checked={audience === opt.key}
+                                onChange={() => setAudience(opt.key as ContentAudience)}
+                              />
+                              <span className="font-medium text-sm text-gray-900">{opt.label}</span>
+                            </span>
+                            <span className="text-xs text-gray-500 pl-6">{opt.desc}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {visibility === "classrooms" && (
                     <div className="pt-2 space-y-2 border-t border-gray-200 mt-2">
                       <p className="text-sm text-gray-600">Selecione as turmas</p>
@@ -2010,6 +2087,39 @@ export function CriarConteudoClient({
                       </span>
                     </label>
                   </div>
+
+                  {visibility === "public" && (
+                    <div className="pt-3 space-y-2 border-t border-gray-200 mt-2">
+                      <Label className="text-sm">Para quem publicar</Label>
+                      <div className="grid sm:grid-cols-3 gap-2">
+                        {[
+                          { key: "all", label: "Todos", desc: "Alunos e professores" },
+                          { key: "students", label: "So alunos", desc: "Aparece no feed dos alunos" },
+                          { key: "teachers", label: "So professores", desc: "Comunidade de professores" },
+                        ].map((opt) => (
+                          <label
+                            key={opt.key}
+                            className={`flex flex-col gap-0.5 rounded-lg border p-3 cursor-pointer transition-colors ${
+                              audience === opt.key
+                                ? "border-[#1D4ED8] bg-blue-50"
+                                : "border-gray-200 hover:bg-gray-50"
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              <input
+                                type="radio"
+                                name="audience"
+                                checked={audience === opt.key}
+                                onChange={() => setAudience(opt.key as ContentAudience)}
+                              />
+                              <span className="font-medium text-sm text-gray-900">{opt.label}</span>
+                            </span>
+                            <span className="text-xs text-gray-500 pl-6">{opt.desc}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {visibility === "classrooms" && (
                     <div className="pt-2 space-y-2 border-t border-gray-200 mt-2">
@@ -2221,6 +2331,39 @@ export function CriarConteudoClient({
                       </span>
                     </label>
                   </div>
+
+                  {visibility === "public" && (
+                    <div className="pt-3 space-y-2 border-t border-gray-200 mt-2">
+                      <Label className="text-sm">Para quem publicar</Label>
+                      <div className="grid sm:grid-cols-3 gap-2">
+                        {[
+                          { key: "all", label: "Todos", desc: "Alunos e professores" },
+                          { key: "students", label: "So alunos", desc: "Aparece no feed dos alunos" },
+                          { key: "teachers", label: "So professores", desc: "Comunidade de professores" },
+                        ].map((opt) => (
+                          <label
+                            key={opt.key}
+                            className={`flex flex-col gap-0.5 rounded-lg border p-3 cursor-pointer transition-colors ${
+                              audience === opt.key
+                                ? "border-[#1D4ED8] bg-blue-50"
+                                : "border-gray-200 hover:bg-gray-50"
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              <input
+                                type="radio"
+                                name="audience"
+                                checked={audience === opt.key}
+                                onChange={() => setAudience(opt.key as ContentAudience)}
+                              />
+                              <span className="font-medium text-sm text-gray-900">{opt.label}</span>
+                            </span>
+                            <span className="text-xs text-gray-500 pl-6">{opt.desc}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {visibility === "classrooms" && (
                     <div className="pt-2 space-y-2 border-t border-gray-200 mt-2">
