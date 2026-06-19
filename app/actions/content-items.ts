@@ -442,7 +442,7 @@ export async function saveExerciseDraft(
     return { ok: false, error: e?.message ?? "Erro ao salvar rascunho" }
   }
   revalidatePath("/dashboard/professor/criar")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -511,7 +511,7 @@ export async function saveAssessmentDraft(
     return { ok: false, error: e?.message ?? "Erro ao salvar rascunho" }
   }
   revalidatePath("/dashboard/professor/criar")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -575,7 +575,7 @@ export async function saveSimuladoDraft(
     return { ok: false, error: e?.message ?? "Erro ao salvar rascunho" }
   }
   revalidatePath("/dashboard/professor/criar")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -655,7 +655,7 @@ export async function publishExercise(
 
   revalidatePath("/dashboard/aluno")
   revalidatePath("/dashboard/professor")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -754,7 +754,7 @@ export async function publishAssessment(
 
   revalidatePath("/dashboard/aluno")
   revalidatePath("/dashboard/professor")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -850,7 +850,7 @@ export async function publishSimulado(
 
   revalidatePath("/dashboard/aluno")
   revalidatePath("/dashboard/professor")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -884,7 +884,7 @@ export async function closeContentAssessment(
     return { ok: false, error: e?.message ?? "Erro ao encerrar avaliacao" }
   }
   revalidatePath("/dashboard/professor/criar")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${contentItemId}`)
   return { ok: true }
 }
@@ -954,7 +954,7 @@ export async function publishArticle(
   })
 
   revalidatePath("/dashboard/professor")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -1035,7 +1035,7 @@ export async function saveDicaDraft(
     return { ok: false, error: e?.message ?? "Erro ao salvar dica" }
   }
   revalidatePath("/dashboard/professor/criar")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -1127,7 +1127,7 @@ export async function publishDica(
 
   revalidatePath("/dashboard/aluno")
   revalidatePath("/dashboard/professor")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${input.id}`)
   return { ok: true }
 }
@@ -1273,7 +1273,7 @@ export async function deleteContentItem(
 
   revalidatePath("/dashboard/aluno")
   revalidatePath("/dashboard/professor")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${id}`)
   return { ok: true }
 }
@@ -1856,7 +1856,7 @@ export async function createContentComment(
 
     revalidatePath("/dashboard/aluno")
     revalidatePath("/dashboard/professor")
-    revalidatePath("/dashboard/professor/conteudos")
+    revalidatePath("/dashboard/professor/perfil")
     revalidatePath(`/conteudo/${contentItemId}`)
 
     return {
@@ -1932,7 +1932,7 @@ export async function deleteContentComment(
 
     revalidatePath("/dashboard/aluno")
     revalidatePath("/dashboard/professor")
-    revalidatePath("/dashboard/professor/conteudos")
+    revalidatePath("/dashboard/professor/perfil")
     revalidatePath(`/conteudo/${deleted.content_item_id}`)
 
     return {

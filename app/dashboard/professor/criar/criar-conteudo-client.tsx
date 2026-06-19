@@ -605,7 +605,7 @@ export function CriarConteudoClient({
     }
     resetArticleDraftCreation()
     toast.success("Artigo enviado para revisao da IA")
-    router.push("/dashboard/professor/conteudos")
+    router.push("/dashboard/professor/perfil")
   }
 
   const handleSaveExerciseDraft = async () => {
@@ -726,7 +726,7 @@ export function CriarConteudoClient({
     resetExerciseDraftCreation()
     if (loadedArticleStatus === "published") {
       toast.success("Alteracoes salvas")
-      router.push("/dashboard/professor/conteudos")
+      router.push("/dashboard/professor/perfil")
     } else {
       toast.success("Exercicio publicado")
       router.push(`/conteudo/${cid}`)
@@ -863,7 +863,7 @@ export function CriarConteudoClient({
     resetAssessmentDraftCreation()
     if (loadedArticleStatus === "published") {
       toast.success("Alteracoes salvas")
-      router.push("/dashboard/professor/conteudos")
+      router.push("/dashboard/professor/perfil")
     } else {
       toast.success("Avaliacao publicada")
       router.push(`/conteudo/${cid}`)
@@ -1000,7 +1000,7 @@ export function CriarConteudoClient({
     resetSimuladoDraftCreation()
     if (loadedArticleStatus === "published") {
       toast.success("Alteracoes salvas")
-      router.push("/dashboard/professor/conteudos")
+      router.push("/dashboard/professor/perfil")
     } else {
       toast.success("Simulado publicado")
       router.push(`/conteudo/${cid}`)
@@ -1088,7 +1088,7 @@ export function CriarConteudoClient({
     resetDicaDraftCreation()
     if (loadedArticleStatus === "published") {
       toast.success("Alteracoes salvas")
-      router.push("/dashboard/professor/conteudos")
+      router.push("/dashboard/professor/perfil")
     } else {
       toast.success("Dica publicada")
       router.push(`/conteudo/${contentId}`)
@@ -1189,7 +1189,7 @@ export function CriarConteudoClient({
 
   const goBackFromEditor = () => {
     if (initialEditId) {
-      router.push("/dashboard/professor/conteudos")
+      router.push("/dashboard/professor/perfil")
       return
     }
     setStep("tipo")
@@ -1359,7 +1359,7 @@ export function CriarConteudoClient({
             size="sm"
             className="w-full shrink-0 gap-2 border-[#1D4ED8] text-[#1D4ED8] hover:bg-blue-50 sm:w-auto sm:self-center"
           >
-            <Link href="/dashboard/professor/conteudos">
+            <Link href="/dashboard/professor/perfil">
               <LayoutGrid className="h-4 w-4" />
               Meu feed
             </Link>

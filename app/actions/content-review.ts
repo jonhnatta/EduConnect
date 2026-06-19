@@ -168,7 +168,7 @@ export async function professorDecideAfterReview(
   }
 
   revalidatePath("/dashboard/professor")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
   revalidatePath(`/conteudo/${contentItemId}`)
   return { ok: true }
 }

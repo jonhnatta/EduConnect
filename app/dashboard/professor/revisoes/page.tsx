@@ -168,7 +168,7 @@ export default async function ProfessorRevisoesPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               <Button asChild variant="outline" className="w-full justify-start">
-                <Link href="/dashboard/professor/conteudos">Abrir meus conteudos</Link>
+                <Link href="/dashboard/professor/perfil">Abrir meus conteudos</Link>
               </Button>
               <Button asChild variant="outline" className="w-full justify-start">
                 <Link href="/dashboard/professor/analise">Ver analise geral</Link>

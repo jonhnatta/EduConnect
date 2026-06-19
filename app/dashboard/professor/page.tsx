@@ -100,7 +100,7 @@ export default async function ProfessorFeedPage() {
           <div className="bg-white rounded-xl border border-gray-100">
             <div className="p-4 border-b border-gray-100 flex items-center justify-between">
               <h2 className="font-display font-semibold text-gray-900">Minhas Publicacoes</h2>
-              <Link href="/dashboard/professor/conteudos" className="text-sm text-[#1D4ED8] hover:underline flex items-center gap-1">
+              <Link href="/dashboard/professor/perfil" className="text-sm text-[#1D4ED8] hover:underline flex items-center gap-1">
                 Ver todas <ChevronRight className="h-4 w-4" />
               </Link>
             </div>

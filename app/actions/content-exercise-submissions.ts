@@ -93,7 +93,7 @@ function mapRow(data: Record<string, unknown>): ContentExerciseSubmissionRow {
 function revalidateContentExercisePaths(contentItemId: string) {
   revalidatePath(`/conteudo/${contentItemId}`)
   revalidatePath("/dashboard/aluno")
-  revalidatePath("/dashboard/professor/conteudos")
+  revalidatePath("/dashboard/professor/perfil")
 }
 
 /** Prova sem gabarito (aluno com acesso ao conteudo). */
