@@ -24,12 +24,19 @@
 
 Infra nova: `scripts/039_rate_limits.sql` + `lib/security/rate-limit.ts`.
 
-## 🔴 OPERACIONAL — fazer antes do go-live (não é código)
+## 🔴 OPERACIONAL — runbook de go-live
 
-- **B1 — App roda como SUPERUSER do Postgres (RLS inerte).** Rodar `scripts/024_least_privilege_app_role.sql` (ou criar role da app sem `SUPERUSER`/`BYPASSRLS`) no banco de produção. Sem isso, qualquer falha tem raio de impacto máximo.
-- **B2 — Rotacionar TODOS os segredos.** `AUTH_SECRET`, `AUTH_GOOGLE_SECRET`, `OPENAI_API_KEY`, `XAI_API_KEY`, `RESEND_API_KEY`, `BLOB_READ_WRITE_TOKEN`, `S3_SECRET_KEY` circularam em texto plano → tratar como comprometidos. Gerar novos e usar o cofre de variáveis do provedor (nunca `.env` em disco no servidor). `.env` já está fora do git (confirmado).
-- **H3 (deploy) — TLS:** em produção definir `DATABASE_SSL_CA` (certificado do provedor). Não usar `DATABASE_SSL_INSECURE=true`.
-- **M4 — `AUTH_URL=https://...` em produção** para o cookie de sessão ganhar a flag `Secure` (NextAuth define `secure` com base na URL https).
+> Ferramentas já preparadas: `scripts/040_runtime_role.sql` (B1) e `.env.production.example` (B2/H3/M4).
+> Os passos abaixo **exigem acesso de produção / aos provedores** e só podem ser concluídos por você.
+
+- **B1 — App roda como SUPERUSER do Postgres.** Observação importante: o `app_user` é o *superuser de bootstrap* e **não pode** ser rebaixado (`024` não se aplica). Use o **`scripts/040_runtime_role.sql`** (já criado e validado localmente): cria o papel `app_runtime` `NOSUPERUSER` com os grants necessários (mantém `BYPASSRLS` para o app seguir funcionando, mas remove o raio de RCE). Depois aponte `DATABASE_URL` de produção para `app_runtime`. Migrations continuam rodando com o superuser.
+- **B2 — Rotacionar TODOS os segredos** (vazaram em texto plano → comprometidos):
+  - `AUTH_SECRET`: **já rotacionado localmente** (`openssl rand -base64 48`). Gere **outro** para produção.
+  - `AUTH_GOOGLE_SECRET` (Google Cloud Console), `OPENAI_API_KEY`, `XAI_API_KEY`, `RESEND_API_KEY`, `BLOB_READ_WRITE_TOKEN`, `S3_SECRET_KEY`: **revogar e reemitir** no painel de cada provedor — só você tem acesso. Guardar no cofre do host (nunca `.env` em disco no servidor).
+- **H3 (deploy) — TLS:** definir `DATABASE_SSL_CA` (PEM do provedor) em produção. O código já valida o certificado por padrão; **não** usar `DATABASE_SSL_INSECURE=true`.
+- **M4 — `AUTH_URL=https://...`** em produção (cookie de sessão ganha flag `Secure`).
+
+Template pronto com tudo isso: **`.env.production.example`**.
 
 ## 🟡 Follow-ups recomendados (pós-MVP)
 
