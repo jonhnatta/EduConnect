@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { after } from "next/server"
-import { put } from "@/lib/blob"
+import { put, del } from "@/lib/blob"
 import { randomUUID } from "crypto"
 import { auth } from "@/auth"
 import { query, queryOne } from "@/lib/db/query"
@@ -31,13 +31,14 @@ export async function POST(request: Request) {
     )
   }
 
-  const profile = await queryOne<{ user_type: string; full_name: string | null; interests: string[] | null }>(
-    "select user_type, full_name, interests from public.profiles where id = $1",
+  const profile = await queryOne<{ user_type: string; full_name: string | null; interests: string[] | null; professor_verification_doc_url: string | null }>(
+    "select user_type, full_name, interests, professor_verification_doc_url from public.profiles where id = $1",
     [userId]
   )
   if (profile?.user_type !== "professor") {
     return NextResponse.json({ ok: false, error: "Apenas professores" }, { status: 403 })
   }
+  const previousDocUrl = profile.professor_verification_doc_url
 
   let form: FormData
   try {
@@ -87,6 +88,11 @@ export async function POST(request: Request) {
        where id = $1`,
       [userId, blob.url]
     )
+
+    // Remove o documento anterior (evita acúmulo de PII de identidade órfã no storage).
+    if (previousDocUrl && previousDocUrl !== blob.url) {
+      await del(previousDocUrl).catch(() => {})
+    }
 
     // Análise automática após a resposta (não bloqueia o upload).
     const isImage = /^image\/(jpeg|png|webp)$/i.test(contentType)

@@ -3,6 +3,7 @@
 import { query, queryOne } from "@/lib/db/query"
 import { getAuthedUser, requireAuthedUser } from "@/lib/auth/user"
 import { createNotification } from "@/lib/notifications/event"
+import { checkRateLimit } from "@/lib/security/rate-limit"
 
 type FollowState = {
   following: boolean
@@ -62,6 +63,9 @@ export async function toggleFollow(
   const studentId = await getAlunoId()
   if (!studentId) return { ok: false, error: "Apenas alunos podem seguir professores" }
   if (studentId === teacherId) return { ok: false, error: "Operação inválida" }
+  if (!(await checkRateLimit(`follow:${studentId}`, 30, 60))) {
+    return { ok: false, error: "Muitas acoes seguidas. Aguarde um momento." }
+  }
 
   const teacher = await queryOne<{ user_type: string }>(
     "SELECT user_type FROM public.profiles WHERE id = $1",
@@ -122,6 +126,9 @@ export async function toggleProfessorFollow(
   const user = await getAuthedUser().catch(() => null)
   if (!user) return { ok: false, error: "Nao autenticado" }
   if (user.id === targetProfessorId) return { ok: false, error: "Operação inválida" }
+  if (!(await checkRateLimit(`follow:${user.id}`, 30, 60))) {
+    return { ok: false, error: "Muitas acoes seguidas. Aguarde um momento." }
+  }
 
   const me = await queryOne<{ user_type: string }>(
     "SELECT user_type FROM public.profiles WHERE id = $1",

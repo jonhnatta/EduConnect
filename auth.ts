@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs"
 import { z } from "zod"
 import { queryOne } from "@/lib/db/query"
 import { ensureSocialUser } from "@/lib/auth/social-user"
+import { checkRateLimit, resetRateLimit } from "@/lib/security/rate-limit"
 
 const credentialsSchema = z.object({
   email: z.string().email(),
@@ -39,12 +40,18 @@ const providers = [
       if (!parsed.success) return null
 
       const { email, password } = parsed.data
+      const emailKey = email.toLowerCase()
+
+      // Rate limit anti brute-force: 20 tentativas / 15 min por e-mail.
+      const allowed = await checkRateLimit(`login:${emailKey}`, 20, 900)
+      if (!allowed) return null
+
       const user = await queryOne<DbUser & { deleted_at: string | null }>(
         `select u.id, u.email, u.password_hash, p.user_type, p.deleted_at
            from public.users u
            left join public.profiles p on p.id = u.id
           where u.email = $1`,
-        [email.toLowerCase()]
+        [emailKey]
       )
       // Sempre executa o compare (com hash real ou dummy) para nao vazar timing.
       const hashToCompare = user?.password_hash ?? DUMMY_BCRYPT_HASH
@@ -52,6 +59,8 @@ const providers = [
       if (!user?.password_hash || !ok) return null
       if (user.deleted_at) return null
 
+      // Login OK: zera o contador de tentativas.
+      await resetRateLimit(`login:${emailKey}`)
       return { id: user.id, email: user.email, userType: user.user_type ?? null }
     },
   }),
@@ -67,7 +76,8 @@ if (process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET) {
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  session: { strategy: "jwt" },
+  // maxAge curto reduz a janela de exposição de tokens (sem revogação server-side em JWT puro).
+  session: { strategy: "jwt", maxAge: 7 * 24 * 60 * 60, updateAge: 24 * 60 * 60 },
   providers,
   callbacks: {
     signIn: async ({ user, account, profile }) => {

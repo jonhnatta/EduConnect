@@ -8,8 +8,8 @@ export const runtime = "nodejs"
 const schema = z.object({
   email: z.string().email(),
   code: z.string().regex(/^\d{6}$/),
-  password: z.string().min(6),
-  confirmPassword: z.string().min(6),
+  password: z.string().min(8).max(72),
+  confirmPassword: z.string().min(8).max(72),
 }).refine((data) => data.password === data.confirmPassword, {
   message: "As senhas nao coincidem",
   path: ["confirmPassword"],

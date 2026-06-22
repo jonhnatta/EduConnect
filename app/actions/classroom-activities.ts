@@ -191,7 +191,7 @@ export async function listActivitiesForClassroomAsProfessor(
     )
     return { rows: data ?? [], error: null }
   } catch (e: any) {
-    return { rows: [], error: e?.message ?? "Erro ao listar atividades" }
+    return { rows: [], error: "Erro ao listar atividades" }
   }
 }
 
@@ -216,7 +216,7 @@ export async function listActivitiesForClassroomAsStudent(
     )
     return { rows: data ?? [], error: null }
   } catch (e: any) {
-    return { rows: [], error: e?.message ?? "Erro ao listar atividades" }
+    return { rows: [], error: "Erro ao listar atividades" }
   }
 }
 
@@ -370,7 +370,7 @@ export async function createActivity(
       ]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao criar" }
+    return { ok: false, error: "Erro ao criar" }
   }
   if (!data) return { ok: false, error: "Erro ao criar" }
   revalidatePath(`/dashboard/professor/salas/${input.classroomId}`)
@@ -494,7 +494,7 @@ export async function updateActivity(
       values
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao atualizar" }
+    return { ok: false, error: "Erro ao atualizar" }
   }
   revalidatePath(`/dashboard/professor/salas/${input.classroomId}`)
   revalidatePath(`/dashboard/aluno/salas/${input.classroomId}`)
@@ -530,7 +530,7 @@ export async function deleteActivity(
       classroomId,
     ])
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao excluir" }
+    return { ok: false, error: "Erro ao excluir" }
   }
   revalidatePath(`/dashboard/professor/salas/${classroomId}`)
   revalidatePath(`/dashboard/aluno/salas/${classroomId}`)

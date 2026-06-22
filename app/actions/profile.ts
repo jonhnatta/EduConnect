@@ -230,7 +230,7 @@ export async function updateDashboardProfile(input: unknown): Promise<
     return { ok: true, profile }
   } catch (e: any) {
     await client.query("rollback").catch(() => {})
-    return { ok: false, error: e?.message ?? "Erro ao salvar perfil" }
+    return { ok: false, error: "Erro ao salvar perfil" }
   } finally {
     client.release()
   }
@@ -285,7 +285,7 @@ export async function uploadProfileImage(
       contentType: sniffed,
     })
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Falha no upload" }
+    return { ok: false, error: "Falha no upload" }
   }
 
   // Store privado: a imagem e servida via rota com token, nao pela URL direta do Blob.
@@ -299,14 +299,14 @@ export async function uploadProfileImage(
   } catch (e: any) {
     // Falha ao salvar: remove o blob recem-enviado para nao deixar orfao.
     await del(blob.url, { token }).catch(() => {})
-    return { ok: false, error: e?.message ?? "Erro ao salvar imagem" }
+    return { ok: false, error: "Erro ao salvar imagem" }
   }
 
   // Best-effort: remove a imagem anterior do store (nao bloqueia o sucesso).
   const oldRef = blobRefFromStoredUrl(prev.url)
   if (oldRef) {
     await del(oldRef, { token }).catch((e) =>
-      console.error("[profile] blob anterior nao removido:", e?.message ?? e)
+      console.error("[profile] blob anterior nao removido:", e)
     )
   }
 

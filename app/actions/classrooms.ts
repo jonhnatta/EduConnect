@@ -114,7 +114,7 @@ export async function createClassroom(
         lastError = "Colisao de codigo, tentando novamente"
         continue
       }
-      lastError = e?.message ?? "Erro ao criar sala"
+      lastError = "Erro ao criar sala"
       break
     }
   }
@@ -158,7 +158,7 @@ export async function joinClassroomByInvite(
     )
     data = row?.join_classroom_by_invite ?? null
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Nao foi possivel entrar na sala" }
+    return { ok: false, error: "Nao foi possivel entrar na sala" }
   }
 
   const result = mapJoinRpc(data)
@@ -188,7 +188,7 @@ export async function listClassroomsForProfessor(): Promise<{
     )
     return { rows, error: null }
   } catch (e: any) {
-    return { rows: [], error: e?.message ?? "Erro ao carregar salas" }
+    return { rows: [], error: "Erro ao carregar salas" }
   }
 }
 
@@ -211,7 +211,7 @@ export async function listClassroomsForStudent(): Promise<{
     )
     return { rows, error: null }
   } catch (e: any) {
-    return { rows: [], error: e?.message ?? "Erro ao carregar salas" }
+    return { rows: [], error: "Erro ao carregar salas" }
   }
 }
 
@@ -227,6 +227,9 @@ export type PublicClassroomItem = {
 }
 
 export async function listPublicClassrooms(limit = 30): Promise<PublicClassroomItem[]> {
+  // Server action é endpoint POST: exige autenticação (não confiar só no guard da página).
+  const user = await requireAuthedUser().catch(() => null)
+  if (!user) return []
   const safeLimit = Math.min(Math.max(1, Math.floor(Number(limit)) || 30), 100)
   const rows = await query<PublicClassroomItem>(
     `SELECT c.id, c.name, c.subject, c.education_level, c.description,
@@ -262,7 +265,7 @@ export async function getClassroomForProfessor(
     if (!row) return { row: null, error: "Sala nao encontrada" }
     return { row, error: null }
   } catch (e: any) {
-    return { row: null, error: e?.message ?? "Sala nao encontrada" }
+    return { row: null, error: "Sala nao encontrada" }
   }
 }
 
@@ -284,7 +287,7 @@ export async function getClassroomForStudent(
     if (!row) return { row: null, error: "Voce nao participa desta sala" }
     return { row, error: null }
   } catch (e: any) {
-    return { row: null, error: e?.message ?? "Sala nao encontrada" }
+    return { row: null, error: "Sala nao encontrada" }
   }
 }
 
@@ -309,7 +312,7 @@ export async function listMembersForClassroom(classroomId: string): Promise<{
     )
     return { members, error: null }
   } catch (e: any) {
-    return { members: [], error: e?.message ?? "Erro ao listar alunos" }
+    return { members: [], error: "Erro ao listar alunos" }
   }
 }
 
@@ -377,7 +380,7 @@ export async function listStudentsAcrossClassroomsForProfessor(
       [access.userId]
     )
   } catch (e: any) {
-    return { rows: [], total: 0, page: 1, pageSize, error: e?.message ?? "Erro ao listar salas" }
+    return { rows: [], total: 0, page: 1, pageSize, error: "Erro ao listar salas" }
   }
   if (roomList.length === 0) {
     return {
@@ -407,7 +410,7 @@ export async function listStudentsAcrossClassroomsForProfessor(
       [classroomIds]
     )
   } catch (e: any) {
-    return { rows: [], total: 0, page: 1, pageSize, error: e?.message ?? "Erro ao listar matriculas" }
+    return { rows: [], total: 0, page: 1, pageSize, error: "Erro ao listar matriculas" }
   }
 
   const byStudent = new Map<string, Map<string, ProfessorStudentClassroomRef>>()
@@ -448,7 +451,7 @@ export async function listStudentsAcrossClassroomsForProfessor(
         profiles.push({ id: p.id, full_name: p.full_name ?? null })
       }
     } catch (e: any) {
-      return { rows: [], total: 0, page: 1, pageSize, error: e?.message ?? "Erro ao carregar perfis" }
+      return { rows: [], total: 0, page: 1, pageSize, error: "Erro ao carregar perfis" }
     }
   }
 
@@ -506,7 +509,7 @@ export async function getClassroomPreviewByInviteCode(rawCode: string): Promise<
     )
     row = r
   } catch (e: any) {
-    return { preview: null, error: e?.message ?? "Erro ao buscar sala" }
+    return { preview: null, error: "Erro ao buscar sala" }
   }
   if (!row) return { preview: null, error: null }
 
@@ -539,7 +542,7 @@ export async function removeClassroomMember(
       studentId,
     ])
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao remover aluno" }
+    return { ok: false, error: "Erro ao remover aluno" }
   }
   revalidatePath(`/dashboard/professor/salas/${classroomId}`)
   revalidatePath("/dashboard/professor/salas")
@@ -571,7 +574,7 @@ export async function updateClassroomMural(
       [trimmed || null, classroomId, user.id]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao atualizar mural" }
+    return { ok: false, error: "Erro ao atualizar mural" }
   }
   revalidateClassroomMuralPaths(classroomId)
   return { ok: true }
@@ -638,7 +641,7 @@ export async function uploadClassroomCover(
     )
   } catch (e: any) {
     await del(pathname, { token }).catch(() => {})
-    return { ok: false, error: e?.message ?? "Erro ao salvar capa" }
+    return { ok: false, error: "Erro ao salvar capa" }
   }
 
   if (previousPathname) {
@@ -677,7 +680,7 @@ export async function removeClassroomCover(
       [classroomId, user.id]
     )
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao remover capa" }
+    return { ok: false, error: "Erro ao remover capa" }
   }
 
   await del(pathname, { token }).catch(() => {})
@@ -695,7 +698,7 @@ export async function leaveClassroom(classroomId: string): Promise<{ ok: true } 
       user.id,
     ])
   } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Erro ao sair da sala" }
+    return { ok: false, error: "Erro ao sair da sala" }
   }
   revalidatePath("/dashboard/aluno/salas")
   return { ok: true }
@@ -765,6 +768,6 @@ export async function getProfessorPendingActivities(): Promise<{
 
     return { activities, error: null }
   } catch (e: any) {
-    return { activities: [], error: e?.message ?? "Erro ao carregar atividades" }
+    return { activities: [], error: "Erro ao carregar atividades" }
   }
 }

@@ -55,7 +55,10 @@ async function fetchTopIds(): Promise<Set<string>> {
 export async function listProfessores(
   filters: ProfessoresFilters = {}
 ): Promise<ProfessoresPage> {
-  const { q, disciplina, offset = 0, limit = PAGE_SIZE } = filters
+  const { q, disciplina } = filters
+  // Clamp de paginação (evita LIMIT/OFFSET abusivos / DoS de leitura).
+  const limit = Math.min(Math.max(1, Math.floor(Number(filters.limit)) || PAGE_SIZE), 50)
+  const offset = Math.max(0, Math.floor(Number(filters.offset)) || 0)
 
   const params: unknown[] = []
   const conditions: string[] = [
