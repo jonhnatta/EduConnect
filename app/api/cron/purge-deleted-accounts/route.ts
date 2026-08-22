@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
-import { query } from "@/lib/db/query"
+import { withTransaction } from "@/lib/db/transaction"
+import { addOutboxEvent } from "@/lib/queue/outbox"
 
 /**
  * LGPD Art. 18 — Hard-delete de contas marcadas há mais de 30 dias.
@@ -12,21 +13,28 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  // Deleta users referenciados pelos profiles a expirar;
-  // a FK profiles.id -> users.id garante que profiles também é removido (cascade ou direto).
-  const deleted = await query<{ id: string }>(
-    `WITH to_delete AS (
-       SELECT id FROM public.profiles
-       WHERE deleted_at IS NOT NULL
-         AND deleted_at < now() - INTERVAL '30 days'
-     ),
-     del_profiles AS (
-       DELETE FROM public.profiles WHERE id IN (SELECT id FROM to_delete) RETURNING id
-     )
-     DELETE FROM public.users WHERE id IN (SELECT id FROM to_delete) RETURNING id`
-  )
+  const queued = await withTransaction(async (client) => {
+    const rows = await client.query<{ id: string }>(
+      `select id from public.profiles
+        where deleted_at is not null
+          and deleted_at < timezone('utc'::text, now()) - interval '30 days'
+        order by deleted_at
+        for update skip locked
+        limit 100`
+    )
+    for (const row of rows.rows) {
+      await addOutboxEvent(client, {
+        queueName: "account.purge",
+        eventType: "account.retention_expired",
+        dedupKey: `account-purge:${row.id}`,
+        aggregateType: "profile",
+        aggregateId: row.id,
+        payload: { userId: row.id },
+      })
+    }
+    return rows.rowCount
+  })
 
-  const count = deleted?.length ?? 0
-  console.log(`[cron/purge-deleted-accounts] Removidas ${count} contas`)
-  return NextResponse.json({ deleted: count })
+  console.info(JSON.stringify({ event: "account.purge.queued", count: queued }))
+  return NextResponse.json({ queued })
 }

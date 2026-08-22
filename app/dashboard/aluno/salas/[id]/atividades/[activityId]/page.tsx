@@ -4,11 +4,14 @@ import { format } from "date-fns"
 import { ptBR } from "date-fns/locale"
 import { ArrowLeft } from "lucide-react"
 import { getActivityForStudent } from "@/app/actions/classroom-activities"
-import { getMySubmission } from "@/app/actions/activity-submissions"
+import {
+  getExamForStudent,
+  getMcqSolutionsForActivity,
+  getMySubmission,
+} from "@/app/actions/activity-submissions"
 import { getClassroomForStudent } from "@/app/actions/classrooms"
 import { StudentActivityExam } from "@/components/dashboard/student-activity-exam"
 import { StudentTrabalhoSubmission } from "@/components/dashboard/student-trabalho-submission"
-import { parseExamFromSettings, toPublicExam } from "@/lib/activities/exam"
 import { parseTrabalhoConfig } from "@/lib/activities/trabalho"
 import { ActivityAttachmentsList } from "@/components/dashboard/activity-attachments-list"
 import { Badge } from "@/components/ui/badge"
@@ -33,29 +36,24 @@ export default async function AlunoAtividadeDetalhePage({
 }) {
   const { id: classroomId, activityId } = await params
 
-  const [{ row: activity }, { row: sala }, { submission: initialSubmission }] =
+  const [
+    { row: activity },
+    { row: sala },
+    { submission: initialSubmission },
+    examResult,
+    mcqSolutionsAfterSubmit,
+  ] =
     await Promise.all([
       getActivityForStudent(classroomId, activityId),
       getClassroomForStudent(classroomId),
       getMySubmission(classroomId, activityId),
+      getExamForStudent(classroomId, activityId),
+      getMcqSolutionsForActivity(classroomId, activityId),
     ])
 
   if (!activity || !sala) notFound()
 
-  const examFull = parseExamFromSettings(activity.settings)
-  const examPublic = examFull ? toPublicExam(examFull) : null
-
-  /** Só após envio: índice da alternativa correta por questão MCQ (gabarito). */
-  const mcqSolutionsAfterSubmit =
-    examFull &&
-    initialSubmission?.status === "enviado" &&
-    examFull.questions.some((q) => q.type === "mcq")
-      ? Object.fromEntries(
-          examFull.questions
-            .filter((q) => q.type === "mcq")
-            .map((q) => [q.id, q.correctIndex])
-        )
-      : undefined
+  const examPublic = examResult.ok ? examResult.exam : null
 
   const attachments = parseActivityAttachments(activity.settings)
   const trabalhoConfig =
@@ -105,7 +103,7 @@ export default async function AlunoAtividadeDetalhePage({
           )}
         </p>
 
-        {examFull &&
+        {examPublic &&
         initialSubmission?.status === "enviado" &&
         initialSubmission.score_total != null ? (
           <div className="mt-6 rounded-xl border border-[#1D4ED8]/25 bg-gradient-to-br from-blue-50/95 to-white px-5 py-4 shadow-sm">
@@ -159,7 +157,7 @@ export default async function AlunoAtividadeDetalhePage({
             initialSubmission={initialSubmission}
             activityClosed={activity.status === "encerrada"}
             maxScore={activity.max_score}
-            mcqSolutionsAfterSubmit={mcqSolutionsAfterSubmit}
+            mcqSolutionsAfterSubmit={mcqSolutionsAfterSubmit ?? undefined}
           />
         ) : trabalhoConfig ? (
           <StudentTrabalhoSubmission

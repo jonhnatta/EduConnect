@@ -1,37 +1,97 @@
 services:
+  clamav:
+    image: clamav/clamav:1.4.3
+    # A imagem oficial desta versao nao publica manifest arm64; Docker Desktop
+    # executa este servico via emulacao em Macs Apple Silicon.
+    platform: linux/amd64
+    restart: unless-stopped
+    volumes:
+      - clamdata:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --ping 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    mem_limit: 1536m
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+
+  redis-queue:
+    image: redis:7.4.7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory-policy
+      - noeviction
+      - --requirepass
+      - ${REDIS_QUEUE_PASSWORD:?REDIS_QUEUE_PASSWORD must be set}
+    environment:
+      REDISCLI_AUTH: ${REDIS_QUEUE_PASSWORD:?REDIS_QUEUE_PASSWORD must be set}
+    volumes:
+      - redisqueue:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 512m
+    networks: [backend]
+
+  redis-cache:
+    image: redis:7.4.7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lfu
+      - --requirepass
+      - ${REDIS_CACHE_PASSWORD:?REDIS_CACHE_PASSWORD must be set}
+    environment:
+      REDISCLI_AUTH: ${REDIS_CACHE_PASSWORD:?REDIS_CACHE_PASSWORD must be set}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 320m
+    networks: [backend]
+
   db:
     image: postgres:17-alpine
-    container_name: edu-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-app_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_DB: ${POSTGRES_DB:-appdb}
-    ports:
-      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # Aplicado automaticamente apenas na PRIMEIRA inicializacao (volume vazio),
-      # em ordem alfabetica, rodando como POSTGRES_USER.
-      - ./scripts/100_bootstrap_postgres.sql:/docker-entrypoint-initdb.d/100_bootstrap_postgres.sql:ro
-      - ./scripts/200_app_schema_postgres.sql:/docker-entrypoint-initdb.d/200_app_schema_postgres.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app_user} -d ${POSTGRES_DB:-appdb}"]
       interval: 5s
       timeout: 5s
       retries: 10
+    mem_limit: 768m
+    networks: [backend]
 
   minio:
-    image: minio/minio:latest
-    container_name: edu-minio
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-educonnect}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-educonnect_secret}
-    ports:
-      - "${MINIO_PORT:-9000}:9000"        # API S3
-      - "${MINIO_CONSOLE_PORT:-9001}:9001" # Console web
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
     volumes:
       - miniodata:/data
     healthcheck:
@@ -39,21 +99,78 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    mem_limit: 512m
+    networks: [backend]
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
+      S3_BUCKET: ${S3_BUCKET:-educonnect}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY must be set}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY must be set}
+      MINIO_APP_POLICY: |
+        {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetBucketLocation","s3:ListBucket"],"Resource":["arn:aws:s3:::__S3_BUCKET__"]},{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::__S3_BUCKET__/*"]}]}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
+        mc mb --ignore-existing "local/$${S3_BUCKET}"
+        mc anonymous set none "local/$${S3_BUCKET}"
+        mc admin user add local "$${S3_ACCESS_KEY}" "$${S3_SECRET_KEY}" 2>/dev/null || true
+        policy="$${MINIO_APP_POLICY}"
+        printf '%s\n' "$${policy//__S3_BUCKET__/$${S3_BUCKET}}" > /tmp/app-policy.json
+        mc admin policy create local educonnect-app /tmp/app-policy.json 2>/dev/null || mc admin policy info local educonnect-app
+        mc admin policy attach local educonnect-app --user "$${S3_ACCESS_KEY}"
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+
+  migrate:
+    build:
+      context: .
+      target: migrator
+    image: educonnect-migrator:local
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_MIGRATION_URL: postgresql://${POSTGRES_USER:-app_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-appdb}
+      DATABASE_RUNTIME_USER: ${POSTGRES_RUNTIME_USER:-app_runtime}
+      DATABASE_RUNTIME_PASSWORD: ${POSTGRES_RUNTIME_PASSWORD:?POSTGRES_RUNTIME_PASSWORD must be set}
+      DATABASE_SSL: "false"
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
 
   app:
     build:
       context: .
+      target: runner
       args:
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
-    container_name: edu-app
+    image: educonnect:local
     restart: unless-stopped
+    init: true
     depends_on:
-      db:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      redis-queue:
         condition: service_healthy
-      minio:
+      redis-cache:
         condition: service_healthy
-    # Carrega segredos (XAI_API_KEY, OPENAI_API_KEY, AUTH_SECRET, etc.) do mesmo
-    # arquivo usado no dev local. O bloco environment abaixo tem PRECEDENCIA e
+      clamav:
+        condition: service_healthy
+    # Carrega configuracoes locais adicionais do mesmo arquivo usado no dev.
+    # O bloco environment abaixo tem PRECEDENCIA e
     # sobrescreve DATABASE_URL e S3_* para apontar aos servicos da rede do Compose.
     env_file:
       - path: .env
@@ -61,27 +178,272 @@ services:
       - path: .env.development.local
         required: false
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-app_user}:${POSTGRES_PASSWORD:-app_password}@db:5432/${POSTGRES_DB:-appdb}
+      DATABASE_URL: postgresql://${POSTGRES_RUNTIME_USER:-app_runtime}:${POSTGRES_RUNTIME_PASSWORD:?POSTGRES_RUNTIME_PASSWORD must be set}@db:5432/${POSTGRES_DB:-appdb}
       DATABASE_SSL: "false"
       DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
+      DATABASE_CONNECT_TIMEOUT_MS: ${DATABASE_CONNECT_TIMEOUT_MS:-5000}
+      DATABASE_IDLE_TIMEOUT_MS: ${DATABASE_IDLE_TIMEOUT_MS:-30000}
+      DATABASE_MAX_LIFETIME_SECONDS: ${DATABASE_MAX_LIFETIME_SECONDS:-300}
+      DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-15000}
+      DATABASE_QUERY_TIMEOUT_MS: ${DATABASE_QUERY_TIMEOUT_MS:-20000}
+      DATABASE_LOCK_TIMEOUT_MS: ${DATABASE_LOCK_TIMEOUT_MS:-5000}
+      DATABASE_IDLE_TRANSACTION_TIMEOUT_MS: ${DATABASE_IDLE_TRANSACTION_TIMEOUT_MS:-30000}
+      AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET must be set}
+      EMAIL_PAYLOAD_ENCRYPTION_KEY: ${EMAIL_PAYLOAD_ENCRYPTION_KEY:?EMAIL_PAYLOAD_ENCRYPTION_KEY must be set}
+      ADMIN_TOTP_ENCRYPTION_KEY: ${ADMIN_TOTP_ENCRYPTION_KEY:?ADMIN_TOTP_ENCRYPTION_KEY must be set}
+      ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:?ADMIN_SESSION_SECRET must be set}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      CRON_SECRET: ${CRON_SECRET:-}
+      REDIS_QUEUE_URL: redis://:${REDIS_QUEUE_PASSWORD:?REDIS_QUEUE_PASSWORD must be set}@redis-queue:6379/0
+      REDIS_CACHE_URL: redis://:${REDIS_CACHE_PASSWORD:?REDIS_CACHE_PASSWORD must be set}@redis-cache:6379/0
+      REDIS_NAMESPACE: ${REDIS_NAMESPACE:-educonnect:local}
+      CACHE_ENABLED: ${CACHE_ENABLED:-true}
+      REDIS_ALLOW_INSECURE: "true"
       AUTH_TRUST_HOST: "true"
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
+      ALLOW_INSECURE_LOCAL_ORIGIN: ${ALLOW_INSECURE_LOCAL_ORIGIN:-false}
       AUTH_URL: ${AUTH_URL:-http://localhost:3000}
       NEXTAUTH_URL: ${AUTH_URL:-http://localhost:3000}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      LEGAL_CONTROLLER_NAME: ${LEGAL_CONTROLLER_NAME:?LEGAL_CONTROLLER_NAME must be set}
+      LEGAL_CONTROLLER_ID: ${LEGAL_CONTROLLER_ID:?LEGAL_CONTROLLER_ID must be set}
+      LEGAL_CONTROLLER_ADDRESS: ${LEGAL_CONTROLLER_ADDRESS:?LEGAL_CONTROLLER_ADDRESS must be set}
+      LEGAL_DPO_NAME: ${LEGAL_DPO_NAME:?LEGAL_DPO_NAME must be set}
+      LEGAL_PRIVACY_EMAIL: ${LEGAL_PRIVACY_EMAIL:?LEGAL_PRIVACY_EMAIL must be set}
+      LEGAL_SUPPORT_EMAIL: ${LEGAL_SUPPORT_EMAIL:?LEGAL_SUPPORT_EMAIL must be set}
+      LEGAL_FORUM: ${LEGAL_FORUM:?LEGAL_FORUM must be set}
+      LEGAL_HOSTING_PROVIDER: ${LEGAL_HOSTING_PROVIDER:?LEGAL_HOSTING_PROVIDER must be set}
       # Storage de objetos: MinIO interno (S3). O bucket e privado; o serving e feito
       # pelas rotas autenticadas, entao o MinIO nao precisa ser exposto publicamente.
       UPLOAD_SIMULATOR: "false"
       S3_ENDPOINT: http://minio:9000
       S3_BUCKET: ${S3_BUCKET:-educonnect}
       S3_REGION: ${S3_REGION:-us-east-1}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-educonnect}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-educonnect_secret}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY must be set}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY must be set}
       S3_FORCE_PATH_STYLE: "true"
       # Guard legado dos handlers de upload (a camada de storage hoje e S3/MinIO e ignora o token).
       BLOB_READ_WRITE_TOKEN: "unused-legacy-guard"
+      MALWARE_SCAN_ENABLED: "true"
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
     ports:
-      - "${APP_PORT:-3000}:3000"
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    mem_limit: 768m
+    security_opt:
+      - no-new-privileges:true
+    networks: [edge, backend]
+
+  worker:
+    build:
+      context: .
+      target: worker
+    image: educonnect-worker:local
+    restart: unless-stopped
+    init: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis-queue:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_RUNTIME_USER:-app_runtime}:${POSTGRES_RUNTIME_PASSWORD:?POSTGRES_RUNTIME_PASSWORD must be set}@db:5432/${POSTGRES_DB:-appdb}
+      DATABASE_SSL: "false"
+      REDIS_QUEUE_URL: redis://:${REDIS_QUEUE_PASSWORD:?REDIS_QUEUE_PASSWORD must be set}@redis-queue:6379/0
+      REDIS_NAMESPACE: ${REDIS_NAMESPACE:-educonnect:local}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      EMAIL_PAYLOAD_ENCRYPTION_KEY: ${EMAIL_PAYLOAD_ENCRYPTION_KEY:?EMAIL_PAYLOAD_ENCRYPTION_KEY must be set}
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: ${S3_BUCKET:-educonnect}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY must be set}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY must be set}
+      S3_FORCE_PATH_STYLE: "true"
+    mem_limit: 512m
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+
+  dispatcher:
+    build:
+      context: .
+      target: worker
+    image: educonnect-worker:local
+    command: ["node", "workers/dispatcher.mjs"]
+    restart: unless-stopped
+    init: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis-queue:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_RUNTIME_USER:-app_runtime}:${POSTGRES_RUNTIME_PASSWORD:?POSTGRES_RUNTIME_PASSWORD must be set}@db:5432/${POSTGRES_DB:-appdb}
+      DATABASE_SSL: "false"
+      REDIS_QUEUE_URL: redis://:${REDIS_QUEUE_PASSWORD:?REDIS_QUEUE_PASSWORD must be set}@redis-queue:6379/0
+      REDIS_NAMESPACE: ${REDIS_NAMESPACE:-educonnect:local}
+    mem_limit: 384m
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+
+  scheduler:
+    image: alpine:3.22.2
+    restart: unless-stopped
+    init: true
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      CRON_SECRET: ${CRON_SECRET:-}
+      PURGE_INTERVAL_SECONDS: ${PURGE_INTERVAL_SECONDS:-86400}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        test -n "$${CRON_SECRET}" || { echo "CRON_SECRET is required" >&2; exit 1; }
+        while true; do
+          wget -q -O - --header="x-cron-secret: $${CRON_SECRET}" --post-data="" \
+            http://app:3000/api/cron/purge-deleted-accounts || true
+          sleep "$${PURGE_INTERVAL_SECONDS}"
+        done
+    mem_limit: 64m
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    profiles: [production]
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-localhost}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 256m
+    security_opt:
+      - no-new-privileges:true
+    networks: [edge]
+
+  backup-postgres:
+    image: postgres:17-alpine
+    profiles: [operations]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-app_user}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-}
+      PGDATABASE: ${POSTGRES_DB:-appdb}
+    volumes:
+      - ${BACKUP_STAGING_DIR:-./backups}:/backups
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        test -n "$${PGPASSWORD}" || { echo "POSTGRES_PASSWORD is required" >&2; exit 1; }
+        mkdir -p /backups/postgres
+        pg_dump --format=custom --no-owner --no-acl --file=/backups/postgres/latest.dump.tmp
+        pg_dumpall --globals-only --file=/backups/postgres/globals.sql.tmp
+        mv /backups/postgres/latest.dump.tmp /backups/postgres/latest.dump
+        mv /backups/postgres/globals.sql.tmp /backups/postgres/globals.sql
+        pg_restore --list /backups/postgres/latest.dump >/dev/null
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+
+  backup-objects:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    profiles: [operations]
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+      S3_BUCKET: ${S3_BUCKET:-educonnect}
+    volumes:
+      - ${BACKUP_STAGING_DIR:-./backups}:/backups
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        test -n "$${MINIO_ROOT_USER}" && test -n "$${MINIO_ROOT_PASSWORD}" || {
+          echo "MinIO backup credentials are required" >&2; exit 1;
+        }
+        mkdir -p /backups/minio/current
+        mc alias set source http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
+        mc mirror --overwrite --remove "source/$${S3_BUCKET}" /backups/minio/current
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+
+  backup-offsite:
+    image: restic/restic:0.18.0
+    profiles: [operations]
+    restart: "no"
+    depends_on:
+      backup-postgres:
+        condition: service_completed_successfully
+      backup-objects:
+        condition: service_completed_successfully
+    environment:
+      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-}
+      RESTIC_PASSWORD: ${RESTIC_PASSWORD:-}
+      AWS_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY:-}
+      AWS_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_KEY:-}
+      AWS_DEFAULT_REGION: ${BACKUP_S3_REGION:-us-east-1}
+    volumes:
+      - ${BACKUP_STAGING_DIR:-./backups}:/backups:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        test -n "$${RESTIC_REPOSITORY}" && test -n "$${RESTIC_PASSWORD}" || {
+          echo "RESTIC_REPOSITORY and RESTIC_PASSWORD are required" >&2; exit 1;
+        }
+        restic snapshots >/dev/null 2>&1 || restic init
+        restic backup /backups --tag educonnect
+        restic forget --tag educonnect --keep-daily 7 --keep-weekly 5 --keep-monthly 12 --prune
+    security_opt:
+      - no-new-privileges:true
+    networks: [operations]
 
 volumes:
   pgdata:
   miniodata:
+  redisqueue:
+  clamdata:
+  caddydata:
+  caddyconfig:
+
+networks:
+  edge:
+  operations:
+  backend:
+    internal: true

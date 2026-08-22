@@ -11,7 +11,8 @@ import { query, queryOne } from "@/lib/db/query"
 export async function checkRateLimit(
   bucket: string,
   max: number,
-  windowSeconds: number
+  windowSeconds: number,
+  options: { failClosed?: boolean } = {}
 ): Promise<boolean> {
   try {
     const row = await queryOne<{ count: number }>(
@@ -36,7 +37,7 @@ export async function checkRateLimit(
   } catch (err) {
     // Em caso de falha do limitador, não derruba o fluxo (fail-open), mas registra.
     console.error("[rate-limit]", err)
-    return true
+    return options.failClosed !== true
   }
 }
 

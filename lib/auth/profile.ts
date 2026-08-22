@@ -2,17 +2,18 @@ import type { PoolClient, QueryResultRow } from "pg"
 import { queryOne } from "@/lib/db/query"
 
 export type UserType = "aluno" | "professor"
-export type ProfessorVerificationStatus = "none" | "pending" | "approved" | "rejected"
+export type ProfessorVerificationStatus = "none" | "pending" | "approved" | "rejected" | "revoked"
 
 export type ProfileAccessRow = QueryResultRow & {
   user_type: UserType | null
   professor_verification_status: ProfessorVerificationStatus | null
   deleted_at: string | null
+  account_status: "active" | "suspended"
 }
 
 export async function getProfileAccess(userId: string) {
   return queryOne<ProfileAccessRow>(
-    "select user_type, professor_verification_status, deleted_at from public.profiles where id = $1",
+    "select user_type, professor_verification_status, deleted_at, account_status from public.profiles where id = $1",
     [userId],
   )
 }

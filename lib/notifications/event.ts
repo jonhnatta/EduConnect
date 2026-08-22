@@ -8,19 +8,27 @@ export async function createNotification(input: {
   type: string
   actorId?: string
   entityId?: string
+  eventId?: string
   entityType?: string
   message: string
 }): Promise<void> {
+  const preferenceKey = input.type === "submission_received" ? "studentSubmissionAlerts" : null
   await query(
-    `INSERT INTO public.notifications (recipient_id, type, actor_id, entity_id, entity_type, message)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
+    `INSERT INTO public.notifications (recipient_id, type, actor_id, entity_id, event_id, entity_type, message)
+     SELECT $1, $2, $3, $4, $5, $6, $7
+       FROM public.profiles p
+      WHERE p.id = $1
+        AND ($8::text IS NULL OR (p.notification_prefs->>$8) IS DISTINCT FROM 'false')
+     ON CONFLICT (recipient_id, type, event_id) WHERE event_id IS NOT NULL DO NOTHING`,
     [
       input.recipientId,
       input.type,
       input.actorId ?? null,
       input.entityId ?? null,
+      input.eventId ?? input.entityId ?? null,
       input.entityType ?? null,
       input.message.slice(0, MESSAGE_MAX_LEN),
+      preferenceKey,
     ]
   )
 }
@@ -48,12 +56,13 @@ export async function notifyFollowersNewContent(input: {
 
   // Bulk INSERT — 1 query para N seguidores; filtra prefs do seguidor
   await query(
-    `INSERT INTO public.notifications (recipient_id, type, actor_id, entity_id, entity_type, message)
-     SELECT tf.student_id, 'new_content', $1, $2, 'content_item', $3
+    `INSERT INTO public.notifications (recipient_id, type, actor_id, entity_id, event_id, entity_type, message)
+     SELECT tf.student_id, 'new_content', $1, $2, $2, 'content_item', $3
        FROM public.teacher_followers tf
        JOIN public.profiles p ON p.id = tf.student_id
       WHERE tf.teacher_id = $1
-        AND (p.notification_prefs->>'new_content') IS DISTINCT FROM 'false'`,
+        AND (p.notification_prefs->>'new_content') IS DISTINCT FROM 'false'
+     ON CONFLICT (recipient_id, type, event_id) WHERE event_id IS NOT NULL DO NOTHING`,
     [input.teacherId, input.entityId, message]
   )
 }

@@ -1,0 +1,200 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run build
+      - run: npm audit --omit=dev --audit-level=high
+      - name: Validate Compose
+        env: &compose-env
+          POSTGRES_PASSWORD: ci-admin-password
+          POSTGRES_RUNTIME_PASSWORD: ci-runtime-password
+          AUTH_SECRET: ci-auth-secret-with-at-least-32-characters
+          AUTH_URL: http://localhost:3000
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
+          ALLOW_INSECURE_LOCAL_ORIGIN: "true"
+          REDIS_QUEUE_PASSWORD: ci-queue-password
+          REDIS_CACHE_PASSWORD: ci-cache-password
+          MINIO_ROOT_USER: minio_admin
+          MINIO_ROOT_PASSWORD: ci-minio-root-password
+          S3_ACCESS_KEY: educonnect_app
+          S3_SECRET_KEY: ci-storage-password
+          EMAIL_PAYLOAD_ENCRYPTION_KEY: Y2ktZW1haWwtcGF5bG9hZC1rZXktMzItYnl0ZXMhISE=
+          ADMIN_TOTP_ENCRYPTION_KEY: Y2ktYWRtaW4tdG90cC1rZXktMzItYnl0ZXMhISEhISE=
+          ADMIN_SESSION_SECRET: ci-admin-session-secret-with-at-least-32-characters
+          RESEND_API_KEY: re_ci_dummy
+          EMAIL_FROM: EduConnect <no-reply@example.test>
+          CRON_SECRET: ci-cron-secret-with-at-least-32-characters
+          LEGAL_CONTROLLER_NAME: EduConnect CI
+          LEGAL_CONTROLLER_ID: ci-test-id
+          LEGAL_CONTROLLER_ADDRESS: CI test address
+          LEGAL_DPO_NAME: CI DPO
+          LEGAL_PRIVACY_EMAIL: privacy@example.test
+          LEGAL_SUPPORT_EMAIL: support@example.test
+          LEGAL_FORUM: Sao Paulo/SP
+          LEGAL_HOSTING_PROVIDER: Docker CI
+        run: docker compose config --quiet
+
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env: *compose-env
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Build and start the complete stack
+        run: docker compose up -d --build
+      - name: Wait for readiness
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:3000/api/health/ready; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+      - name: Browser smoke tests
+        env:
+          E2E_BASE_URL: http://127.0.0.1:3000
+        run: npm run test:e2e
+      - name: Verify migrations and runtime role
+        run: |
+          docker compose exec -T db psql -U app_user -d appdb -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+            if not exists (
+              select 1 from public.schema_migrations where version = '00550'
+            ) then
+              raise exception 'canonical migration 00550 is missing';
+            end if;
+            if not exists (
+              select 1 from pg_roles
+               where rolname = 'app_runtime'
+                 and not rolsuper and not rolcreatedb and not rolcreaterole
+            ) then
+              raise exception 'runtime role is missing or privileged';
+            end if;
+          end
+          $$;
+          SQL
+      - name: Verify Redis isolation policies
+        run: |
+          test "$(docker compose exec -T redis-queue redis-cli --no-auth-warning -a "$REDIS_QUEUE_PASSWORD" CONFIG GET maxmemory-policy | tail -1)" = "noeviction"
+          test "$(docker compose exec -T redis-cache redis-cli --no-auth-warning -a "$REDIS_CACHE_PASSWORD" CONFIG GET maxmemory-policy | tail -1)" = "allkeys-lfu"
+      - name: Verify content submission authorization matrix
+        run: |
+          docker compose exec -T db psql -U app_user -d appdb -v ON_ERROR_STOP=1 <<'SQL'
+          insert into public.users (id, email, email_verified_at) values
+            ('11111111-1111-1111-1111-111111111111', 'professor@example.test', now()),
+            ('22222222-2222-2222-2222-222222222222', 'student@example.test', now()),
+            ('33333333-3333-3333-3333-333333333333', 'outsider@example.test', null);
+          insert into public.profiles (id, full_name, user_type, professor_verification_status) values
+            ('11111111-1111-1111-1111-111111111111', 'Professor CI', 'professor', 'approved'),
+            ('22222222-2222-2222-2222-222222222222', 'Student CI', 'aluno', 'none'),
+            ('33333333-3333-3333-3333-333333333333', 'Outsider CI', 'aluno', 'none');
+          insert into public.classrooms (id, professor_id, name, invite_code) values
+            ('44444444-4444-4444-4444-444444444444', '11111111-1111-1111-1111-111111111111', 'CI', 'CI-ACCESS');
+          insert into public.classroom_members (classroom_id, student_id) values
+            ('44444444-4444-4444-4444-444444444444', '22222222-2222-2222-2222-222222222222');
+          insert into public.content_items (id, author_id, type, title, status, visibility, audience) values
+            ('55555555-5555-5555-5555-555555555555', '11111111-1111-1111-1111-111111111111', 'exercise', 'Public student', 'published', 'public', 'students'),
+            ('66666666-6666-6666-6666-666666666666', '11111111-1111-1111-1111-111111111111', 'exercise', 'Teacher only', 'published', 'public', 'teachers'),
+            ('77777777-7777-7777-7777-777777777777', '11111111-1111-1111-1111-111111111111', 'exercise', 'Classroom', 'published', 'classrooms', 'students'),
+            ('88888888-8888-8888-8888-888888888888', '11111111-1111-1111-1111-111111111111', 'exercise', 'Private', 'published', 'private', 'students');
+          insert into public.content_item_classrooms (content_item_id, classroom_id) values
+            ('77777777-7777-7777-7777-777777777777', '44444444-4444-4444-4444-444444444444');
+          do $$
+          begin
+            if not public.student_can_submit_content_item('55555555-5555-5555-5555-555555555555', '22222222-2222-2222-2222-222222222222') then
+              raise exception 'authorized student was denied';
+            end if;
+            if public.student_can_submit_content_item('66666666-6666-6666-6666-666666666666', '22222222-2222-2222-2222-222222222222') then
+              raise exception 'student accessed teacher-only content';
+            end if;
+            if not public.student_can_submit_content_item('77777777-7777-7777-7777-777777777777', '22222222-2222-2222-2222-222222222222') then
+              raise exception 'classroom member was denied';
+            end if;
+            if public.student_can_submit_content_item('77777777-7777-7777-7777-777777777777', '33333333-3333-3333-3333-333333333333') then
+              raise exception 'outsider accessed classroom content';
+            end if;
+            if public.student_can_submit_content_item('88888888-8888-8888-8888-888888888888', '22222222-2222-2222-2222-222222222222') then
+              raise exception 'student accessed private content';
+            end if;
+            if public.student_can_submit_content_item('55555555-5555-5555-5555-555555555555', '11111111-1111-1111-1111-111111111111') then
+              raise exception 'professor submitted as student';
+            end if;
+            if public.student_can_submit_content_item('55555555-5555-5555-5555-555555555555', '33333333-3333-3333-3333-333333333333') then
+              raise exception 'unverified student was authorized';
+            end if;
+          end
+          $$;
+          SQL
+      - name: Verify outbox to worker delivery
+        run: |
+          EVENT_ID="$(docker compose exec -T db psql -U app_user -d appdb -qAt -v ON_ERROR_STOP=1 -c "insert into public.outbox_events (queue_name, event_type, dedup_key, aggregate_type, aggregate_id, payload) values ('notification.fanout', 'content.published', 'ci-smoke', 'content_item', gen_random_uuid(), jsonb_build_object('teacherId', gen_random_uuid()::text, 'teacherName', 'CI Professor', 'entityId', gen_random_uuid()::text, 'contentTypeLabel', 'artigo', 'title', 'Smoke')) returning id")"
+          for attempt in $(seq 1 30); do
+            STATUS="$(docker compose exec -T db psql -U app_user -d appdb -qAt -c "select status from public.job_executions where job_key = 'notification.fanout:$EVENT_ID'")"
+            if [ "$STATUS" = "completed" ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+      - name: Verify database and object backups
+        run: |
+          docker compose --profile operations run --rm backup-postgres
+          docker compose --profile operations run --rm backup-objects
+          test -s backups/postgres/latest.dump
+      - name: Container vulnerability scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: educonnect:local
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+      - name: Diagnostics
+        if: always()
+        run: docker compose ps && docker compose logs --no-color migrate minio-init dispatcher worker scheduler app
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v
+
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

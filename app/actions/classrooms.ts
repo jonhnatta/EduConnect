@@ -26,6 +26,7 @@ import type {
   ProfessorStudentClassroomRef,
   ProfessorStudentRow,
 } from "@/lib/classrooms/types"
+import { checkRateLimit } from "@/lib/security/rate-limit"
 
 const MAX_CREATE_ATTEMPTS = 8
 
@@ -239,6 +240,8 @@ export async function listPublicClassrooms(limit = 30): Promise<PublicClassroomI
        JOIN public.profiles p ON p.id = c.professor_id
        LEFT JOIN public.classroom_members cm ON cm.classroom_id = c.id
       WHERE c.is_public = true AND c.status = 'ativa'
+        AND p.deleted_at IS NULL AND p.account_status = 'active'
+        AND p.professor_verification_status = 'approved'
       GROUP BY c.id, p.full_name, p.slug
       ORDER BY c.created_at DESC
       LIMIT $1`,
@@ -591,6 +594,9 @@ export async function uploadClassroomCover(
 
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return { ok: false, error: "Nao autenticado" }
+  if (!(await checkRateLimit(`classroom-cover-upload:${user.id}`, 20, 3600, { failClosed: true }))) {
+    return { ok: false, error: "Limite de uploads excedido" }
+  }
 
   const ownerOk = await assertProfessorOwnsClassroom(classroomId, user.id)
   if (!ownerOk) return { ok: false, error: "Sala nao encontrada" }

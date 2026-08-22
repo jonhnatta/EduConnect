@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState, useTransition } from "react"
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react"
 import {
   Dialog,
   DialogContent,
@@ -261,7 +261,7 @@ export function ActivitySubmissionsDialog({
   const trabalhoCfg = activity ? parseTrabalhoConfig(activity.settings) : null
   const isTrabalho = !exam && !!trabalhoCfg
 
-  const load = () => {
+  const load = useCallback(() => {
     if (!activity) return
     setLoading(true)
     void listSubmissionsForActivity(classroomId, activity.id).then(
@@ -274,12 +274,13 @@ export function ActivitySubmissionsDialog({
         setRows(r)
       }
     )
-  }
+  }, [activity, classroomId])
 
   useEffect(() => {
-    if (open && activity) load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, activity?.id, classroomId])
+    if (!open || !activity) return
+    const timer = window.setTimeout(load, 0)
+    return () => window.clearTimeout(timer)
+  }, [open, activity, load])
 
   // Pendentes de correcao primeiro, depois corrigidos, depois rascunhos
   const sortedRows = useMemo(() => {

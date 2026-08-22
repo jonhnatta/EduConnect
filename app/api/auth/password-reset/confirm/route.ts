@@ -88,7 +88,7 @@ export async function POST(request: Request) {
 
     const passwordHash = await bcrypt.hash(password, 12)
     await client.query(
-      "update public.users set password_hash = $1 where id = $2",
+      "update public.users set password_hash = $1, session_version = session_version + 1 where id = $2",
       [passwordHash, resetCode.user_id],
     )
     await client.query(

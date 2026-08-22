@@ -71,6 +71,7 @@ export function ClassroomMaterialFormDialog({
 
   useEffect(() => {
     if (!open) return
+    /* eslint-disable react-hooks/set-state-in-effect -- Opening a draft editor must atomically copy the selected material into local form state. */
     if (material) {
       setTitle(material.title)
       setDescription(material.description ?? "")
@@ -86,6 +87,7 @@ export function ClassroomMaterialFormDialog({
     }
     setPendingFiles([])
     if (fileInputRef.current) fileInputRef.current.value = ""
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [open, material])
 
   const addPendingFiles = (list: FileList | null) => {

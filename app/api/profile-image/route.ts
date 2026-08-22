@@ -3,20 +3,13 @@ import { NextRequest, NextResponse } from "next/server"
 import { queryOne } from "@/lib/db/query"
 import { getAuthedUser } from "@/lib/auth/user"
 import { applySafeServingHeaders } from "@/lib/http/safe-serving"
+import { profileIdFromProfilePath } from "@/lib/http/blob-paths"
 
 export const runtime = "nodejs"
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-
 // Caminho esperado: profiles/<uuid-do-perfil>/<avatar|cover>-...
 function extractProfileId(pathname: string): string | null {
-  if (pathname.includes("..") || pathname.includes("//") || pathname.includes("\\")) {
-    return null
-  }
-  const parts = pathname.split("/").filter(Boolean)
-  if (parts[0] !== "profiles" || !parts[1]) return null
-  return UUID_RE.test(parts[1]) ? parts[1] : null
+  return profileIdFromProfilePath(pathname)
 }
 
 export async function GET(request: NextRequest) {
@@ -38,11 +31,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Not found" }, { status: 404 })
   }
 
-  // Perfil privado nao deve ser exposto publicamente (a RLS e inerte). Publico -> qualquer
-  // um; privado -> apenas o dono ou usuarios autenticados (fecha o scraping anonimo por UUID).
+  // Perfil privado pertence exclusivamente ao dono. Autenticacao, sozinha, nao concede acesso.
   if (row.profile_visibility !== "public") {
     const user = await getAuthedUser()
-    if (!user) {
+    if (user?.id !== profileId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 })
     }
   }

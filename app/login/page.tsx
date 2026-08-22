@@ -26,22 +26,17 @@ function LoginForm() {
   const [showPassword, setShowPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [isGoogleLoading, setIsGoogleLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(() => {
+    const oauthError = searchParams.get("error")
+    if (!oauthError) return null
+    return oauthError === "OAuthEmailMissing"
+      ? "Nao foi possivel obter o e-mail da conta Google"
+      : "Nao foi possivel entrar com Google. Tente novamente."
+  })
   const [formData, setFormData] = useState({
     email: "",
     password: "",
   })
-
-  useEffect(() => {
-    const oauthError = searchParams.get("error")
-    if (!oauthError) return
-
-    setError(
-      oauthError === "OAuthEmailMissing"
-        ? "Nao foi possivel obter o e-mail da conta Google"
-        : "Nao foi possivel entrar com Google. Tente novamente."
-    )
-  }, [searchParams])
 
   useEffect(() => {
     let active = true
@@ -88,6 +83,24 @@ function LoginForm() {
     setError(null)
 
     const next = safeInternalPath(searchParams.get("next")) ?? undefined
+
+    // Defesa para uma aba aberta antes do redirect canônico do proxy. O endpoint
+    // que cria o PKCE e o callback do Google precisam usar exatamente o mesmo host.
+    const configuredAppUrl = process.env.NEXT_PUBLIC_APP_URL
+    if (configuredAppUrl) {
+      try {
+        const configuredOrigin = new URL(configuredAppUrl).origin
+        if (window.location.origin !== configuredOrigin) {
+          window.location.assign(
+            new URL(`${window.location.pathname}${window.location.search}`, configuredOrigin),
+          )
+          return
+        }
+      } catch {
+        // Configuração inválida será tratada no servidor; mantém a mensagem padrão.
+      }
+    }
+
     await signIn("google", {
       callbackUrl: buildAuthRedirectUrl(next),
     })

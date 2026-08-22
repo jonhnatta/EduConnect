@@ -10,9 +10,9 @@ export type ActivityAttachment = {
 export const ACTIVITY_ATTACHMENT_ACCEPT =
   ".pdf,.doc,.docx,image/jpeg,image/png,image/gif,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
-export const ACTIVITY_ATTACHMENT_MAX_BYTES = 15 * 1024 * 1024
+export const ACTIVITY_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024
 
-export const ACTIVITY_ATTACHMENT_MAX_PER_ACTIVITY = 8
+export const ACTIVITY_ATTACHMENT_MAX_PER_ACTIVITY = 3
 
 const ALLOWED_TYPES = new Set([
   "application/pdf",

@@ -6,6 +6,8 @@ import { z } from "zod"
 import { queryOne } from "@/lib/db/query"
 import { ensureSocialUser } from "@/lib/auth/social-user"
 import { checkRateLimit, resetRateLimit } from "@/lib/security/rate-limit"
+import { isSessionAccountStateValid } from "@/lib/auth/session-state"
+import { securityFingerprint, trustedClientIp } from "@/lib/security/request-identity"
 
 const credentialsSchema = z.object({
   email: z.string().email(),
@@ -23,10 +25,18 @@ type DbUser = {
   email: string
   password_hash: string | null
   user_type: string | null
+  session_version: string | number
+  account_status: string | null
+  deleted_at: string | null
+  email_verified_at: string | null
 }
 
 type ProfileTokenRow = {
   user_type: string | null
+  deleted_at: string | null
+  account_status: string | null
+  session_version: string | number
+  email_verified_at: string | null
 }
 
 const providers = [
@@ -35,19 +45,21 @@ const providers = [
       email: { label: "Email", type: "email" },
       password: { label: "Password", type: "password" },
     },
-    authorize: async (raw) => {
+    authorize: async (raw, request) => {
       const parsed = credentialsSchema.safeParse(raw)
       if (!parsed.success) return null
 
       const { email, password } = parsed.data
       const emailKey = email.toLowerCase()
+      const loginKey = securityFingerprint(`${emailKey}:${trustedClientIp(request)}`)
 
       // Rate limit anti brute-force: 20 tentativas / 15 min por e-mail.
-      const allowed = await checkRateLimit(`login:${emailKey}`, 20, 900)
+      const allowed = await checkRateLimit(`login:${loginKey}`, 20, 900, { failClosed: true })
       if (!allowed) return null
 
-      const user = await queryOne<DbUser & { deleted_at: string | null }>(
-        `select u.id, u.email, u.password_hash, p.user_type, p.deleted_at
+      const user = await queryOne<DbUser>(
+        `select u.id, u.email, u.password_hash, u.session_version, u.email_verified_at,
+                p.user_type, p.deleted_at, p.account_status
            from public.users u
            left join public.profiles p on p.id = u.id
           where u.email = $1`,
@@ -57,11 +69,17 @@ const providers = [
       const hashToCompare = user?.password_hash ?? DUMMY_BCRYPT_HASH
       const ok = await bcrypt.compare(password, hashToCompare)
       if (!user?.password_hash || !ok) return null
-      if (user.deleted_at) return null
+      if (!user.email_verified_at) return null
+      if (user.deleted_at || user.account_status !== "active") return null
 
       // Login OK: zera o contador de tentativas.
-      await resetRateLimit(`login:${emailKey}`)
-      return { id: user.id, email: user.email, userType: user.user_type ?? null }
+      await resetRateLimit(`login:${loginKey}`)
+      return {
+        id: user.id,
+        email: user.email,
+        userType: user.user_type ?? null,
+        sessionVersion: Number(user.session_version),
+      }
     },
   }),
 ]
@@ -76,7 +94,7 @@ if (process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET) {
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  // maxAge curto reduz a janela de exposição de tokens (sem revogação server-side em JWT puro).
+  // O JWT e curto, mas tambem e revogado imediatamente por session_version.
   session: { strategy: "jwt", maxAge: 7 * 24 * 60 * 60, updateAge: 24 * 60 * 60 },
   providers,
   callbacks: {
@@ -107,33 +125,61 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
       user.id = dbUser.id
       user.email = dbUser.email
-      const profileRow = await queryOne<{ user_type: string | null; deleted_at: string | null }>(
-        "select user_type, deleted_at from public.profiles where id = $1",
+      const profileRow = await queryOne<ProfileTokenRow>(
+        `select p.user_type, p.deleted_at, p.account_status, u.session_version, u.email_verified_at
+           from public.profiles p
+           join public.users u on u.id = p.id
+          where p.id = $1`,
         [dbUser.id]
       )
-      if (profileRow?.deleted_at) return "/login?error=AccountDeleted"
+      if (!profileRow || !profileRow.email_verified_at || profileRow.deleted_at || profileRow.account_status !== "active") {
+        return "/login?error=AccountDeleted"
+      }
       ;(user as any).userType = profileRow?.user_type ?? null
+      ;(user as any).sessionVersion = Number(profileRow.session_version)
       return true
     },
     jwt: async ({ token, user }) => {
       if (user?.id) token.sub = String(user.id)
       if (user?.email) token.email = user.email
-      // Persiste o tipo de usuario no token (apenas no login, quando `user` existe).
-      if (user) (token as any).userType = (user as any).userType ?? null
-      // userType no token serve apenas para UX (redirecionamento no middleware).
-      // Nunca use como fonte de verdade para autorização — use lib/auth/guards.ts,
-      // que consulta o banco diretamente a cada requisição protegida.
-      if (!user && token.sub && !(token as any).userType) {
-        const profileRow = await queryOne<ProfileTokenRow>(
-          "select user_type from public.profiles where id = $1",
-          [String(token.sub)]
-        )
-        ;(token as any).userType = profileRow?.user_type ?? null
+      if (user) {
+        ;(token as any).userType = (user as any).userType ?? null
+        ;(token as any).sessionVersion = Number((user as any).sessionVersion)
+      }
+
+      // Toda leitura de sessao revalida a conta no banco. Falha de banco e estado
+      // divergente sao fail-closed: o token perde o subject e deixa de autenticar.
+      if (token.sub) {
+        try {
+          const state = await queryOne<ProfileTokenRow>(
+            `select p.user_type, p.deleted_at, p.account_status, u.session_version, u.email_verified_at
+               from public.profiles p
+               join public.users u on u.id = p.id
+              where p.id = $1`,
+            [String(token.sub)]
+          )
+          if (!isSessionAccountStateValid((token as any).sessionVersion, state ? {
+            sessionVersion: state.session_version,
+            emailVerifiedAt: state.email_verified_at,
+            deletedAt: state.deleted_at,
+            accountStatus: state.account_status,
+          } : null)) {
+            delete token.sub
+            ;(token as any).invalidated = true
+          } else {
+            ;(token as any).userType = state!.user_type ?? null
+          }
+        } catch {
+          delete token.sub
+          ;(token as any).invalidated = true
+        }
       }
       return token
     },
     session: async ({ session, token }) => {
-      if (session.user && token.sub) {
+      if ((token as any).invalidated || !token.sub) {
+        ;(session as any).user = null
+      } else if (session.user) {
         // next-auth types keep id optional; attach for server usage.
         ;(session.user as any).id = token.sub
         ;(session.user as any).userType = (token as any).userType ?? null

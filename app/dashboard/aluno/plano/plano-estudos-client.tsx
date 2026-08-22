@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState, useTransition } from "react"
+import { useMemo, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { addDays, format, parseISO } from "date-fns"
@@ -107,11 +107,10 @@ export function PlanoEstudosClient({ payload }: Props) {
     return payload.days[0]?.dateIso ?? today
   }, [payload.days])
 
-  const [selectedDateIso, setSelectedDateIso] = useState(defaultSelected)
-
-  useEffect(() => {
-    setSelectedDateIso(defaultSelected)
-  }, [payload.weekStartIso, defaultSelected])
+  const [selectedDateOverride, setSelectedDateIso] = useState(defaultSelected)
+  const selectedDateIso = payload.days.some((day) => day.dateIso === selectedDateOverride)
+    ? selectedDateOverride
+    : defaultSelected
 
   const [addOpen, setAddOpen] = useState(false)
   const [newTitle, setNewTitle] = useState("")

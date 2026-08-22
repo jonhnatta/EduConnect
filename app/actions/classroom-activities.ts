@@ -24,10 +24,13 @@ import {
 import { sanitizeActivityHtml } from "@/lib/sanitize-activity-html"
 import {
   mergeActivitySettings,
+  parseExamFromSettings,
+  toPublicExam,
   totalExamPoints,
   validateExamDefinition,
   type ActivityExamDefinition,
 } from "@/lib/activities/exam"
+import { checkRateLimit } from "@/lib/security/rate-limit"
 import {
   clampTrabalhoMaxFiles,
   type TrabalhoSubmissionConfig,
@@ -100,6 +103,16 @@ async function deleteAttachmentBlobs(urls: string[]) {
   await Promise.all(urls.map((url) => del(url).catch(() => {})))
 }
 
+/** DTO de aluno: preserva metadados/anexos, mas nunca serializa o gabarito. */
+function toStudentActivityRow(row: ClassroomActivityRow): ClassroomActivityRow {
+  const settings = asRecord(row.settings)
+  const exam = parseExamFromSettings(settings)
+  return {
+    ...row,
+    settings: exam ? { ...settings, exam: toPublicExam(exam) } : settings,
+  }
+}
+
 export async function uploadActivityAttachmentFiles(
   classroomId: string,
   formData: FormData
@@ -114,6 +127,9 @@ export async function uploadActivityAttachmentFiles(
   // Apenas professor APROVADO publica/edita conteudo avaliativo (reavaliado a cada acao).
   const access = await getApprovedProfessorActionAccess()
   if (!access.ok) return { ok: false, error: access.error }
+  if (!(await checkRateLimit(`activity-upload:${access.userId}`, 30, 3600, { failClosed: true }))) {
+    return { ok: false, error: "Limite de uploads excedido" }
+  }
 
   const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
   if (!ok) return { ok: false, error: "Sala nao encontrada" }
@@ -214,7 +230,7 @@ export async function listActivitiesForClassroomAsStudent(
       "select * from public.classroom_activities where classroom_id = $1 and status <> 'rascunho' order by due_at asc nulls last",
       [classroomId]
     )
-    return { rows: data ?? [], error: null }
+    return { rows: (data ?? []).map(toStudentActivityRow), error: null }
   } catch (e: any) {
     return { rows: [], error: "Erro ao listar atividades" }
   }
@@ -241,7 +257,7 @@ export async function getActivityForStudent(
   if (!data) return { row: null, error: null }
   const row = data
   if (row.status === "rascunho") return { row: null, error: null }
-  return { row, error: null }
+  return { row: toStudentActivityRow(row), error: null }
 }
 
 /** Imagem embutida no Trix (path sob classroom-activities/.../trix/). */
@@ -259,6 +275,9 @@ export async function uploadTrixActivityImage(
 
   const access = await getApprovedProfessorActionAccess()
   if (!access.ok) return { ok: false, error: access.error }
+  if (!(await checkRateLimit(`activity-upload:${access.userId}`, 30, 3600, { failClosed: true }))) {
+    return { ok: false, error: "Limite de uploads excedido" }
+  }
 
   const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
   if (!ok) return { ok: false, error: "Sala nao encontrada" }
@@ -411,6 +430,7 @@ export async function updateActivity(
     if (exErr) return { ok: false, error: exErr }
   }
 
+  let removedAttachmentUrls: string[] = []
   if (
     input.attachments !== undefined ||
     input.exam !== undefined ||
@@ -437,8 +457,7 @@ export async function updateActivity(
     )
     if (input.attachments !== undefined) {
       const newUrls = new Set(input.attachments.map((a) => a.url))
-      const removedUrls = old.filter((a) => !newUrls.has(a.url)).map((a) => a.url)
-      await deleteAttachmentBlobs(removedUrls)
+      removedAttachmentUrls = old.filter((a) => !newUrls.has(a.url)).map((a) => a.url)
     }
 
     const current = asRecord(row?.settings)
@@ -496,6 +515,7 @@ export async function updateActivity(
   } catch (e: any) {
     return { ok: false, error: "Erro ao atualizar" }
   }
+  await deleteAttachmentBlobs(removedAttachmentUrls)
   revalidatePath(`/dashboard/professor/salas/${input.classroomId}`)
   revalidatePath(`/dashboard/aluno/salas/${input.classroomId}`)
   revalidatePath(
@@ -522,8 +542,6 @@ export async function deleteActivity(
   const urls = parseActivityAttachments(
     asRecord(existing?.settings)
   ).map((a) => a.url)
-  await deleteAttachmentBlobs(urls)
-
   try {
     await query("delete from public.classroom_activities where id = $1 and classroom_id = $2", [
       activityId,
@@ -532,6 +550,7 @@ export async function deleteActivity(
   } catch (e: any) {
     return { ok: false, error: "Erro ao excluir" }
   }
+  await deleteAttachmentBlobs(urls)
   revalidatePath(`/dashboard/professor/salas/${classroomId}`)
   revalidatePath(`/dashboard/aluno/salas/${classroomId}`)
   return { ok: true }

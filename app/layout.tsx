@@ -1,9 +1,9 @@
 import type { Metadata } from 'next'
 import { Sora, DM_Sans, JetBrains_Mono } from 'next/font/google'
-import { Analytics } from '@vercel/analytics/next'
 import { Toaster } from 'sonner'
 import { AuthSessionProvider } from "@/components/auth/session-provider"
 import { CookieConsent } from "@/components/legal/cookie-consent"
+import { ConsentedAnalytics } from "@/components/legal/consented-analytics"
 import './globals.css'
 
 const sora = Sora({ 
@@ -26,7 +26,7 @@ const jetbrainsMono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: 'EduConnect - Ensinar é uma arte. Aprender é uma jornada.',
-  description: 'Plataforma educacional social com IA integrada, conectando professores e alunos em um ecossistema de aprendizado inteligente.',
+  description: 'Plataforma educacional social que conecta professores e alunos em um ecossistema de aprendizado.',
   generator: 'v0.app',
   icons: {
     icon: [
@@ -61,7 +61,7 @@ export default function RootLayout({
         <AuthSessionProvider>{children}</AuthSessionProvider>
         <CookieConsent />
         <Toaster richColors position="top-center" />
-        <Analytics />
+        <ConsentedAnalytics />
       </body>
     </html>
   )

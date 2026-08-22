@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
-import { Bell, Bot, Globe, KeyRound, Loader2, Settings2, ShieldCheck, Trash2, Users } from "lucide-react"
+import { Download, Globe, KeyRound, Loader2, Trash2, Users } from "lucide-react"
 import { updateMySettings, type NotificationPrefs } from "@/app/actions/settings"
 import { changePassword, deleteAccount } from "@/app/actions/account"
 
@@ -61,11 +61,8 @@ export function ProfessorSettingsClient({
 }: ProfessorSettingsClientProps) {
   const pref = (key: string, fallback = true) =>
     typeof notificationPrefs[key] === "boolean" ? notificationPrefs[key] : fallback
-  const [reviewBeforePublish, setReviewBeforePublish] = useState(pref("reviewBeforePublish"))
   const [studentSubmissionAlerts, setStudentSubmissionAlerts] = useState(pref("studentSubmissionAlerts"))
   const [publicProfile, setPublicProfile] = useState(profileVisibility === "public")
-  const [weeklyDigest, setWeeklyDigest] = useState(pref("weeklyDigest"))
-  const [classroomAnnouncements, setClassroomAnnouncements] = useState(pref("classroomAnnouncements"))
   const [saving, startSaving] = useTransition()
   const [currentPwd, setCurrentPwd] = useState("")
   const [newPwd, setNewPwd] = useState("")
@@ -81,10 +78,7 @@ export function ProfessorSettingsClient({
       const result = await updateMySettings({
         profileVisibility: publicProfile ? "public" : "private",
         notificationPrefs: {
-          reviewBeforePublish,
           studentSubmissionAlerts,
-          weeklyDigest,
-          classroomAnnouncements,
         },
       })
       if (result.ok) toast.success("Preferencias salvas")
@@ -153,13 +147,6 @@ export function ProfessorSettingsClient({
                 checked={publicProfile}
                 onCheckedChange={setPublicProfile}
               />
-              <SettingRow
-                icon={Bot}
-                title="Revisao por IA antes de publicar"
-                description="Ative a etapa de qualidade como preferencia padrao no fluxo de criacao de conteudo."
-                checked={reviewBeforePublish}
-                onCheckedChange={setReviewBeforePublish}
-              />
             </CardContent>
           </Card>
 
@@ -175,20 +162,6 @@ export function ProfessorSettingsClient({
                 description="Avisos quando uma atividade receber novas submissoes ou precisar de correcao."
                 checked={studentSubmissionAlerts}
                 onCheckedChange={setStudentSubmissionAlerts}
-              />
-              <SettingRow
-                icon={Bell}
-                title="Resumo semanal"
-                description="Receber consolidado com visualizacoes, engajamento e pendencias de sala."
-                checked={weeklyDigest}
-                onCheckedChange={setWeeklyDigest}
-              />
-              <SettingRow
-                icon={Settings2}
-                title="Avisos de anuncios de sala"
-                description="Sincronizar lembretes sobre novos materiais, atividades publicadas e atualizacoes internas."
-                checked={classroomAnnouncements}
-                onCheckedChange={setClassroomAnnouncements}
               />
             </CardContent>
           </Card>
@@ -206,7 +179,7 @@ export function ProfessorSettingsClient({
               <div className="rounded-xl bg-white/10 p-4">
                 <p className="text-xs uppercase tracking-wide text-blue-100">Publicacao</p>
                 <p className="mt-2 text-sm font-semibold">
-                  {reviewBeforePublish ? "Revisao IA ativada por padrao" : "Publicacao sem revisao automatica"}
+                  Publicacao direta, sem revisao automatica
                 </p>
               </div>
               <div className="rounded-xl bg-white/10 p-4">
@@ -224,9 +197,6 @@ export function ProfessorSettingsClient({
               <CardDescription>Acesso rapido para areas que conversam com estas preferencias.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              <Button asChild variant="outline" className="w-full justify-start">
-                <Link href="/dashboard/professor/revisoes">Abrir revisoes pela IA</Link>
-              </Button>
               <Button asChild variant="outline" className="w-full justify-start">
                 <Link href="/dashboard/professor/notificacoes">Abrir central de notificacoes</Link>
               </Button>
@@ -284,6 +254,21 @@ export function ProfessorSettingsClient({
               >
                 {changingPwd ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 Alterar senha
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="font-display text-lg flex items-center gap-2">
+                <Download className="h-5 w-5" />
+                Exportar meus dados
+              </CardTitle>
+              <CardDescription>Baixe uma copia JSON dos dados associados a sua conta.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button asChild variant="outline" className="w-full">
+                <a href="/api/account/export">Baixar meus dados</a>
               </Button>
             </CardContent>
           </Card>

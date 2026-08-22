@@ -1,8 +1,16 @@
 "use client"
 
-import type { FeedContentItem } from "@/app/actions/content-items"
-import type { ContentComment } from "@/app/actions/content-items"
-import { recordContentShare, toggleContentLike, toggleContentSave } from "@/app/actions/content-items"
+import type {
+  ContentComment,
+  FeedContentItem,
+  StudentFeedPage,
+} from "@/app/actions/content-items"
+import {
+  getStudentFeedPage,
+  recordContentShare,
+  toggleContentLike,
+  toggleContentSave,
+} from "@/app/actions/content-items"
 import { ArticleCoverMedia } from "@/components/dashboard/article-cover-media"
 import { CardInlineComments } from "@/components/dashboard/card-inline-comments"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -19,16 +27,16 @@ import {
   Heart,
   Lightbulb,
   ListChecks,
+  Loader2,
   MessageCircle,
   Share2,
   Sparkles,
 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
-import { parseExamFromSettings } from "@/lib/activities/exam"
-import { parseAssessmentSettings } from "@/lib/content/assessment-settings"
+import type { StudentFeedCategory } from "@/lib/content/feed-pagination"
 
 type TodayItem = {
   id: string
@@ -52,35 +60,42 @@ function initials(name: string | null | undefined): string {
   return parts[0].slice(0, 2).toUpperCase()
 }
 
-const EXCERPT_MAX = 600
-
-const FEED_CATEGORIAS: { key: string; label: string; types?: string[] }[] = [
+const FEED_CATEGORIAS: { key: StudentFeedCategory; label: string }[] = [
   { key: "todos", label: "Todos" },
-  { key: "artigos", label: "Artigos", types: ["article"] },
-  { key: "exercicios", label: "Exercícios", types: ["exercise"] },
-  { key: "provas", label: "Provas", types: ["assessment", "simulado"] },
-  { key: "dicas", label: "Dicas", types: ["dica"] },
+  { key: "artigos", label: "Artigos" },
+  { key: "exercicios", label: "Exercícios" },
+  { key: "provas", label: "Provas" },
+  { key: "dicas", label: "Dicas" },
 ]
 
-function plainText(html: string | null | undefined): string {
-  if (!html?.trim()) return ""
-  return html
-    .replace(/<[^>]*>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s+/g, " ")
-    .trim()
+type FeedStatus = "idle" | "loading" | "error" | "end"
+
+type FeedRequest = {
+  category: StudentFeedCategory
+  cursor: string | null
+  replace: boolean
+  version: number
+}
+
+function booleanMap(ids: string[]): Record<string, boolean> {
+  return Object.fromEntries(ids.map((id) => [id, true]))
+}
+
+function countMap(items: FeedContentItem[]) {
+  return Object.fromEntries(
+    items.map((item) => [
+      item.id,
+      {
+        likes: item.like_count,
+        shares: item.share_count,
+        comments: item.comment_count,
+      },
+    ])
+  )
 }
 
 type Props = {
-  initialArticles?: FeedContentItem[]
-  initialLikedIds?: string[]
-  initialSavedIds?: string[]
-  initialCommentPreviews?: Record<string, ContentComment[]>
+  initialPage: StudentFeedPage
   viewerUserId?: string | null
   todayItems?: TodayItem[]
   streakDays?: number
@@ -89,10 +104,7 @@ type Props = {
 }
 
 export function AlunoFeedClient({
-  initialArticles = [],
-  initialLikedIds = [],
-  initialSavedIds = [],
-  initialCommentPreviews = {},
+  initialPage,
   viewerUserId = null,
   todayItems = [],
   streakDays = 0,
@@ -100,28 +112,205 @@ export function AlunoFeedClient({
   weekStats,
 }: Props) {
   const router = useRouter()
-  const [categoria, setCategoria] = useState<string>("todos")
-  const visibleArticles =
-    categoria === "todos"
-      ? initialArticles
-      : initialArticles.filter((a) => FEED_CATEGORIAS.find((c) => c.key === categoria)?.types?.includes(a.type))
-  const [savedMap, setSavedMap] = useState<Record<string, boolean>>(() => {
-    const o: Record<string, boolean> = {}
-    for (const id of initialSavedIds) o[id] = true
-    return o
-  })
-  const [likedMap, setLikedMap] = useState<Record<string, boolean>>(() => {
-    const o: Record<string, boolean> = {}
-    for (const id of initialLikedIds) o[id] = true
-    return o
-  })
-  const [counts, setCounts] = useState<Record<string, { likes: number; shares: number; comments: number }>>(() => {
-    const o: Record<string, { likes: number; shares: number; comments: number }> = {}
-    for (const a of initialArticles) {
-      o[a.id] = { likes: a.like_count, shares: a.share_count, comments: a.comment_count }
+  const initialStatus: FeedStatus = !initialPage.ok
+    ? "error"
+    : initialPage.nextCursor
+      ? "idle"
+      : "end"
+  const [categoria, setCategoria] = useState<StudentFeedCategory>("todos")
+  const [articles, setArticles] = useState<FeedContentItem[]>(initialPage.items)
+  const [nextCursor, setNextCursor] = useState<string | null>(initialPage.nextCursor)
+  const [feedStatus, setFeedStatus] = useState<FeedStatus>(initialStatus)
+  const [feedError, setFeedError] = useState<string | null>(
+    initialPage.ok ? null : initialPage.error ?? "Nao foi possivel carregar o feed"
+  )
+  const [savedMap, setSavedMap] = useState<Record<string, boolean>>(() =>
+    booleanMap(initialPage.savedIds)
+  )
+  const [likedMap, setLikedMap] = useState<Record<string, boolean>>(() =>
+    booleanMap(initialPage.likedIds)
+  )
+  const [counts, setCounts] = useState<
+    Record<string, { likes: number; shares: number; comments: number }>
+  >(() => countMap(initialPage.items))
+  const [commentPreviews, setCommentPreviews] = useState<
+    Record<string, ContentComment[]>
+  >(initialPage.commentPreviews)
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
+  const mountedRef = useRef(true)
+  const inFlightRef = useRef(false)
+  const queuedResetRef = useRef<FeedRequest | null>(null)
+  const failedRequestRef = useRef<FeedRequest | null>(
+    initialPage.ok
+      ? null
+      : { category: "todos", cursor: null, replace: true, version: 0 }
+  )
+  const requestVersionRef = useRef(0)
+  const categoryRef = useRef<StudentFeedCategory>("todos")
+  const nextCursorRef = useRef<string | null>(initialPage.nextCursor)
+  const statusRef = useRef<FeedStatus>(initialStatus)
+
+  const setStatus = useCallback((status: FeedStatus) => {
+    statusRef.current = status
+    setFeedStatus(status)
+  }, [])
+
+  const applyFeedPage = useCallback(
+    (page: StudentFeedPage, request: FeedRequest) => {
+      if (!page.ok) {
+        failedRequestRef.current = page.resetRequired
+          ? { ...request, cursor: null, replace: true }
+          : request
+        setFeedError(page.error ?? "Nao foi possivel carregar o feed")
+        setStatus("error")
+        return
+      }
+      if (request.cursor && page.nextCursor === request.cursor) {
+        failedRequestRef.current = { ...request, cursor: null, replace: true }
+        setFeedError("O feed nao conseguiu avancar. Recarregue a lista.")
+        setStatus("error")
+        return
+      }
+
+      setArticles((current) => {
+        if (request.replace) {
+          return [...new Map(page.items.map((item) => [item.id, item])).values()]
+        }
+        const seen = new Set(current.map((item) => item.id))
+        const incoming = page.items.filter((item) => {
+          if (seen.has(item.id)) return false
+          seen.add(item.id)
+          return true
+        })
+        return [...current, ...incoming]
+      })
+      setLikedMap((current) =>
+        request.replace ? booleanMap(page.likedIds) : { ...current, ...booleanMap(page.likedIds) }
+      )
+      setSavedMap((current) =>
+        request.replace ? booleanMap(page.savedIds) : { ...current, ...booleanMap(page.savedIds) }
+      )
+      setCounts((current) =>
+        request.replace ? countMap(page.items) : { ...countMap(page.items), ...current }
+      )
+      setCommentPreviews((current) =>
+        request.replace ? page.commentPreviews : { ...current, ...page.commentPreviews }
+      )
+      failedRequestRef.current = null
+      nextCursorRef.current = page.nextCursor
+      setNextCursor(page.nextCursor)
+      setFeedError(null)
+      setStatus(page.nextCursor ? "idle" : "end")
+    },
+    [setStatus]
+  )
+
+  const runFeedRequest = useCallback(
+    async (initialRequest: FeedRequest) => {
+      if (inFlightRef.current) {
+        if (initialRequest.replace) queuedResetRef.current = initialRequest
+        return
+      }
+
+      inFlightRef.current = true
+      let request: FeedRequest | null = initialRequest
+      try {
+        while (request && mountedRef.current) {
+          if (request.version === requestVersionRef.current) {
+            setFeedError(null)
+            setStatus("loading")
+          }
+
+          let page: StudentFeedPage
+          try {
+            page = await getStudentFeedPage({
+              category: request.category,
+              cursor: request.cursor,
+            })
+          } catch {
+            page = {
+              ok: false,
+              items: [],
+              nextCursor: null,
+              likedIds: [],
+              savedIds: [],
+              commentPreviews: {},
+              error: "Nao foi possivel carregar o feed agora",
+            }
+          }
+
+          if (mountedRef.current && request.version === requestVersionRef.current) {
+            applyFeedPage(page, request)
+          }
+          request = queuedResetRef.current
+          queuedResetRef.current = null
+        }
+      } finally {
+        inFlightRef.current = false
+      }
+    },
+    [applyFeedPage, setStatus]
+  )
+
+  const loadMore = useCallback(() => {
+    if (statusRef.current !== "idle" || !nextCursorRef.current) return
+    void runFeedRequest({
+      category: categoryRef.current,
+      cursor: nextCursorRef.current,
+      replace: false,
+      version: requestVersionRef.current,
+    })
+  }, [runFeedRequest])
+
+  const changeCategory = useCallback(
+    (category: StudentFeedCategory) => {
+      if (category === categoryRef.current) return
+      const version = requestVersionRef.current + 1
+      requestVersionRef.current = version
+      categoryRef.current = category
+      nextCursorRef.current = null
+      failedRequestRef.current = null
+      setCategoria(category)
+      setArticles([])
+      setNextCursor(null)
+      setFeedError(null)
+      setStatus("loading")
+      void runFeedRequest({ category, cursor: null, replace: true, version })
+    },
+    [runFeedRequest, setStatus]
+  )
+
+  const retryFeed = useCallback(() => {
+    const failed = failedRequestRef.current
+    if (!failed || failed.version !== requestVersionRef.current) return
+    void runFeedRequest(failed)
+  }, [runFeedRequest])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      queuedResetRef.current = null
     }
-    return o
-  })
+  }, [])
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current
+    if (
+      feedStatus !== "idle" ||
+      !nextCursor ||
+      !sentinel ||
+      typeof IntersectionObserver === "undefined"
+    ) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadMore()
+      },
+      { root: null, rootMargin: "500px 0px", threshold: 0 }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [feedStatus, loadMore, nextCursor])
 
   const updateCommentCount = (id: string, count: number) => {
     setCounts((prev) => ({
@@ -216,21 +405,28 @@ export function AlunoFeedClient({
                 size="sm"
                 variant={categoria === c.key ? "default" : "outline"}
                 className={categoria === c.key ? "bg-[#10B981] hover:bg-[#059669]" : ""}
-                onClick={() => setCategoria(c.key)}
+                disabled={feedStatus === "loading" && articles.length === 0}
+                onClick={() => changeCategory(c.key)}
               >
                 {c.label}
               </Button>
             ))}
           </div>
 
-          {visibleArticles.length === 0 && (
+          {articles.length === 0 && feedStatus !== "loading" && feedStatus !== "error" && (
             <div className="text-center py-12 bg-white rounded-xl border border-dashed border-gray-200 text-gray-500">
-              Nenhum conteúdo nesta categoria ainda.
+              <BookOpen className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+              <h3 className="font-medium text-gray-900 mb-1">
+                Nenhum conteudo nesta categoria ainda
+              </h3>
+              <p className="text-sm text-gray-500">
+                Explore professores e siga conteudos para preencher seu feed.
+              </p>
             </div>
           )}
 
           <div className="space-y-4">
-            {visibleArticles.map((item) => {
+            {articles.map((item) => {
               const c = counts[item.id] ?? { likes: item.like_count, shares: item.share_count, comments: item.comment_count }
               const liked = !!likedMap[item.id]
               const isExercise = item.type === "exercise"
@@ -238,17 +434,13 @@ export function AlunoFeedClient({
               const isSimulado = item.type === "simulado"
               const isDica = item.type === "dica"
               const isExamLike = isExercise || isAssessment || isSimulado
-              const qCount = isExamLike
-                ? parseExamFromSettings(item.settings as Record<string, unknown>)
-                    ?.questions.length ?? 0
-                : 0
-              const aset = parseAssessmentSettings(item.settings as Record<string, unknown>)
+              const qCount = isExamLike ? item.question_count : 0
               const dueLine =
-                (isAssessment || isSimulado) && aset.dueAt
-                  ? `Prazo: ${new Date(aset.dueAt).toLocaleString("pt-BR")}`
+                (isAssessment || isSimulado) && item.due_at
+                  ? `Prazo: ${new Date(item.due_at).toLocaleString("pt-BR")}`
                   : null
               const disciplina =
-                item.settings?.disciplina ??
+                item.discipline ??
                 (isSimulado
                   ? "Simulado"
                   : isAssessment
@@ -258,33 +450,14 @@ export function AlunoFeedClient({
                       : isDica
                         ? "Dica rapida"
                         : "Artigo")
-              const dicaVid =
-                isDica && item.settings && typeof item.settings === "object"
-                  ? String(
-                      (item.settings as { dicaVideoUrl?: string }).dicaVideoUrl ?? ""
-                    ).trim() || null
-                  : null
-              const dicaImgs =
-                isDica &&
-                item.settings &&
-                typeof item.settings === "object" &&
-                Array.isArray((item.settings as { dicaImageUrls?: unknown }).dicaImageUrls)
-                  ? ((item.settings as { dicaImageUrls: string[] }).dicaImageUrls ?? []).filter(
-                      (x): x is string => typeof x === "string" && x.trim().length > 0
-                    )
-                  : []
-              const cover = isDica
-                ? dicaVid
-                  ? null
-                  : dicaImgs[0]?.trim() || null
-                : item.settings?.coverUrl?.trim() || null
-              const coverVideo = isExamLike
-                ? null
-                : isDica
-                  ? dicaVid
-                  : item.settings?.coverVideoUrl?.trim() || null
+              const cover = item.image_url
+              const coverVideo = item.video_url
               return (
-                <div key={item.id} className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+                <div
+                  key={item.id}
+                  className="bg-white rounded-xl border border-gray-100 overflow-hidden"
+                  style={{ contentVisibility: "auto", containIntrinsicSize: "800px" }}
+                >
                   <div className="p-4 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <Avatar className="h-10 w-10">
@@ -324,13 +497,12 @@ export function AlunoFeedClient({
 
                     {/* Descrição — max 600 chars */}
                     {(() => {
-                      const text = plainText(item.body_html)
+                      const text = item.excerpt
                       if (!text) return null
-                      const truncated = text.length > EXCERPT_MAX
                       return (
                         <p className="text-sm text-gray-700 leading-relaxed mb-2">
-                          {truncated ? text.slice(0, EXCERPT_MAX) : text}
-                          {truncated ? (
+                          {text}
+                          {item.excerpt_truncated ? (
                             <>
                               {"… "}
                               <Link
@@ -365,6 +537,7 @@ export function AlunoFeedClient({
                           imageUrl={cover}
                           videoUrl={coverVideo}
                           className="w-full h-full object-cover"
+                          deferLoading
                         />
                       ) : (
                         <div className="flex flex-col items-center gap-2 text-gray-400">
@@ -430,7 +603,7 @@ export function AlunoFeedClient({
 
                   <CardInlineComments
                     contentItemId={item.id}
-                    initialComments={initialCommentPreviews[item.id] ?? []}
+                    initialComments={commentPreviews[item.id] ?? []}
                     initialCommentCount={c.comments}
                     viewerUserId={viewerUserId}
                     onCountChange={(count) => updateCommentCount(item.id, count)}
@@ -454,16 +627,38 @@ export function AlunoFeedClient({
               )
             })}
 
-            {initialArticles.length === 0 && (
-              <div className="bg-white rounded-xl border border-gray-100 p-8 text-center">
-                <BookOpen className="h-12 w-12 text-gray-300 mx-auto mb-3" />
-                <h3 className="font-medium text-gray-900 mb-1">Nenhum conteudo ainda</h3>
-                <p className="text-sm text-gray-500">
-                  Explore professores e siga conteudos para preencher seu feed.
-                </p>
-              </div>
-            )}
+            <div ref={sentinelRef} className="h-px" aria-hidden="true" />
 
+            <div className="min-h-10 text-center" aria-live="polite">
+              {feedStatus === "loading" ? (
+                <div className="inline-flex items-center gap-2 text-sm text-gray-500">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Carregando mais publicacoes...
+                </div>
+              ) : null}
+              {feedStatus === "error" ? (
+                <div className="rounded-xl border border-red-100 bg-red-50 p-4">
+                  <p className="text-sm text-red-700">{feedError}</p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="mt-3"
+                    onClick={retryFeed}
+                  >
+                    Tentar novamente
+                  </Button>
+                </div>
+              ) : null}
+              {feedStatus === "idle" && nextCursor ? (
+                <Button type="button" variant="ghost" size="sm" onClick={loadMore}>
+                  Carregar mais
+                </Button>
+              ) : null}
+              {feedStatus === "end" && articles.length > 0 ? (
+                <p className="text-sm text-gray-400">Voce chegou ao fim.</p>
+              ) : null}
+            </div>
           </div>
         </div>
 

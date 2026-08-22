@@ -19,7 +19,7 @@ export default async function ProfessorNotificacoesPage() {
             Central de notificacoes
           </div>
           <h1 className="font-display text-2xl font-bold text-gray-900">Notificacoes</h1>
-          <p className="mt-1 text-sm text-gray-500">Novos seguidores e atividade relacionada ao seu perfil.</p>
+          <p className="mt-1 text-sm text-gray-500">Novos seguidores, curtidas e comentarios nas suas publicacoes.</p>
         </div>
         {unreadCount > 0 && <NotificationsClient accent="blue" />}
       </div>
@@ -66,7 +66,7 @@ export default async function ProfessorNotificacoesPage() {
         <div className="rounded-xl border border-dashed border-gray-200 bg-white p-12 text-center">
           <Bell className="mx-auto mb-4 h-12 w-12 text-gray-200" />
           <p className="font-medium text-gray-900">Nenhuma notificacao ainda</p>
-          <p className="mt-1 text-sm text-gray-500">Quando alunos começarem a te seguir, voce vera aqui.</p>
+          <p className="mt-1 text-sm text-gray-500">Quando alguem seguir, curtir ou comentar seu conteudo, voce vera aqui.</p>
           <Button asChild variant="outline" className="mt-6">
             <Link href="/dashboard/professor/salas">Ver minhas salas</Link>
           </Button>

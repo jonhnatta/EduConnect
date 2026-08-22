@@ -18,8 +18,8 @@ export function CTASection() {
               Comece hoje, é gratuito
             </h2>
             <p className="mt-6 text-lg text-blue-100 max-w-2xl mx-auto">
-              Junte-se a milhares de professores e alunos que já estão transformando 
-              a educação com o EduConnect. Cadastre-se em menos de 2 minutos.
+              Organize conteúdos, turmas e atividades em um único lugar. Crie sua conta
+              gratuita e comece a usar a plataforma.
             </p>
             
             <div className="mt-10 flex flex-col sm:flex-row gap-4 justify-center">
@@ -49,7 +49,7 @@ export function CTASection() {
             </div>
             
             <p className="mt-6 text-sm text-blue-200">
-              Sem cartão de crédito. Sem compromisso. Comece agora.
+              Sem cartão de crédito. O primeiro lançamento é gratuito.
             </p>
           </div>
         </div>

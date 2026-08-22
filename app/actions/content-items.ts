@@ -2,14 +2,15 @@
 
 import { put } from "@/lib/blob"
 import { randomUUID } from "crypto"
+import type { PoolClient } from "pg"
 import { revalidatePath } from "next/cache"
-import { after } from "next/server"
 import { getAuthedUser, requireAuthedUser } from "@/lib/auth/user"
 import { getApprovedProfessorActionAccess } from "@/lib/auth/guards"
 import { query, queryOne } from "@/lib/db/query"
-import { runArticleReview } from "@/lib/content/review-agent"
-import { notifyFollowersNewContent } from "@/lib/notifications/event"
+import { withTransaction } from "@/lib/db/transaction"
+import { addOutboxEvent } from "@/lib/queue/outbox"
 import { checkRateLimit } from "@/lib/security/rate-limit"
+import { createNotification } from "@/lib/notifications/event"
 import {
   effectiveContentType,
   safeUploadFilename,
@@ -33,6 +34,25 @@ import {
   type ContentAudience,
   type ShareMethod,
 } from "@/lib/content/types"
+import {
+  DEFAULT_FEED_PAGE_SIZE,
+  STUDENT_FEED_CATEGORY_TYPES,
+  clampFeedPageSize,
+  decodeFeedCursor,
+  isStudentFeedCategory,
+  nextFeedCursorFromRows,
+  type FeedCursor,
+  type StudentFeedCategory,
+} from "@/lib/content/feed-pagination"
+import {
+  mapFeedCardRow,
+  nullableFeedString,
+  toFeedIsoString,
+  type FeedCardProjectionRow,
+  type FeedContentItem,
+} from "@/lib/content/feed-card"
+
+export type { FeedContentItem } from "@/lib/content/feed-card"
 
 /** Audiência efetiva: só vale para conteúdo público; senão 'all'. */
 function effectiveAudience(visibility: ContentVisibility, audience?: ContentAudience): ContentAudience {
@@ -42,7 +62,7 @@ function effectiveAudience(visibility: ContentVisibility, audience?: ContentAudi
 
 const TRIX_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 /** Capa em video (MP4/WebM/MOV) */
-const COVER_VIDEO_MAX_BYTES = 80 * 1024 * 1024
+const COVER_VIDEO_MAX_BYTES = 15 * 1024 * 1024
 const COMMENT_MAX_LENGTH = 1000
 
 function asRecord(v: unknown): Record<string, unknown> {
@@ -69,11 +89,15 @@ async function assertOwnsAllClassrooms(professorId: string, classroomIds: string
   return rows.length === ids.length
 }
 
-async function replaceContentItemClassrooms(contentItemId: string, classroomIds: string[] | undefined) {
-  await query("delete from public.content_item_classrooms where content_item_id = $1", [contentItemId])
+async function replaceContentItemClassrooms(
+  client: PoolClient,
+  contentItemId: string,
+  classroomIds: string[] | undefined
+) {
+  await client.query("delete from public.content_item_classrooms where content_item_id = $1", [contentItemId])
   const ids = (classroomIds ?? []).filter((x) => typeof x === "string" && x.trim().length > 0)
   if (ids.length === 0) return
-  await query(
+  await client.query(
     "insert into public.content_item_classrooms (content_item_id, classroom_id) select $1, unnest($2::uuid[])",
     [contentItemId, ids]
   )
@@ -643,13 +667,16 @@ export async function publishExercise(
       : new Date().toISOString()
 
   try {
-    await query(
-      `update public.content_items
+    await withTransaction(async (client) => {
+      const updated = await client.query(
+        `update public.content_items
        set title = $1, body_html = $2, status = 'published', visibility = $3, published_at = $4, settings = $5::jsonb, audience = $8
        where id = $6 and author_id = $7 and type = 'exercise'`,
-      [title, bodyHtml || null, input.visibility, publishedAt, JSON.stringify(settings), input.id, p.user.id, effectiveAudience(input.visibility, input.audience)]
-    )
-    await replaceContentItemClassrooms(input.id, input.visibility === "classrooms" ? input.classroomIds : [])
+        [title, bodyHtml || null, input.visibility, publishedAt, JSON.stringify(settings), input.id, p.user.id, effectiveAudience(input.visibility, input.audience)]
+      )
+      if (!updated.rowCount) throw new Error("exercise changed concurrently")
+      await replaceContentItemClassrooms(client, input.id, input.visibility === "classrooms" ? input.classroomIds : [])
+    })
   } catch (e: any) {
     return { ok: false, error: "Erro ao publicar exercicio" }
   }
@@ -742,13 +769,16 @@ export async function publishAssessment(
       : new Date().toISOString()
 
   try {
-    await query(
-      `update public.content_items
+    await withTransaction(async (client) => {
+      const updated = await client.query(
+        `update public.content_items
        set title = $1, body_html = $2, status = 'published', visibility = $3, published_at = $4, settings = $5::jsonb, audience = $8
        where id = $6 and author_id = $7 and type = 'assessment'`,
-      [title, bodyHtml || null, input.visibility, publishedAt, JSON.stringify(settings), input.id, p.user.id, effectiveAudience(input.visibility, input.audience)]
-    )
-    await replaceContentItemClassrooms(input.id, input.visibility === "classrooms" ? input.classroomIds : [])
+        [title, bodyHtml || null, input.visibility, publishedAt, JSON.stringify(settings), input.id, p.user.id, effectiveAudience(input.visibility, input.audience)]
+      )
+      if (!updated.rowCount) throw new Error("assessment changed concurrently")
+      await replaceContentItemClassrooms(client, input.id, input.visibility === "classrooms" ? input.classroomIds : [])
+    })
   } catch (e: any) {
     return { ok: false, error: "Erro ao publicar avaliacao" }
   }
@@ -838,13 +868,16 @@ export async function publishSimulado(
       : new Date().toISOString()
 
   try {
-    await query(
-      `update public.content_items
+    await withTransaction(async (client) => {
+      const updated = await client.query(
+        `update public.content_items
        set title = $1, body_html = $2, status = 'published', visibility = $3, published_at = $4, settings = $5::jsonb, audience = $8
        where id = $6 and author_id = $7 and type = 'simulado'`,
-      [title, bodyHtml || null, input.visibility, publishedAt, JSON.stringify(settings), input.id, p.user.id, effectiveAudience(input.visibility, input.audience)]
-    )
-    await replaceContentItemClassrooms(input.id, input.visibility === "classrooms" ? input.classroomIds : [])
+        [title, bodyHtml || null, input.visibility, publishedAt, JSON.stringify(settings), input.id, p.user.id, effectiveAudience(input.visibility, input.audience)]
+      )
+      if (!updated.rowCount) throw new Error("simulado changed concurrently")
+      await replaceContentItemClassrooms(client, input.id, input.visibility === "classrooms" ? input.classroomIds : [])
+    })
   } catch (e: any) {
     return { ok: false, error: "Erro ao publicar simulado" }
   }
@@ -933,26 +966,54 @@ export async function publishArticle(
   }
 
   try {
-    await query(
-      `update public.content_items
-       set title = $1, body_html = $2, status = 'verificando', visibility = $3, published_at = null, settings = $4::jsonb, audience = $7
-       where id = $5 and author_id = $6 and type = 'article'`,
-      [title, bodyHtml || null, input.visibility, JSON.stringify(settings), input.id, p.user.id, effectiveAudience(input.visibility, input.audience)]
-    )
-    await replaceContentItemClassrooms(input.id, input.visibility === "classrooms" ? input.classroomIds : [])
+    await withTransaction(async (client) => {
+      const current = await client.query<{ status: string; full_name: string | null }>(
+        `select ci.status, p.full_name
+           from public.content_items ci
+           join public.profiles p on p.id = ci.author_id
+          where ci.id = $1 and ci.author_id = $2 and ci.type = 'article'
+          for update`,
+        [input.id, p.user.id]
+      )
+      if (!current.rowCount) throw new Error("article not found")
+
+      const publishedAt = new Date().toISOString()
+      await client.query(
+        `update public.content_items
+            set title = $1, body_html = $2, status = 'published', visibility = $3,
+                published_at = coalesce(published_at, $4), settings = $5::jsonb, audience = $8
+          where id = $6 and author_id = $7 and type = 'article'`,
+        [title, bodyHtml || null, input.visibility, publishedAt, JSON.stringify(settings), input.id, p.user.id, effectiveAudience(input.visibility, input.audience)]
+      )
+      await client.query("delete from public.content_item_classrooms where content_item_id = $1", [input.id])
+      const classroomIds = input.visibility === "classrooms" ? input.classroomIds ?? [] : []
+      if (classroomIds.length) {
+        await client.query(
+          "insert into public.content_item_classrooms (content_item_id, classroom_id) select $1, unnest($2::uuid[])",
+          [input.id, classroomIds]
+        )
+      }
+
+      if (current.rows[0]!.status !== "published") {
+        await addOutboxEvent(client, {
+          queueName: "notification.fanout",
+          eventType: "content.published",
+          dedupKey: `content-published:${input.id}`,
+          aggregateType: "content_item",
+          aggregateId: input.id,
+          payload: {
+            teacherId: p.user.id,
+            teacherName: current.rows[0]!.full_name?.trim() || "Professor",
+            entityId: input.id,
+            contentTypeLabel: "artigo",
+            title,
+          },
+        })
+      }
+    })
   } catch (e: any) {
     return { ok: false, error: "Erro ao publicar artigo" }
   }
-
-  // Agente roda em background após resposta enviada ao cliente
-  const itemId = input.id
-  after(async () => {
-    try {
-      await runArticleReview(itemId)
-    } catch (err) {
-      console.error("[review] Erro no agente de revisao:", err)
-    }
-  })
 
   revalidatePath("/dashboard/professor")
   revalidatePath("/dashboard/professor/perfil")
@@ -1092,38 +1153,62 @@ export async function publishDica(
   const verr = validateDicaMediaForPublish(settings)
   if (verr) return { ok: false, error: verr }
 
-  const publishedAt =
-    existingRow.status === "published" && existingRow.published_at
-      ? existingRow.published_at
-      : new Date().toISOString()
-
   try {
-    await query(
-      `update public.content_items
-       set title = $1, body_html = $2, status = 'published', visibility = $3, published_at = $4, settings = $5::jsonb, audience = $8
-       where id = $6 and author_id = $7 and type = 'dica'`,
-      [title, bodyHtml, input.visibility, publishedAt, JSON.stringify(settings), input.id, p.user.id, effectiveAudience(input.visibility, input.audience)]
-    )
-    await replaceContentItemClassrooms(input.id, input.visibility === "classrooms" ? input.classroomIds : [])
+    await withTransaction(async (client) => {
+      const current = await client.query<{
+        status: string
+        published_at: string | null
+        full_name: string | null
+      }>(
+        `select ci.status, ci.published_at, p.full_name
+           from public.content_items ci
+           join public.profiles p on p.id = ci.author_id
+          where ci.id = $1 and ci.author_id = $2 and ci.type = 'dica'
+          for update`,
+        [input.id, p.user.id]
+      )
+      if (!current.rowCount) throw new Error("dica not found")
+
+      const row = current.rows[0]!
+      const publishedAt =
+        row.status === "published" && row.published_at
+          ? row.published_at
+          : new Date().toISOString()
+      await client.query(
+        `update public.content_items
+            set title = $1, body_html = $2, status = 'published', visibility = $3,
+                published_at = $4, settings = $5::jsonb, audience = $8
+          where id = $6 and author_id = $7 and type = 'dica'`,
+        [title, bodyHtml, input.visibility, publishedAt, JSON.stringify(settings), input.id, p.user.id, effectiveAudience(input.visibility, input.audience)]
+      )
+      await client.query("delete from public.content_item_classrooms where content_item_id = $1", [input.id])
+      const classroomIds = input.visibility === "classrooms" ? input.classroomIds ?? [] : []
+      if (classroomIds.length) {
+        await client.query(
+          "insert into public.content_item_classrooms (content_item_id, classroom_id) select $1, unnest($2::uuid[])",
+          [input.id, classroomIds]
+        )
+      }
+
+      if (row.status !== "published") {
+        await addOutboxEvent(client, {
+          queueName: "notification.fanout",
+          eventType: "content.published",
+          dedupKey: `content-published:${input.id}`,
+          aggregateType: "content_item",
+          aggregateId: input.id,
+          payload: {
+            teacherId: p.user.id,
+            teacherName: row.full_name?.trim() || "Professor",
+            entityId: input.id,
+            contentTypeLabel: "dica",
+            title,
+          },
+        })
+      }
+    })
   } catch (e: any) {
     return { ok: false, error: "Erro ao publicar dica" }
-  }
-
-  const isFirstPublish = existingRow.status !== "published"
-  if (isFirstPublish) {
-    const teacherRow = await queryOne<{ full_name: string | null }>(
-      "SELECT full_name FROM public.profiles WHERE id = $1",
-      [p.user.id]
-    )
-    after(() =>
-      notifyFollowersNewContent({
-        teacherId: p.user.id,
-        teacherName: teacherRow?.full_name?.trim() || "Professor",
-        entityId: input.id,
-        contentTypeLabel: "dica",
-        title: title,
-      }).catch(() => {})
-    )
   }
 
   revalidatePath("/dashboard/aluno")
@@ -1491,125 +1576,609 @@ export async function uploadArticleCoverVideo(
   }
 }
 
-export type FeedContentItem = ContentItemRow & {
-  author: { full_name: string | null; avatar_url: string | null }
-}
-
 /** @deprecated Use FeedContentItem */
 export type FeedArticle = FeedContentItem
-
-export async function getFeedArticlesForCurrentUser(limit = 20): Promise<FeedContentItem[]> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return []
-
-  let articles: any[] = []
-  try {
-    articles = await query<any>(
-      "select * from public.feed_content_items_for_user($1, $2)",
-      [user.id, limit]
-    )
-  } catch {
-    return []
-  }
-  if (articles.length === 0) return []
-
-  const authorIds = [
-    ...new Set(
-      articles.map((a) => a.author_id).filter((id: any) => typeof id === "string" && id.length > 0)
-    ),
-  ]
-  let profiles: { id: string; full_name: string | null; avatar_url: string | null }[] = []
-  if (authorIds.length > 0) {
-    profiles = await query<{ id: string; full_name: string | null; avatar_url: string | null }>(
-      "select id, full_name, avatar_url from public.profiles where id = any($1::uuid[])",
-      [authorIds]
-    )
-  }
-  const byId = new Map(profiles.map((p) => [p.id, p]))
-
-  return articles
-    .filter((a) => a && (a.type === "article" || a.type === "exercise" || a.type === "assessment" || a.type === "simulado" || a.type === "dica"))
-    .map((a) => ({
-      ...(a as ContentItemRow),
-      settings: asRecord((a as any).settings) as ContentItemSettings,
-      author: {
-        full_name: byId.get((a as any).author_id)?.full_name ?? null,
-        avatar_url: byId.get((a as any).author_id)?.avatar_url ?? null,
-      },
-    }))
-}
 
 export type CommunityFeedItem = FeedContentItem & {
   author_slug: string | null
   is_following: boolean
 }
 
+export type StudentFeedPageInput = {
+  cursor?: string | null
+  category?: StudentFeedCategory
+  limit?: number
+}
+
+export type CommunityFeedPageInput = {
+  cursor?: string | null
+  limit?: number
+}
+
+export type StudentFeedPage = {
+  ok: boolean
+  items: FeedContentItem[]
+  nextCursor: string | null
+  likedIds: string[]
+  savedIds: string[]
+  commentPreviews: Record<string, ContentComment[]>
+  error?: string
+  resetRequired?: boolean
+}
+
+export type CommunityFeedPage = {
+  ok: boolean
+  items: CommunityFeedItem[]
+  nextCursor: string | null
+  error?: string
+  resetRequired?: boolean
+}
+
+type FeedCardRow = FeedCardProjectionRow & {
+  feed_sort_at: string | Date
+  feed_cursor_at: string
+  feed_is_following: boolean
+  feed_author_slug: string | null
+  feed_liked?: boolean
+  feed_saved?: boolean
+  feed_comment_previews?: unknown
+}
+
+function mapFeedCommentPreview(value: unknown): ContentComment | null {
+  if (!value || typeof value !== "object") return null
+  const row = value as Record<string, unknown>
+  const author =
+    row.author && typeof row.author === "object"
+      ? (row.author as Record<string, unknown>)
+      : {}
+  const createdAt = toFeedIsoString(row.created_at)
+  const updatedAt = toFeedIsoString(row.updated_at)
+  if (
+    typeof row.id !== "string" ||
+    typeof row.content_item_id !== "string" ||
+    typeof row.user_id !== "string" ||
+    typeof row.body !== "string" ||
+    !createdAt ||
+    !updatedAt
+  ) {
+    return null
+  }
+  return {
+    id: row.id,
+    content_item_id: row.content_item_id,
+    user_id: row.user_id,
+    body: row.body,
+    parent_id: null,
+    created_at: createdAt,
+    updated_at: updatedAt,
+    author: {
+      full_name: nullableFeedString(author.full_name),
+      avatar_url: nullableFeedString(author.avatar_url),
+    },
+  }
+}
+
+function feedCursorParams(cursor: FeedCursor | null) {
+  return [
+    cursor?.bucket ?? null,
+    cursor?.sortAt ?? null,
+    cursor?.id ?? null,
+  ] as const
+}
+
+function failedStudentFeedPage(
+  error: string,
+  resetRequired = false
+): StudentFeedPage {
+  return {
+    ok: false,
+    items: [],
+    nextCursor: null,
+    likedIds: [],
+    savedIds: [],
+    commentPreviews: {},
+    error,
+    resetRequired,
+  }
+}
+
+function failedCommunityFeedPage(
+  error: string,
+  resetRequired = false
+): CommunityFeedPage {
+  return { ok: false, items: [], nextCursor: null, error, resetRequired }
+}
+
+const STUDENT_FEED_PAGE_SQL = `
+  with viewer as materialized (
+    select id
+    from public.profiles
+    where id = $1
+      and user_type = 'aluno'
+  ),
+  followed_ids as materialized (
+    select
+      followed.id,
+      true as feed_is_following,
+      followed.feed_sort_at
+    from viewer
+    join public.teacher_followers tf on tf.student_id = viewer.id
+    cross join lateral (
+      select
+        ci.id,
+        coalesce(ci.published_at, ci.created_at) as feed_sort_at
+      from public.content_items ci
+      where ci.author_id = tf.teacher_id
+        and exists (
+          select 1 from public.profiles author_profile
+          where author_profile.id = ci.author_id
+            and author_profile.deleted_at is null
+            and author_profile.account_status = 'active'
+        )
+        and ci.status = 'published'
+        and ci.audience in ('all', 'students')
+        and ci.type = any($2::text[])
+        and (
+          ci.visibility = 'public'
+          or (
+            ci.visibility = 'classrooms'
+            and exists (
+              select 1
+              from public.content_item_classrooms cic
+              join public.classroom_members cm
+                on cm.classroom_id = cic.classroom_id
+               and cm.student_id = $1
+              where cic.content_item_id = ci.id
+            )
+          )
+          or (ci.visibility = 'private' and ci.author_id = $1)
+        )
+        and (
+          $3::text is null
+          or (
+            $3::text = 'followed'
+            and (coalesce(ci.published_at, ci.created_at), ci.id)
+                < ($4::timestamptz, $5::uuid)
+          )
+        )
+      order by coalesce(ci.published_at, ci.created_at) desc, ci.id desc
+      limit $6
+    ) followed
+    where $3::text is null or $3::text = 'followed'
+    order by followed.feed_sort_at desc, followed.id desc
+    limit $6
+  ),
+  other_ids as materialized (
+    select
+      ci.id,
+      false as feed_is_following,
+      coalesce(ci.published_at, ci.created_at) as feed_sort_at
+    from public.content_items ci
+    cross join viewer
+    where ci.status = 'published'
+      and exists (
+        select 1 from public.profiles author_profile
+        where author_profile.id = ci.author_id
+          and author_profile.deleted_at is null
+          and author_profile.account_status = 'active'
+      )
+      and ci.audience in ('all', 'students')
+      and ci.type = any($2::text[])
+      and (
+        ci.visibility = 'public'
+        or (
+          ci.visibility = 'classrooms'
+          and exists (
+            select 1
+            from public.content_item_classrooms cic
+            join public.classroom_members cm
+              on cm.classroom_id = cic.classroom_id
+             and cm.student_id = $1
+            where cic.content_item_id = ci.id
+          )
+        )
+        or (ci.visibility = 'private' and ci.author_id = $1)
+      )
+      and not exists (
+        select 1
+        from public.teacher_followers tf
+        where tf.teacher_id = ci.author_id
+          and tf.student_id = $1
+      )
+      and (
+        $3::text is null
+        or $3::text = 'followed'
+        or (
+          $3::text = 'other'
+          and (coalesce(ci.published_at, ci.created_at), ci.id)
+              < ($4::timestamptz, $5::uuid)
+        )
+      )
+    order by coalesce(ci.published_at, ci.created_at) desc, ci.id desc
+    limit greatest($6::int - (select count(*)::int from followed_ids), 0)
+  ),
+  page_ids as materialized (
+    select * from followed_ids
+    union all
+    select * from other_ids
+    order by feed_is_following desc, feed_sort_at desc, id desc
+    limit $6
+  )
+  select
+    ci.id,
+    ci.author_id,
+    ci.type,
+    ci.title,
+    ci.audience,
+    ci.published_at,
+    ci.like_count,
+    ci.share_count,
+    ci.comment_count,
+    page_ids.feed_sort_at,
+    to_char(
+      page_ids.feed_sort_at at time zone 'UTC',
+      'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+    ) as feed_cursor_at,
+    page_ids.feed_is_following,
+    left(
+      regexp_replace(left(coalesce(ci.body_html, ''), 4000), '<[^>]*>', ' ', 'g'),
+      700
+    ) as feed_excerpt,
+    nullif(btrim(ci.settings ->> 'disciplina'), '') as feed_discipline,
+    case
+      when jsonb_typeof(ci.settings #> '{exam,questions}') = 'array'
+        then jsonb_array_length(ci.settings #> '{exam,questions}')
+      else 0
+    end as feed_question_count,
+    nullif(btrim(ci.settings ->> 'dueAt'), '') as feed_due_at,
+    nullif(btrim(ci.settings ->> 'coverUrl'), '') as feed_cover_url,
+    nullif(btrim(ci.settings ->> 'coverVideoUrl'), '') as feed_cover_video_url,
+    nullif(btrim(ci.settings #>> '{dicaImageUrls,0}'), '') as feed_dica_image_url,
+    nullif(btrim(ci.settings ->> 'dicaVideoUrl'), '') as feed_dica_video_url,
+    p.full_name as feed_author_name,
+    p.avatar_url as feed_author_avatar,
+    p.slug as feed_author_slug,
+    exists (
+      select 1
+      from public.content_reactions cr
+      where cr.content_item_id = ci.id
+        and cr.user_id = $1
+        and cr.reaction_type = 'like'
+    ) as feed_liked,
+    exists (
+      select 1
+      from public.content_saves cs
+      where cs.content_item_id = ci.id
+        and cs.user_id = $1
+    ) as feed_saved,
+    comments.feed_comment_previews
+  from page_ids
+  join public.content_items ci on ci.id = page_ids.id
+  join public.profiles p on p.id = ci.author_id
+  left join lateral (
+    select coalesce(
+      jsonb_agg(comment_data.payload order by comment_data.created_at asc, comment_data.id asc),
+      '[]'::jsonb
+    ) as feed_comment_previews
+    from (
+      select
+        cc.id,
+        cc.created_at,
+        jsonb_build_object(
+          'id', cc.id,
+          'content_item_id', cc.content_item_id,
+          'user_id', cc.user_id,
+          'body', cc.body,
+          'parent_id', null,
+          'created_at', cc.created_at,
+          'updated_at', cc.updated_at,
+          'author', jsonb_build_object(
+            'full_name', cp.full_name,
+            'avatar_url', cp.avatar_url
+          )
+        ) as payload
+      from public.content_comments cc
+      left join public.profiles cp on cp.id = cc.user_id
+      where cc.content_item_id = ci.id
+        and cc.parent_id is null
+      order by cc.created_at desc, cc.id desc
+      limit 2
+    ) comment_data
+  ) comments on true
+  order by page_ids.feed_is_following desc, page_ids.feed_sort_at desc, ci.id desc
+`
+
+const COMMUNITY_FEED_PAGE_SQL = `
+  with viewer as materialized (
+    select id
+    from public.profiles
+    where id = $1
+      and user_type = 'professor'
+  ),
+  followed_ids as materialized (
+    select
+      followed.id,
+      true as feed_is_following,
+      followed.feed_sort_at
+    from viewer
+    join public.teacher_followers tf on tf.student_id = viewer.id
+    join public.profiles candidate_author
+      on candidate_author.id = tf.teacher_id
+     and candidate_author.user_type = 'professor'
+     and candidate_author.professor_verification_status = 'approved'
+     and candidate_author.deleted_at is null
+     and candidate_author.account_status = 'active'
+    cross join lateral (
+      select
+        ci.id,
+        coalesce(ci.published_at, ci.created_at) as feed_sort_at
+      from public.content_items ci
+      where ci.author_id = tf.teacher_id
+        and ci.status = 'published'
+        and ci.visibility = 'public'
+        and ci.audience in ('all', 'teachers')
+        and ci.author_id <> $1
+        and (
+          $2::text is null
+          or (
+            $2::text = 'followed'
+            and (coalesce(ci.published_at, ci.created_at), ci.id)
+                < ($3::timestamptz, $4::uuid)
+          )
+        )
+      order by coalesce(ci.published_at, ci.created_at) desc, ci.id desc
+      limit $5
+    ) followed
+    where $2::text is null or $2::text = 'followed'
+    order by followed.feed_sort_at desc, followed.id desc
+    limit $5
+  ),
+  other_ids as materialized (
+    select
+      ci.id,
+      false as feed_is_following,
+      coalesce(ci.published_at, ci.created_at) as feed_sort_at
+    from public.content_items ci
+    cross join viewer
+    join public.profiles candidate_author
+      on candidate_author.id = ci.author_id
+     and candidate_author.user_type = 'professor'
+     and candidate_author.professor_verification_status = 'approved'
+     and candidate_author.deleted_at is null
+     and candidate_author.account_status = 'active'
+    where ci.status = 'published'
+      and ci.visibility = 'public'
+      and ci.audience in ('all', 'teachers')
+      and ci.author_id <> $1
+      and not exists (
+        select 1
+        from public.teacher_followers tf
+        where tf.teacher_id = ci.author_id
+          and tf.student_id = $1
+      )
+      and (
+        $2::text is null
+        or $2::text = 'followed'
+        or (
+          $2::text = 'other'
+          and (coalesce(ci.published_at, ci.created_at), ci.id)
+              < ($3::timestamptz, $4::uuid)
+        )
+      )
+    order by coalesce(ci.published_at, ci.created_at) desc, ci.id desc
+    limit greatest($5::int - (select count(*)::int from followed_ids), 0)
+  ),
+  page_ids as materialized (
+    select * from followed_ids
+    union all
+    select * from other_ids
+    order by feed_is_following desc, feed_sort_at desc, id desc
+    limit $5
+  )
+  select
+    ci.id,
+    ci.author_id,
+    ci.type,
+    ci.title,
+    ci.audience,
+    ci.published_at,
+    ci.like_count,
+    ci.share_count,
+    ci.comment_count,
+    page_ids.feed_sort_at,
+    to_char(
+      page_ids.feed_sort_at at time zone 'UTC',
+      'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+    ) as feed_cursor_at,
+    page_ids.feed_is_following,
+    left(
+      regexp_replace(left(coalesce(ci.body_html, ''), 4000), '<[^>]*>', ' ', 'g'),
+      700
+    ) as feed_excerpt,
+    nullif(btrim(ci.settings ->> 'disciplina'), '') as feed_discipline,
+    case
+      when jsonb_typeof(ci.settings #> '{exam,questions}') = 'array'
+        then jsonb_array_length(ci.settings #> '{exam,questions}')
+      else 0
+    end as feed_question_count,
+    nullif(btrim(ci.settings ->> 'dueAt'), '') as feed_due_at,
+    nullif(btrim(ci.settings ->> 'coverUrl'), '') as feed_cover_url,
+    nullif(btrim(ci.settings ->> 'coverVideoUrl'), '') as feed_cover_video_url,
+    nullif(btrim(ci.settings #>> '{dicaImageUrls,0}'), '') as feed_dica_image_url,
+    nullif(btrim(ci.settings ->> 'dicaVideoUrl'), '') as feed_dica_video_url,
+    p.full_name as feed_author_name,
+    p.avatar_url as feed_author_avatar,
+    p.slug as feed_author_slug
+  from page_ids
+  join public.content_items ci on ci.id = page_ids.id
+  join public.profiles p on p.id = ci.author_id
+  order by page_ids.feed_is_following desc, page_ids.feed_sort_at desc, ci.id desc
+`
+
+export async function getStudentFeedPage(
+  input: StudentFeedPageInput = {}
+): Promise<StudentFeedPage> {
+  const request = input && typeof input === "object" ? input : {}
+  const category = request.category ?? "todos"
+  if (!isStudentFeedCategory(category)) {
+    return failedStudentFeedPage("Categoria de feed invalida")
+  }
+
+  const rawCursor = nullableFeedString(request.cursor)
+  const cursor = rawCursor ? decodeFeedCursor(rawCursor) : null
+  if (
+    rawCursor &&
+    (!cursor || cursor.scope !== "student" || cursor.filter !== category)
+  ) {
+    return failedStudentFeedPage("A pagina do feed expirou. Recarregue a lista.", true)
+  }
+
+  const user = await requireAuthedUser().catch(() => null)
+  if (!user) return failedStudentFeedPage("Sessao expirada. Entre novamente.")
+
+  const pageSize = clampFeedPageSize(request.limit ?? DEFAULT_FEED_PAGE_SIZE)
+  const take = pageSize + 1
+  const [cursorBucket, cursorSortAt, cursorId] = feedCursorParams(cursor)
+
+  try {
+    const rows = await query<FeedCardRow>(STUDENT_FEED_PAGE_SQL, [
+      user.id,
+      STUDENT_FEED_CATEGORY_TYPES[category],
+      cursorBucket,
+      cursorSortAt,
+      cursorId,
+      take,
+    ])
+    const pageRows = rows.slice(0, pageSize)
+    const commentPreviews: Record<string, ContentComment[]> = {}
+
+    for (const row of pageRows) {
+      const raw = Array.isArray(row.feed_comment_previews)
+        ? row.feed_comment_previews
+        : []
+      const previews = raw
+        .map(mapFeedCommentPreview)
+        .filter((item): item is ContentComment => item !== null)
+      if (previews.length > 0) commentPreviews[row.id] = previews
+    }
+
+    return {
+      ok: true,
+      items: pageRows.map(mapFeedCardRow),
+      nextCursor: nextFeedCursorFromRows(rows, pageSize, "student", category),
+      likedIds: pageRows.filter((row) => row.feed_liked === true).map((row) => row.id),
+      savedIds: pageRows.filter((row) => row.feed_saved === true).map((row) => row.id),
+      commentPreviews,
+    }
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "feed.student.load_failed",
+        message: error instanceof Error ? error.message : "unknown error",
+      })
+    )
+    return failedStudentFeedPage("Nao foi possivel carregar o feed agora")
+  }
+}
+
 /**
  * Feed da comunidade de professores: posts públicos de OUTROS professores
  * (audiência 'all' ou 'teachers'), com quem o professor segue no topo.
  */
-export async function getProfessorCommunityFeed(limit = 30): Promise<CommunityFeedItem[]> {
-  const user = await requireAuthedUser().catch(() => null)
-  if (!user) return []
-
-  const me = await queryOne<{ user_type: string }>(
-    "select user_type from public.profiles where id = $1",
-    [user.id]
-  )
-  if (me?.user_type !== "professor") return []
-
-  const safeLimit = Math.max(1, Math.min(Number(limit) || 30, 100))
-  let rows: any[] = []
-  try {
-    rows = await query<any>(
-      `select ci.*,
-              p.full_name as author_name,
-              p.avatar_url as author_avatar,
-              p.slug as author_slug,
-              exists (
-                select 1 from public.teacher_followers tf
-                where tf.teacher_id = ci.author_id and tf.student_id = $1
-              ) as is_following
-         from public.content_items ci
-         join public.profiles p on p.id = ci.author_id
-        where ci.status = 'published'
-          and ci.visibility = 'public'
-          and ci.audience in ('all','teachers')
-          and ci.author_id <> $1
-          and p.user_type = 'professor'
-        order by is_following desc, ci.published_at desc nulls last
-        limit $2`,
-      [user.id, safeLimit]
-    )
-  } catch {
-    return []
+export async function getProfessorCommunityFeedPage(
+  input: CommunityFeedPageInput = {}
+): Promise<CommunityFeedPage> {
+  const request = input && typeof input === "object" ? input : {}
+  const rawCursor = nullableFeedString(request.cursor)
+  const cursor = rawCursor ? decodeFeedCursor(rawCursor) : null
+  if (
+    rawCursor &&
+    (!cursor || cursor.scope !== "community" || cursor.filter !== "all")
+  ) {
+    return failedCommunityFeedPage("A pagina do feed expirou. Recarregue a lista.", true)
   }
 
-  return rows
-    .filter((a) => a && (a.type === "article" || a.type === "exercise" || a.type === "assessment" || a.type === "simulado" || a.type === "dica"))
-    .map((a) => ({
-      ...(a as ContentItemRow),
-      settings: asRecord(a.settings) as ContentItemSettings,
-      author: {
-        full_name: a.author_name ?? null,
-        avatar_url: a.author_avatar ?? null,
-      },
-      author_slug: a.author_slug ?? null,
-      is_following: a.is_following === true,
-    }))
+  const user = await requireAuthedUser().catch(() => null)
+  if (!user) return failedCommunityFeedPage("Sessao expirada. Entre novamente.")
+
+  const pageSize = clampFeedPageSize(request.limit ?? DEFAULT_FEED_PAGE_SIZE)
+  const take = pageSize + 1
+  const [cursorBucket, cursorSortAt, cursorId] = feedCursorParams(cursor)
+
+  try {
+    const rows = await query<FeedCardRow>(COMMUNITY_FEED_PAGE_SQL, [
+      user.id,
+      cursorBucket,
+      cursorSortAt,
+      cursorId,
+      take,
+    ])
+    const pageRows = rows.slice(0, pageSize)
+    return {
+      ok: true,
+      items: pageRows.map((row) => ({
+        ...mapFeedCardRow(row),
+        author_slug: nullableFeedString(row.feed_author_slug),
+        is_following: row.feed_is_following === true,
+      })),
+      nextCursor: nextFeedCursorFromRows(rows, pageSize, "community", "all"),
+    }
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "feed.community.load_failed",
+        message: error instanceof Error ? error.message : "unknown error",
+      })
+    )
+    return failedCommunityFeedPage("Nao foi possivel carregar o feed agora")
+  }
+}
+
+/** Compatibilidade para chamadas antigas que ainda esperam apenas o primeiro lote. */
+export async function getFeedArticlesForCurrentUser(
+  limit = DEFAULT_FEED_PAGE_SIZE
+): Promise<FeedContentItem[]> {
+  const page = await getStudentFeedPage({ limit })
+  return page.items
+}
+
+/** Compatibilidade para chamadas antigas que ainda esperam apenas o primeiro lote. */
+export async function getProfessorCommunityFeed(
+  limit = DEFAULT_FEED_PAGE_SIZE
+): Promise<CommunityFeedItem[]> {
+  const page = await getProfessorCommunityFeedPage({ limit })
+  return page.items
+}
+
+export type SavedContentItem = {
+  id: string
+  type: ContentItemType
+  title: string
+  like_count: number
+  comment_count: number
+  author: { full_name: string | null; avatar_url: string | null }
 }
 
 /** Conteúdos que o usuário salvou (para a página "Salvos"). */
-export async function listMySavedContent(limit = 50): Promise<FeedContentItem[]> {
+export async function listMySavedContent(limit = 50): Promise<SavedContentItem[]> {
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return []
 
-  let rows: any[] = []
   try {
-    rows = await query<any>(
-      `select ci.*
+    return await query<SavedContentItem>(
+      `select
+         ci.id,
+         ci.type,
+         ci.title,
+         ci.like_count,
+         ci.comment_count,
+         json_build_object(
+           'full_name', p.full_name,
+           'avatar_url', p.avatar_url
+         ) as author
        from public.content_items ci
        join public.content_saves cs on cs.content_item_id = ci.id
+       join public.profiles p on p.id = ci.author_id
        where cs.user_id = $1 and ci.status = 'published'
        order by cs.created_at desc
        limit $2`,
@@ -1618,28 +2187,6 @@ export async function listMySavedContent(limit = 50): Promise<FeedContentItem[]>
   } catch {
     return []
   }
-  if (rows.length === 0) return []
-
-  const authorIds = [
-    ...new Set(rows.map((a) => a.author_id).filter((id: any) => typeof id === "string" && id.length > 0)),
-  ]
-  let profiles: { id: string; full_name: string | null; avatar_url: string | null }[] = []
-  if (authorIds.length > 0) {
-    profiles = await query<{ id: string; full_name: string | null; avatar_url: string | null }>(
-      "select id, full_name, avatar_url from public.profiles where id = any($1::uuid[])",
-      [authorIds]
-    )
-  }
-  const byId = new Map(profiles.map((p) => [p.id, p]))
-
-  return rows.map((a) => ({
-    ...(a as ContentItemRow),
-    settings: asRecord((a as any).settings) as ContentItemSettings,
-    author: {
-      full_name: byId.get((a as any).author_id)?.full_name ?? null,
-      avatar_url: byId.get((a as any).author_id)?.avatar_url ?? null,
-    },
-  }))
 }
 
 export async function getMyLikesForContentIds(
@@ -1649,9 +2196,10 @@ export async function getMyLikesForContentIds(
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return new Set()
 
+  const ids = [...new Set(contentIds)].slice(0, 100)
   const rows = await query<{ content_item_id: string }>(
     "select content_item_id from public.content_reactions where user_id = $1 and reaction_type = 'like' and content_item_id = any($2::uuid[])",
-    [user.id, contentIds]
+    [user.id, ids]
   ).catch(() => [])
 
   return new Set(rows.map((r) => r.content_item_id))
@@ -1772,6 +2320,7 @@ export async function listContentCommentPreviews(
     ),
   ]
   if (ids.length === 0) return {}
+  ids.splice(100)
 
   const limit = Math.max(1, Math.min(perContentLimit, 5))
   const rows = await query<CommentRow & { rn: number }>(
@@ -1858,6 +2407,30 @@ export async function createContentComment(
       "select comment_count from public.content_items where id = $1",
       [contentItemId]
     )
+
+    const notificationContext = await queryOne<{
+      author_id: string
+      title: string
+      actor_name: string | null
+    }>(
+      `select ci.author_id, ci.title, p.full_name as actor_name
+         from public.content_items ci
+         left join public.profiles p on p.id = $2
+        where ci.id = $1`,
+      [contentItemId, user.id]
+    )
+    if (notificationContext && notificationContext.author_id !== user.id) {
+      const actorName = notificationContext.actor_name?.trim() || "Alguem"
+      await createNotification({
+        recipientId: notificationContext.author_id,
+        type: "content_comment",
+        actorId: user.id,
+        entityId: contentItemId,
+        eventId: row.id,
+        entityType: "content_item",
+        message: `${actorName} comentou em "${notificationContext.title}"`,
+      }).catch((error) => console.error("[content comment notify]", error))
+    }
 
     revalidatePath("/dashboard/aluno")
     revalidatePath("/dashboard/professor")
@@ -1972,14 +2545,16 @@ export async function toggleContentLike(
     [contentItemId, user.id]
   )
 
+  let insertedReactionId: string | null = null
   try {
     if (existing) {
       await query("delete from public.content_reactions where id = $1", [existing.id])
     } else {
-      await query(
-        "insert into public.content_reactions (content_item_id, user_id, reaction_type) values ($1, $2, 'like') on conflict do nothing",
+      const inserted = await queryOne<{ id: string }>(
+        "insert into public.content_reactions (content_item_id, user_id, reaction_type) values ($1, $2, 'like') on conflict do nothing returning id",
         [contentItemId, user.id]
       )
+      insertedReactionId = inserted?.id ?? null
     }
   } catch (e: any) {
     return { ok: false, error: "Erro ao reagir" }
@@ -1989,6 +2564,32 @@ export async function toggleContentLike(
     "select like_count from public.content_items where id = $1",
     [contentItemId]
   )
+
+  if (insertedReactionId) {
+    const notificationContext = await queryOne<{
+      author_id: string
+      title: string
+      actor_name: string | null
+    }>(
+      `select ci.author_id, ci.title, p.full_name as actor_name
+         from public.content_items ci
+         left join public.profiles p on p.id = $2
+        where ci.id = $1`,
+      [contentItemId, user.id]
+    )
+    if (notificationContext && notificationContext.author_id !== user.id) {
+      const actorName = notificationContext.actor_name?.trim() || "Alguem"
+      await createNotification({
+        recipientId: notificationContext.author_id,
+        type: "content_like",
+        actorId: user.id,
+        entityId: contentItemId,
+        eventId: insertedReactionId,
+        entityType: "content_item",
+        message: `${actorName} curtiu sua publicacao "${notificationContext.title}"`,
+      }).catch((error) => console.error("[content like notify]", error))
+    }
+  }
 
   revalidatePath("/dashboard/aluno")
   revalidatePath(`/conteudo/${contentItemId}`)
@@ -2007,9 +2608,10 @@ export async function getMySavesForContentIds(
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return new Set()
 
+  const ids = [...new Set(contentIds)].slice(0, 100)
   const rows = await query<{ content_item_id: string }>(
     "select content_item_id from public.content_saves where user_id = $1 and content_item_id = any($2::uuid[])",
-    [user.id, contentIds]
+    [user.id, ids]
   ).catch(() => [])
 
   return new Set(rows.map((r) => r.content_item_id))
@@ -2122,14 +2724,21 @@ export async function recordContentShare(
   method: ShareMethod
 ): Promise<{ ok: true; shareCount: number } | { ok: false; error: string }> {
   const user = await requireAuthedUser().catch(() => null)
+  if (!user) return { ok: false, error: "Faca login para compartilhar" }
+  if (method !== "copy_link" && method !== "native_share") {
+    return { ok: false, error: "Metodo de compartilhamento invalido" }
+  }
+  if (!(await checkRateLimit(`content-share:${user.id}`, 60, 3600, { failClosed: true }))) {
+    return { ok: false, error: "Limite de compartilhamentos excedido" }
+  }
 
-  const canView = await canViewContentItem(contentItemId, user?.id ?? null)
+  const canView = await canViewContentItem(contentItemId, user.id)
   if (!canView) return { ok: false, error: "Conteudo nao encontrado" }
 
   try {
     await query(
       "insert into public.content_share_events (content_item_id, user_id, share_method) values ($1, $2, $3)",
-      [contentItemId, user?.id ?? null, method]
+      [contentItemId, user.id, method]
     )
   } catch (e: any) {
     return { ok: false, error: "Erro ao registrar compartilhamento" }

@@ -26,6 +26,17 @@ function isTimedExamContentType(t: string): boolean {
   return t === "assessment" || t === "simulado"
 }
 
+async function canStudentAccessContentItem(
+  contentItemId: string,
+  userId: string
+): Promise<boolean> {
+  const row = await queryOne<{ can_access: boolean }>(
+    "select public.student_can_submit_content_item($1::uuid, $2::uuid) as can_access",
+    [contentItemId, userId]
+  ).catch(() => null)
+  return row?.can_access === true
+}
+
 /** Rascunho/envio: bloqueia fora da janela ou se encerrada (nao aplica se ja enviado — tratar antes). */
 function assertAssessmentStudentWriteAllowed(
   settings: Record<string, unknown>
@@ -103,6 +114,10 @@ export async function getExamForContentExercise(
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return { ok: false, error: "Nao autenticado" }
 
+  if (!(await canStudentAccessContentItem(contentItemId, user.id))) {
+    return { ok: false, error: "Conteudo nao encontrado" }
+  }
+
   type ItemRow = {
     settings: Record<string, unknown>
     status: string
@@ -167,6 +182,10 @@ export async function getMyContentExerciseSubmission(
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return { submission: null, error: "Nao autenticado" }
 
+  if (!(await canStudentAccessContentItem(contentItemId, user.id))) {
+    return { submission: null, error: "Conteudo nao encontrado" }
+  }
+
   try {
     const data = await queryOne<Record<string, unknown>>(
       "select * from public.content_exercise_submissions where content_item_id = $1 and student_id = $2",
@@ -185,6 +204,10 @@ export async function saveContentExerciseDraft(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return { ok: false, error: "Nao autenticado" }
+
+  if (!(await canStudentAccessContentItem(contentItemId, user.id))) {
+    return { ok: false, error: "Conteudo nao encontrado" }
+  }
 
   type ItemRow = {
     id: string
@@ -246,26 +269,36 @@ export async function saveContentExerciseDraft(
 
   if (existing) {
     try {
-      await query(
+      const submitted = await queryOne<{ id: string }>(
         `update public.content_exercise_submissions
          set answers = $3::jsonb
-         where id = $1 and status = 'rascunho' and student_id = $2`,
+         where id = $1 and status = 'rascunho' and student_id = $2
+           and public.student_can_submit_content_item(content_item_id, $2)
+         returning id`,
         [existing.id, user.id, JSON.stringify(sanitized)]
       )
+      if (!submitted) return { ok: false, error: "Prova ja enviada" }
     } catch (e: any) {
       return { ok: false, error: "Erro" }
     }
   } else {
     try {
-      await query(
+      const submitted = await queryOne<{ id: string }>(
         `insert into public.content_exercise_submissions
            (content_item_id, student_id, status, answers)
-         values ($1, $2, 'rascunho', $3::jsonb)
+         select $1, $2, 'rascunho', $3::jsonb
+          where public.student_can_submit_content_item($1, $2)
          on conflict (content_item_id, student_id)
          do update set answers = excluded.answers
-         where public.content_exercise_submissions.status = 'rascunho'`,
+         where public.content_exercise_submissions.status = 'rascunho'
+           and public.student_can_submit_content_item(
+             public.content_exercise_submissions.content_item_id,
+             public.content_exercise_submissions.student_id
+           )
+         returning id`,
         [contentItemId, user.id, JSON.stringify(sanitized)]
       )
+      if (!submitted) return { ok: false, error: "Prova ja enviada" }
     } catch (e: any) {
       return { ok: false, error: "Erro" }
     }
@@ -281,6 +314,10 @@ export async function submitContentExercise(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return { ok: false, error: "Nao autenticado" }
+
+  if (!(await canStudentAccessContentItem(contentItemId, user.id))) {
+    return { ok: false, error: "Conteudo nao encontrado" }
+  }
 
   type ItemRow = {
     settings: Record<string, unknown>
@@ -349,7 +386,7 @@ export async function submitContentExercise(
 
   if (existing) {
     try {
-      await query(
+      const submitted = await queryOne<{ id: string }>(
         `update public.content_exercise_submissions
          set answers = $3::jsonb,
              status = 'enviado',
@@ -357,7 +394,9 @@ export async function submitContentExercise(
              open_scores = $5::jsonb,
              score_total = $6,
              submitted_at = $7
-         where id = $1 and student_id = $2 and status = 'rascunho'`,
+         where id = $1 and student_id = $2 and status = 'rascunho'
+           and public.student_can_submit_content_item(content_item_id, $2)
+         returning id`,
         [
           existing.id,
           user.id,
@@ -368,15 +407,17 @@ export async function submitContentExercise(
           now,
         ]
       )
+      if (!submitted) return { ok: false, error: "Prova ja enviada" }
     } catch (e: any) {
       return { ok: false, error: "Erro" }
     }
   } else {
     try {
-      await query(
+      const submitted = await queryOne<{ id: string }>(
         `insert into public.content_exercise_submissions
            (content_item_id, student_id, status, answers, score_mcq, open_scores, score_total, submitted_at)
-         values ($1, $2, 'enviado', $3::jsonb, $4, $5::jsonb, $6, $7)
+         select $1, $2, 'enviado', $3::jsonb, $4, $5::jsonb, $6, $7
+          where public.student_can_submit_content_item($1, $2)
          on conflict (content_item_id, student_id)
          do update set
            status = 'enviado',
@@ -385,7 +426,12 @@ export async function submitContentExercise(
            open_scores = excluded.open_scores,
            score_total = excluded.score_total,
            submitted_at = excluded.submitted_at
-         where public.content_exercise_submissions.status = 'rascunho'`,
+         where public.content_exercise_submissions.status = 'rascunho'
+           and public.student_can_submit_content_item(
+             public.content_exercise_submissions.content_item_id,
+             public.content_exercise_submissions.student_id
+           )
+         returning id`,
         [
           contentItemId,
           user.id,
@@ -396,6 +442,7 @@ export async function submitContentExercise(
           now,
         ]
       )
+      if (!submitted) return { ok: false, error: "Prova ja enviada" }
     } catch (e: any) {
       return { ok: false, error: "Erro" }
     }
@@ -580,6 +627,7 @@ export async function getMcqSolutionsForContentExercise(
 
   // So libera o gabarito para o autor (preview/correcao) ou para o aluno que JA enviou.
   if (row.author_id !== user.id) {
+    if (!(await canStudentAccessContentItem(contentItemId, user.id))) return null
     const sub = await queryOne<{ status: string }>(
       "select status from public.content_exercise_submissions where content_item_id = $1 and student_id = $2",
       [contentItemId, user.id]

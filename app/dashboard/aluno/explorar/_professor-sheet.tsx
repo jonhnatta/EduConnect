@@ -132,11 +132,7 @@ export function ProfessorSheet({ slugOrId, onClose }: Props) {
   const [isFollowPending, startFollowTransition] = useTransition()
 
   useEffect(() => {
-    if (!slugOrId) {
-      setProfile(null)
-      return
-    }
-    setProfile(null)
+    if (!slugOrId) return
     startTransition(async () => {
       const [data, followState] = await Promise.all([
         getProfessorProfile(slugOrId),

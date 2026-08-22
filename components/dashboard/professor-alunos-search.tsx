@@ -22,6 +22,7 @@ export function ProfessorAlunosSearchBar({ initialQuery }: Props) {
   const debounceUrlRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Browser navigation can replace the server-provided query.
     setLocalQ(initialQuery)
   }, [initialQuery])
 
@@ -44,10 +45,7 @@ export function ProfessorAlunosSearchBar({ initialQuery }: Props) {
 
   useEffect(() => {
     const q = localQ.trim()
-    if (q.length < 2) {
-      setSuggestions([])
-      return
-    }
+    if (q.length < 2) return
     let cancelled = false
     const t = setTimeout(async () => {
       setLoadingSuggest(true)
@@ -119,6 +117,7 @@ export function ProfessorAlunosSearchBar({ initialQuery }: Props) {
                   key={row.studentId}
                   type="button"
                   role="option"
+                  aria-selected="false"
                   className={cn(
                     "w-full text-left px-3 py-2 text-sm hover:bg-blue-50",
                     "focus:bg-blue-50 focus:outline-none"

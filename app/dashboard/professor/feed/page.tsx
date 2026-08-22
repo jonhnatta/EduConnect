@@ -1,13 +1,13 @@
 import { Rss } from "lucide-react"
 import { requireProfessorAccess } from "@/lib/auth/guards"
-import { getProfessorCommunityFeed } from "@/app/actions/content-items"
+import { getProfessorCommunityFeedPage } from "@/app/actions/content-items"
 import { ProfessorCommunityFeed } from "@/components/dashboard/professor-community-feed"
 
 export const dynamic = "force-dynamic"
 
 export default async function ProfessorFeedPage() {
   await requireProfessorAccess()
-  const items = await getProfessorCommunityFeed(40)
+  const initialPage = await getProfessorCommunityFeedPage()
 
   return (
     <div className="max-w-3xl mx-auto pb-20 lg:pb-0">
@@ -23,7 +23,7 @@ export default async function ProfessorFeedPage() {
         </div>
       </div>
 
-      <ProfessorCommunityFeed items={items} />
+      <ProfessorCommunityFeed initialPage={initialPage} />
     </div>
   )
 }

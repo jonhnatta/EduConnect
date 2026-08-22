@@ -113,7 +113,7 @@ export default function OnboardingPage() {
             Estamos montando seu plano de estudos personalizado...
           </h2>
           <p className="text-blue-100 mb-8">
-            A IA esta analisando suas respostas para criar o melhor plano para voce
+            Estamos organizando suas respostas para preparar seu plano de estudos
           </p>
           <div className="space-y-3 text-sm text-blue-200">
             <div className="flex items-center gap-3 justify-center animate-pulse">

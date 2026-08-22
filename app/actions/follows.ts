@@ -15,6 +15,10 @@ async function resolveTeacherId(teacherIdOrSlug: string): Promise<string | null>
     `SELECT id
        FROM public.profiles
       WHERE user_type = 'professor'
+        AND professor_verification_status = 'approved'
+        AND profile_visibility = 'public'
+        AND deleted_at IS NULL
+        AND account_status = 'active'
         AND (id::text = $1 OR lower(slug) = lower($1))
       LIMIT 1`,
     [teacherIdOrSlug]
@@ -68,7 +72,11 @@ export async function toggleFollow(
   }
 
   const teacher = await queryOne<{ user_type: string }>(
-    "SELECT user_type FROM public.profiles WHERE id = $1",
+    `SELECT user_type FROM public.profiles
+      WHERE id = $1 AND user_type = 'professor'
+        AND professor_verification_status = 'approved'
+        AND profile_visibility = 'public'
+        AND deleted_at IS NULL AND account_status = 'active'`,
     [teacherId]
   )
   if (teacher?.user_type !== "professor") return { ok: false, error: "Professor não encontrado" }
@@ -139,7 +147,11 @@ export async function toggleProfessorFollow(
   }
 
   const target = await queryOne<{ user_type: string }>(
-    "SELECT user_type FROM public.profiles WHERE id = $1",
+    `SELECT user_type FROM public.profiles
+      WHERE id = $1 AND user_type = 'professor'
+        AND professor_verification_status = 'approved'
+        AND profile_visibility = 'public'
+        AND deleted_at IS NULL AND account_status = 'active'`,
     [targetProfessorId]
   )
   if (target?.user_type !== "professor") return { ok: false, error: "Professor não encontrado" }

@@ -125,6 +125,7 @@ export function ClassroomActivityFormDialog({
 
   useEffect(() => {
     if (!open) return
+    /* eslint-disable react-hooks/set-state-in-effect -- Opening a draft editor must atomically copy the selected activity into local form state. */
     if (activity) {
       setType(activity.type)
       setTitle(activity.title)
@@ -156,6 +157,7 @@ export function ClassroomActivityFormDialog({
     setPendingFiles([])
     if (fileInputRef.current) fileInputRef.current.value = ""
     setDescriptionEditorKey((k) => k + 1)
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [open, activity])
 
   const addPendingFiles = (list: FileList | null) => {

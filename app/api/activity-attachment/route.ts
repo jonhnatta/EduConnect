@@ -3,24 +3,12 @@ import { NextRequest, NextResponse } from "next/server"
 import { getAuthedUser } from "@/lib/auth/user"
 import { queryOne } from "@/lib/db/query"
 import { applySafeServingHeaders } from "@/lib/http/safe-serving"
+import { classroomIdFromAttachmentPath } from "@/lib/http/blob-paths"
 
 export const runtime = "nodejs"
 
-const ALLOWED_PREFIXES = [
-  /^classroom-activities\/([^/]+)\//,
-  /^classroom-materials\/([^/]+)\//,
-  /^classroom-mural\/([^/]+)\//,
-]
-
 function extractClassroomId(pathname: string): string | null {
-  if (pathname.includes("..") || pathname.includes("//") || pathname.includes("\\")) {
-    return null
-  }
-  for (const re of ALLOWED_PREFIXES) {
-    const m = pathname.match(re)
-    if (m?.[1]) return m[1]
-  }
-  return null
+  return classroomIdFromAttachmentPath(pathname)
 }
 
 function sanitizeDownloadFilename(name: string): string {

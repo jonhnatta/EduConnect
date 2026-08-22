@@ -1,7 +1,6 @@
 import { 
   FileText, 
   Users, 
-  Brain, 
   BarChart3, 
   Sparkles, 
   BookOpen, 
@@ -25,9 +24,9 @@ const professorFeatures = [
     description: "Crie salas de aula virtuais, acompanhe entregas e organize seus alunos."
   },
   {
-    icon: Brain,
-    title: "Revisão por IA",
-    description: "Antes de publicar, a IA verifica plágio, erros conceituais e sugere melhorias."
+    icon: Shield,
+    title: "Publicação com controle",
+    description: "Organize seus conteúdos e publique quando estiverem prontos."
   },
   {
     icon: BarChart3,
@@ -40,17 +39,17 @@ const alunoFeatures = [
   {
     icon: Layout,
     title: "Feed personalizado",
-    description: "Conteúdo curado pela IA baseado nos seus interesses e objetivos de aprendizado."
+    description: "Conteúdo organizado por interesses, turmas e professores que você acompanha."
   },
   {
     icon: Calendar,
     title: "Plano de estudos",
-    description: "A IA cria um plano personalizado com base no seu tempo disponível e metas."
+    description: "Organize seus estudos com base no tempo disponível e nas suas metas."
   },
   {
     icon: MessageCircle,
-    title: "Tutor IA socrático",
-    description: "Tire dúvidas com uma IA que ensina através de perguntas, sem dar respostas prontas."
+    title: "Aprenda com sua comunidade",
+    description: "Encontre conteúdos, exercícios e professores para apoiar seus estudos."
   },
   {
     icon: Target,
@@ -123,29 +122,28 @@ export function FeaturesSection() {
           </div>
         </div>
 
-        {/* AI Highlight */}
+        {/* Product highlight */}
         <div className="mt-20 rounded-2xl bg-gradient-to-r from-[#1E3A8A] to-[#1D4ED8] p-8 lg:p-12">
           <div className="grid gap-8 lg:grid-cols-2 items-center">
             <div className="text-white">
               <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-sm font-medium mb-4">
                 <Shield className="h-4 w-4" />
-                <span>IA Integrada em Toda Jornada</span>
+                <span>Aprendizado conectado</span>
               </div>
               <h3 className="font-display text-2xl lg:text-3xl font-bold mb-4">
-                Inteligência Artificial que trabalha por você
+                Ferramentas para ensinar e aprender
               </h3>
               <p className="text-blue-100 leading-relaxed">
-                Nossa IA não é apenas um chatbot. Ela revisa conteúdo antes de publicar, 
-                cria planos de estudo personalizados, cuida da curadoria do feed e atua 
-                como tutora socrática para cada aluno.
+                Organize conteúdos, turmas e estudos em um ambiente pensado para
+                professores e alunos.
               </p>
             </div>
             <div className="space-y-4">
               {[
-                "Revisão automática de plágio e erros conceituais",
-                "Planos de estudo que se adaptam ao seu desempenho",
-                "Feed curado com base nos seus objetivos",
-                "Tutoria que ensina a pensar, não dá respostas"
+                "Conteúdos e turmas em um só lugar",
+                "Planos de estudo organizados por objetivos",
+                "Feed baseado em interesses e acompanhamento",
+                "Progresso e atividades para apoiar a rotina"
               ].map((item) => (
                 <div key={item} className="flex items-center gap-3 text-white">
                   <CheckCircle2 className="h-5 w-5 text-[#10B981] flex-shrink-0" />

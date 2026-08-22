@@ -11,7 +11,7 @@ import {
   type RequestLimitRow,
 } from "@/lib/auth/password-reset"
 import { dbPool } from "@/lib/db/pool"
-import { sendPasswordResetEmail } from "@/lib/email/resend"
+import { queueEmailDelivery } from "@/lib/email/delivery"
 
 export const runtime = "nodejs"
 
@@ -113,11 +113,20 @@ export async function POST(request: Request) {
       "update public.password_reset_codes set used_at = timezone('utc'::text, now()) where user_id = $1 and used_at is null",
       [user.id],
     )
-    await client.query(
+    const resetCode = await client.query<{ id: string }>(
       `insert into public.password_reset_codes (user_id, code_hash, expires_at)
-       values ($1, $2, timezone('utc'::text, now()) + ($3::text || ' hours')::interval)`,
+       values ($1, $2, timezone('utc'::text, now()) + ($3::text || ' hours')::interval)
+       returning id`,
       [user.id, codeHash, PASSWORD_RESET_CODE_TTL_HOURS],
     )
+    const expiresAt = new Date(Date.now() + PASSWORD_RESET_CODE_TTL_HOURS * 60 * 60 * 1000)
+    await queueEmailDelivery(client, {
+      recipient: user.email,
+      template: "password_reset",
+      code,
+      expiresAt,
+      dedupKey: `password-reset:${resetCode.rows[0]!.id}`,
+    })
     await client.query("commit")
   } catch (error) {
     await client.query("rollback").catch(() => {})
@@ -127,25 +136,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "Erro ao gerar codigo" }, { status: 500 })
   } finally {
     client.release()
-  }
-
-  try {
-    if (!user) {
-      return genericSuccess()
-    }
-
-    await sendPasswordResetEmail({ to: user.email, code })
-  } catch (error) {
-    await pool.query(
-      "update public.password_reset_codes set used_at = timezone('utc'::text, now()) where user_id = $1 and used_at is null",
-      [user.id],
-    ).catch(() => {})
-
-    if (process.env.NODE_ENV !== "production") {
-      console.error("/api/auth/password-reset/request email failed:", error)
-    }
-
-    return genericSuccess()
   }
 
   return genericSuccess()

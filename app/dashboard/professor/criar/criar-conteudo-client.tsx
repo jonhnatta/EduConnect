@@ -19,25 +19,12 @@ import {
   saveExerciseDraft,
   saveSimuladoDraft,
 } from "@/app/actions/content-items"
-import {
-  getMyContentReview,
-  professorDecideAfterReview,
-} from "@/app/actions/content-review"
-import { ContentReviewDialog } from "@/components/dashboard/content-review-dialog"
-import type { ContentReviewResult } from "@/lib/content/types"
 import { ActivityExamEditor } from "@/components/dashboard/activity-exam-editor"
 import { uploadArticleBlobViaApi } from "@/lib/article-upload-client"
 import { ArticleCoverMedia } from "@/components/dashboard/article-cover-media"
 import { TrixArticleBody } from "@/components/dashboard/trix-article-body"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -50,11 +37,8 @@ import {
 import { datetimeLocalToIso, isoToDatetimeLocal } from "@/lib/datetime-local"
 import { cn } from "@/lib/utils"
 import {
-  AlertTriangle,
   ArrowLeft,
   BarChart,
-  Bot,
-  CheckCircle2,
   ClipboardList,
   FileText,
   LayoutGrid,
@@ -66,7 +50,6 @@ import {
   Upload,
   Video,
   X,
-  XCircle,
 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -99,14 +82,6 @@ const niveis = [
   "Pre-vestibular",
   "Graduacao",
 ]
-
-interface AIReview {
-  originalidade: { score: number; status: "ok" | "warning" | "error"; message: string }
-  precisao: { score: number; status: "ok" | "warning" | "error"; message: string }
-  qualidade: { score: number; status: "ok" | "warning" | "error"; message: string }
-  sugestoes: string[]
-  statusFinal: "APROVADO" | "APROVADO_COM_RESSALVAS" | "REPROVADO"
-}
 
 type ClassroomOpt = { id: string; name: string; subject: string }
 
@@ -229,8 +204,6 @@ export function CriarConteudoClient({
   const [tipoSelecionado, setTipoSelecionado] = useState<string | null>(() =>
     initialEditId ? null : null
   )
-  const [isReviewing, setIsReviewing] = useState(false)
-  const [showReviewDialog, setShowReviewDialog] = useState(false)
   const [tags, setTags] = useState<string[]>([])
   const [tagInput, setTagInput] = useState("")
 
@@ -240,10 +213,6 @@ export function CriarConteudoClient({
     nivel: "",
     conteudo: "",
   })
-
-  const [aiReview, setAiReview] = useState<AIReview | null>(null)
-  const [reviewResult, setReviewResult] = useState<ContentReviewResult | null>(null)
-  const [showEditorReviewDialog, setShowEditorReviewDialog] = useState(false)
 
   const [articleDraftId, setArticleDraftId] = useState<string | null>(null)
   const [articleBodyHtml, setArticleBodyHtml] = useState("")
@@ -306,12 +275,8 @@ export function CriarConteudoClient({
   }, [simuladoDraftId])
 
   useEffect(() => {
-    if (!initialEditId) {
-      setLoadingEdit(false)
-      return
-    }
+    if (!initialEditId) return
     let cancelled = false
-    setLoadingEdit(true)
     void listMyClassroomsForArticle().then(setClassrooms)
     void loadProfessorContentForEdit(initialEditId).then((res) => {
       if (cancelled) return
@@ -339,11 +304,6 @@ export function CriarConteudoClient({
         setLoadedArticleStatus(a.status)
         setCoverUrl(a.settings.coverUrl ?? null)
         setCoverVideoUrl(a.settings.coverVideoUrl ?? null)
-        if (a.status === "revisao" || a.status === "aguardando_decisao") {
-          void getMyContentReview(a.id).then((r) => {
-            if (!cancelled) setReviewResult(r)
-          })
-        }
       } else if (res.kind === "dica") {
         const d = res.dica
         setTipoSelecionado("dica")
@@ -514,48 +474,6 @@ export function CriarConteudoClient({
     )
   }
 
-  const handleRevisao = async () => {
-    if (tipoSelecionado === "artigo" && !initialEditId) {
-      try {
-        await ensureArticleDraftId()
-      } catch (err) {
-        toast.error(
-          err instanceof Error ? err.message : "Erro ao preparar rascunho para revisao"
-        )
-        return
-      }
-    }
-    setIsReviewing(true)
-    setTimeout(() => {
-      setAiReview({
-        originalidade: {
-          score: 95,
-          status: "ok",
-          message: "Nenhum plagio detectado",
-        },
-        precisao: {
-          score: 88,
-          status: "warning",
-          message:
-            "Possivel imprecisao no trecho sobre formula de Bhaskara - verifique os sinais",
-        },
-        qualidade: {
-          score: 92,
-          status: "ok",
-          message: "Conteudo bem estruturado e claro",
-        },
-        sugestoes: [
-          "Adicione mais exemplos praticos para facilitar o entendimento",
-          "Considere incluir uma imagem ilustrativa da parabola",
-          "O ultimo paragrafo poderia ter uma conclusao mais clara",
-        ],
-        statusFinal: "APROVADO_COM_RESSALVAS",
-      })
-      setIsReviewing(false)
-      setShowReviewDialog(true)
-    }, 3000)
-  }
-
   const handlePublishArticle = async () => {
     const title = formData.titulo.trim()
     if (!title) {
@@ -604,7 +522,7 @@ export function CriarConteudoClient({
       return
     }
     resetArticleDraftCreation()
-    toast.success("Artigo enviado para revisao da IA")
+    toast.success("Artigo publicado")
     router.push("/dashboard/professor/perfil")
   }
 
@@ -1389,61 +1307,6 @@ export function CriarConteudoClient({
       {step === "editor" && (
         <div className="bg-white rounded-xl border border-gray-100 p-6">
           <form className="space-y-6" onSubmit={(e) => e.preventDefault()}>
-            {/* Banners de status de revisão — artigos only */}
-            {tipoSelecionado === "artigo" && loadedArticleStatus === "verificando" && (
-              <div className="flex items-start gap-3 bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <Loader2 className="h-5 w-5 animate-spin text-blue-600 shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-semibold text-blue-800">Artigo em análise pela IA</p>
-                  <p className="text-xs text-blue-600 mt-0.5">
-                    O agente está verificando fatos, originalidade e qualidade. Você será notificado assim que concluir.
-                  </p>
-                </div>
-              </div>
-            )}
-            {tipoSelecionado === "artigo" && loadedArticleStatus === "revisao" && (
-              <div className="flex items-start justify-between gap-3 bg-red-50 border border-red-200 rounded-lg p-4">
-                <div className="flex items-start gap-3">
-                  <XCircle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-semibold text-red-800">Revisão necessária</p>
-                    <p className="text-xs text-red-600 mt-0.5">
-                      Score abaixo de 50. Corrija os problemas apontados e reenvie para revisão.
-                    </p>
-                  </div>
-                </div>
-                {reviewResult && (
-                  <button
-                    type="button"
-                    className="text-xs font-semibold text-red-700 underline underline-offset-2 shrink-0"
-                    onClick={() => setShowEditorReviewDialog(true)}
-                  >
-                    Ver resultado
-                  </button>
-                )}
-              </div>
-            )}
-            {tipoSelecionado === "artigo" && loadedArticleStatus === "aguardando_decisao" && (
-              <div className="flex items-start justify-between gap-3 bg-amber-50 border border-amber-200 rounded-lg p-4">
-                <div className="flex items-start gap-3">
-                  <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-semibold text-amber-800">Aguarda sua decisão</p>
-                    <p className="text-xs text-amber-700 mt-0.5">
-                      Score entre 50 e 80. Você pode publicar assim mesmo ou revisar o artigo.
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="text-xs font-semibold text-amber-700 underline underline-offset-2 shrink-0"
-                  onClick={() => setShowEditorReviewDialog(true)}
-                >
-                  Decidir
-                </button>
-              </div>
-            )}
-
             <div className="space-y-2">
               <Label htmlFor="titulo">Titulo</Label>
               <Input
@@ -2615,16 +2478,6 @@ export function CriarConteudoClient({
                 <>
                   <Button
                     type="button"
-                    variant="outline"
-                    className="flex-1 min-w-[120px] gap-2"
-                    onClick={() => void handleRevisao()}
-                    disabled={!formData.titulo.trim()}
-                  >
-                    <Bot className="h-4 w-4" />
-                    Revisao IA (opcional)
-                  </Button>
-                  <Button
-                    type="button"
                     className="flex-1 min-w-[140px] bg-[#1D4ED8] hover:bg-[#1E3A8A] gap-2"
                     onClick={() => void handlePublishArticle()}
                     disabled={
@@ -2757,171 +2610,12 @@ export function CriarConteudoClient({
                     {loadedArticleStatus === "published" ? "Salvar alteracoes" : "Publicar"}
                   </Button>
                 </>
-              ) : (
-                <Button
-                  type="button"
-                  className="flex-1 bg-[#1D4ED8] hover:bg-[#1E3A8A] gap-2"
-                  onClick={handleRevisao}
-                  disabled={!formData.titulo || !formData.disciplina}
-                >
-                  <Bot className="h-4 w-4" />
-                  Enviar para Revisao da IA
-                </Button>
-              )}
+              ) : null}
             </div>
           </form>
         </div>
       )}
 
-      <ContentReviewDialog
-        contentItemId={articleDraftId}
-        status={
-          loadedArticleStatus === "revisao" || loadedArticleStatus === "aguardando_decisao"
-            ? loadedArticleStatus
-            : null
-        }
-        open={showEditorReviewDialog}
-        onOpenChange={(o) => {
-          setShowEditorReviewDialog(o)
-          if (!o) router.refresh()
-        }}
-      />
-
-      <Dialog open={isReviewing} onOpenChange={() => {}}>
-        <DialogContent className="sm:max-w-md">
-          <div className="text-center py-8">
-            <div className="h-16 w-16 rounded-full bg-blue-100 flex items-center justify-center mx-auto mb-4 relative">
-              <Bot className="h-8 w-8 text-[#1D4ED8]" />
-              <div className="absolute inset-0 rounded-full border-4 border-blue-200 border-t-[#1D4ED8] animate-spin" />
-            </div>
-            <h3 className="font-display text-lg font-semibold text-gray-900 mb-2">
-              A IA esta analisando seu conteudo...
-            </h3>
-            <p className="text-sm text-gray-600">Verificando originalidade, precisao e qualidade</p>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showReviewDialog} onOpenChange={setShowReviewDialog}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="font-display">Relatorio de Revisao da IA</DialogTitle>
-            <DialogDescription>Veja o resultado da analise do seu conteudo</DialogDescription>
-          </DialogHeader>
-
-          {aiReview && (
-            <div className="space-y-6">
-              <div
-                className={`p-4 rounded-lg ${
-                  aiReview.statusFinal === "APROVADO"
-                    ? "bg-green-50 border border-green-200"
-                    : aiReview.statusFinal === "APROVADO_COM_RESSALVAS"
-                      ? "bg-amber-50 border border-amber-200"
-                      : "bg-red-50 border border-red-200"
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  {aiReview.statusFinal === "APROVADO" ? (
-                    <CheckCircle2 className="h-6 w-6 text-[#10B981]" />
-                  ) : aiReview.statusFinal === "APROVADO_COM_RESSALVAS" ? (
-                    <AlertTriangle className="h-6 w-6 text-amber-500" />
-                  ) : (
-                    <X className="h-6 w-6 text-red-500" />
-                  )}
-                  <div>
-                    <div className="font-semibold text-gray-900">
-                      {aiReview.statusFinal === "APROVADO"
-                        ? "Aprovado"
-                        : aiReview.statusFinal === "APROVADO_COM_RESSALVAS"
-                          ? "Aprovado com Ressalvas"
-                          : "Reprovado"}
-                    </div>
-                    <div className="text-sm text-gray-600">
-                      {aiReview.statusFinal === "APROVADO"
-                        ? "Seu conteudo esta pronto para publicar!"
-                        : aiReview.statusFinal === "APROVADO_COM_RESSALVAS"
-                          ? "Revise os pontos abaixo antes de publicar"
-                          : "Corrija os problemas encontrados"}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                {[
-                  { label: "Originalidade", data: aiReview.originalidade },
-                  { label: "Precisao Conceitual", data: aiReview.precisao },
-                  { label: "Qualidade Geral", data: aiReview.qualidade },
-                ].map((item) => (
-                  <div key={item.label} className="flex items-center gap-3">
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-medium text-gray-700">{item.label}</span>
-                        <span
-                          className={`text-sm font-semibold ${
-                            item.data.status === "ok"
-                              ? "text-[#10B981]"
-                              : item.data.status === "warning"
-                                ? "text-amber-500"
-                                : "text-red-500"
-                          }`}
-                        >
-                          {item.data.score}%
-                        </span>
-                      </div>
-                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                        <div
-                          className={`h-full rounded-full ${
-                            item.data.status === "ok"
-                              ? "bg-[#10B981]"
-                              : item.data.status === "warning"
-                                ? "bg-amber-500"
-                                : "bg-red-500"
-                          }`}
-                          style={{ width: `${item.data.score}%` }}
-                        />
-                      </div>
-                      <p className="text-xs text-gray-500 mt-1">{item.data.message}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div>
-                <h4 className="font-medium text-gray-900 mb-2">Sugestoes de Melhoria</h4>
-                <ul className="space-y-2">
-                  {aiReview.sugestoes.map((sugestao, i) => (
-                    <li key={i} className="flex items-start gap-2 text-sm text-gray-600">
-                      <Lightbulb className="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" />
-                      {sugestao}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div className="flex gap-3 pt-4">
-                <Button variant="outline" className="flex-1" onClick={() => setShowReviewDialog(false)}>
-                  Editar e Reenviar
-                </Button>
-                <Button
-                  className="flex-1 bg-[#10B981] hover:bg-[#059669]"
-                  onClick={() => {
-                    setShowReviewDialog(false)
-                    if (tipoSelecionado === "artigo") void handlePublishArticle()
-                    else if (tipoSelecionado === "exercicios") void handlePublishExercise()
-                    else if (tipoSelecionado === "avaliacao") void handlePublishAssessment()
-                    else if (tipoSelecionado === "simulado") void handlePublishSimulado()
-                    else if (tipoSelecionado === "dica") void handlePublishDica()
-                    else router.push("/dashboard/professor?published=true")
-                  }}
-                >
-                  Publicar Assim Mesmo
-                </Button>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }
