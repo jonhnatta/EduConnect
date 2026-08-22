@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache"
 import { query, queryOne } from "@/lib/db/query"
 import { getAuthedUser } from "@/lib/auth/user"
+import { checkRateLimit } from "@/lib/security/rate-limit"
 
 export type ProfessorReview = {
   id: string
@@ -30,11 +31,12 @@ export async function getProfessorReviews(teacherId: string): Promise<ProfessorR
     [teacherId]
   )
 
-  // Reviews com PII só para usuários autenticados (LGPD: não expor nomes/avatares publicamente)
+  // Perfil privado permanece anônimo mesmo para outros usuários autenticados.
   const reviews: ProfessorReview[] = user
     ? (await query<ProfessorReview>(
         `select r.id, r.rating, r.comment, r.created_at,
-                p.full_name as student_name, p.avatar_url as student_avatar
+                case when p.profile_visibility = 'public' then p.full_name else 'Aluno' end as student_name,
+                case when p.profile_visibility = 'public' then p.avatar_url else null end as student_avatar
            from public.professor_reviews r
            join public.profiles p on p.id = r.student_id
           where r.teacher_id = $1
@@ -47,11 +49,16 @@ export async function getProfessorReviews(teacherId: string): Promise<ProfessorR
   let myReview: { rating: number; comment: string | null } | null = null
   let canReview = false
   if (user && user.id !== teacherId) {
-    const me = await queryOne<{ user_type: string }>(
-      "select user_type from public.profiles where id = $1",
-      [user.id]
+    const eligible = await queryOne<{ eligible: boolean }>(
+      `select exists (
+         select 1
+           from public.classroom_members cm
+           join public.classrooms c on c.id = cm.classroom_id
+          where cm.student_id = $1 and c.professor_id = $2
+       ) as eligible`,
+      [user.id, teacherId]
     )
-    canReview = me?.user_type === "aluno"
+    canReview = eligible?.eligible === true
     if (canReview) {
       const mine = await queryOne<{ rating: number; comment: string | null }>(
         "select rating, comment from public.professor_reviews where teacher_id = $1 and student_id = $2",
@@ -89,12 +96,27 @@ export async function submitProfessorReview(
     [user.id]
   )
   if (me?.user_type !== "aluno") return { ok: false, error: "Apenas alunos podem avaliar professores" }
+  if (!(await checkRateLimit(`professor-review:${user.id}`, 10, 24 * 60 * 60, { failClosed: true }))) {
+    return { ok: false, error: "Limite de avaliacoes excedido" }
+  }
 
   const teacher = await queryOne<{ user_type: string; slug: string | null }>(
-    "select user_type, slug from public.profiles where id = $1",
-    [teacherId]
+    `select p.user_type, p.slug
+       from public.profiles p
+      where p.id = $1
+        and p.user_type = 'professor'
+        and p.professor_verification_status = 'approved'
+        and p.account_status = 'active'
+        and p.deleted_at is null
+        and exists (
+          select 1
+            from public.classroom_members cm
+            join public.classrooms c on c.id = cm.classroom_id
+           where cm.student_id = $2 and c.professor_id = p.id
+        )`,
+    [teacherId, user.id]
   )
-  if (teacher?.user_type !== "professor") return { ok: false, error: "Professor nao encontrado" }
+  if (!teacher) return { ok: false, error: "Voce so pode avaliar professores das suas turmas" }
 
   try {
     await query(

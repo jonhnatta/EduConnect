@@ -39,8 +39,10 @@ export function ClassroomMuralEditor({
   const [removingCover, setRemovingCover] = useState(false)
 
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- A server refresh replaces the saved mural values and must reset this local editor draft. */
     setCoverPathname(initialCoverPathname)
     setDescription(initialDescription ?? "")
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [initialCoverPathname, initialDescription])
 
   const handleSaveText = async () => {

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, Suspense, useRef } from "react"
+import { useState, Suspense, useRef } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { signIn } from "next-auth/react"
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { joinClassroomByInvite } from "@/app/actions/classrooms"
 import { 
   GraduationCap, 
   BookOpen, 
@@ -16,7 +17,6 @@ import {
   Mail, 
   Lock, 
   User,
-  Calendar,
   Upload,
   CheckCircle2,
   ArrowRight,
@@ -55,7 +55,9 @@ function CadastroContent() {
   const tipoParam = searchParams.get("tipo")
   const codigoConvite = searchParams.get("codigo")
   
-  const [step, setStep] = useState<"escolha" | "formulario" | "confirmacao">("escolha")
+  const [step, setStep] = useState<"escolha" | "formulario" | "verificacao" | "confirmacao">(
+    tipoParam === "professor" || tipoParam === "aluno" ? "formulario" : "escolha"
+  )
   const [userType, setUserType] = useState<"aluno" | "professor" | null>(
     tipoParam === "professor" ? "professor" : tipoParam === "aluno" ? "aluno" : null
   )
@@ -65,6 +67,8 @@ function CadastroContent() {
   const [selectedMaterias, setSelectedMaterias] = useState<string[]>([])
   const [selectedNiveis, setSelectedNiveis] = useState<string[]>([])
   const [acceptedTerms, setAcceptedTerms] = useState(false)
+  const [verificationCode, setVerificationCode] = useState("")
+  const [joinedClassroomId, setJoinedClassroomId] = useState<string | null>(null)
 
   const professorDocInputRef = useRef<HTMLInputElement | null>(null)
   const [professorDoc, setProfessorDoc] = useState<File | null>(null)
@@ -74,17 +78,9 @@ function CadastroContent() {
     email: "",
     password: "",
     confirmPassword: "",
-    dataNascimento: "",
     nivelEnsino: "",
     bio: "",
   })
-
-  useEffect(() => {
-    if (tipoParam === "professor" || tipoParam === "aluno") {
-      setUserType(tipoParam)
-      setStep("formulario")
-    }
-  }, [tipoParam])
 
   const handleUserTypeSelect = (type: "aluno" | "professor") => {
     setUserType(type)
@@ -120,8 +116,8 @@ function CadastroContent() {
     }
 
     // Validate password strength
-    if (formData.password.length < 6) {
-      setError("A senha deve ter pelo menos 6 caracteres")
+    if (formData.password.length < 8) {
+      setError("A senha deve ter pelo menos 8 caracteres")
       setIsLoading(false)
       return
     }
@@ -153,6 +149,9 @@ function CadastroContent() {
         fullName: formData.nome,
         userType,
         interests: selectedMaterias,
+        educationLevel:
+          userType === "aluno" ? formData.nivelEnsino : selectedNiveis.join(", "),
+        bio: userType === "professor" ? formData.bio : "",
         acceptedTerms,
       }),
     })
@@ -164,12 +163,35 @@ function CadastroContent() {
       return
     }
 
-    // Auto-login after signup
-    await signIn("credentials", {
+    setStep("verificacao")
+    setIsLoading(false)
+  }
+
+  const handleVerifyEmail = async () => {
+    setIsLoading(true)
+    setError(null)
+    const verification = await fetch("/api/auth/email-verification/confirm", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: formData.email, code: verificationCode }),
+    })
+    const verificationPayload = await verification.json().catch(() => ({}))
+    if (!verification.ok || !verificationPayload?.ok) {
+      setError(verificationPayload?.error || "Nao foi possivel confirmar o e-mail")
+      setIsLoading(false)
+      return
+    }
+
+    const login = await signIn("credentials", {
       redirect: false,
       email: formData.email,
       password: formData.password,
     })
+    if (login?.error) {
+      setError("E-mail confirmado. Entre novamente para continuar.")
+      setIsLoading(false)
+      return
+    }
 
     if (userType === "professor" && professorDoc) {
       try {
@@ -191,9 +213,23 @@ function CadastroContent() {
         return
       }
     }
+    if (userType === "aluno" && codigoConvite) {
+      const joined = await joinClassroomByInvite(codigoConvite)
+      if (joined.ok) setJoinedClassroomId(joined.classroomId)
+      else setError(`Conta confirmada, mas o convite nao foi aplicado: ${joined.error}`)
+    }
 
     setStep("confirmacao")
     setIsLoading(false)
+  }
+
+  const handleResendVerification = async () => {
+    setError(null)
+    await fetch("/api/auth/email-verification/resend", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: formData.email }),
+    })
   }
 
   const handleContinue = () => {
@@ -201,7 +237,7 @@ function CadastroContent() {
       router.push("/dashboard/professor?status=pendente")
       return
     }
-    router.push("/dashboard/aluno")
+    router.push(joinedClassroomId ? `/dashboard/aluno/salas/${joinedClassroomId}` : "/dashboard/aluno")
   }
 
   const acceptDoc = "application/pdf,image/jpeg,image/png"
@@ -277,7 +313,7 @@ function CadastroContent() {
                 </div>
                 <h3 className="font-display text-xl font-bold text-gray-900 mb-2">Sou Professor</h3>
                 <p className="text-gray-600 text-sm">
-                  Quero compartilhar conhecimento e gerenciar minhas turmas com apoio da IA
+                  Quero compartilhar conhecimento, publicar conteudos e gerenciar minhas turmas
                 </p>
               </button>
             </div>
@@ -394,22 +430,6 @@ function CadastroContent() {
                         required
                       />
                     </div>
-                  </div>
-                </div>
-
-                {/* Data de Nascimento */}
-                <div className="space-y-2">
-                  <Label htmlFor="dataNascimento">Data de nascimento</Label>
-                  <div className="relative">
-                    <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
-                    <Input
-                      id="dataNascimento"
-                      type="date"
-                      className="pl-10 h-12"
-                      value={formData.dataNascimento}
-                      onChange={(e) => setFormData({ ...formData, dataNascimento: e.target.value })}
-                      required
-                    />
                   </div>
                 </div>
 
@@ -606,6 +626,45 @@ function CadastroContent() {
           </div>
         )}
 
+        {/* Step: Verificacao de e-mail */}
+        {step === "verificacao" && (
+          <div className="mx-auto max-w-md py-12 text-center">
+            <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-blue-100">
+              <Mail className="h-10 w-10 text-[#1D4ED8]" />
+            </div>
+            <h2 className="font-display mb-2 text-2xl font-bold text-gray-900">
+              Confirme seu e-mail
+            </h2>
+            <p className="mb-6 text-gray-600">
+              Digite o codigo de seis numeros enviado para <strong>{formData.email}</strong>.
+            </p>
+            <Input
+              value={verificationCode}
+              onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              aria-label="Codigo de confirmacao"
+              className="mb-4 h-14 text-center text-2xl tracking-[0.4em]"
+              placeholder="000000"
+            />
+            {error ? <p className="mb-4 text-sm text-red-600">{error}</p> : null}
+            <Button
+              onClick={handleVerifyEmail}
+              disabled={isLoading || verificationCode.length !== 6}
+              className="h-12 w-full bg-[#1D4ED8] font-semibold hover:bg-[#1E3A8A]"
+            >
+              {isLoading ? "Confirmando..." : "Confirmar e-mail"}
+            </Button>
+            <button
+              type="button"
+              onClick={handleResendVerification}
+              className="mt-4 text-sm font-medium text-[#1D4ED8] hover:underline"
+            >
+              Reenviar codigo
+            </button>
+          </div>
+        )}
+
         {/* Step: Confirmacao */}
         {step === "confirmacao" && (
           <div className="text-center py-12">
@@ -623,8 +682,8 @@ function CadastroContent() {
                   Cadastro enviado!
                 </h2>
                 <p className="text-gray-600 mb-8 max-w-md mx-auto">
-                  Verifique seu e-mail para confirmar sua conta. Apos a confirmacao, 
-                  nossa equipe ira analisar seus documentos. Voce recebera uma notificacao 
+                  Seu e-mail foi confirmado e o documento foi enviado. Nossa equipe ira
+                  analisar a evidencia. Voce recebera uma notificacao
                   quando sua conta for aprovada.
                 </p>
               </>
@@ -634,8 +693,7 @@ function CadastroContent() {
                   Conta criada com sucesso!
                 </h2>
                 <p className="text-gray-600 mb-8 max-w-md mx-auto">
-                  Enviamos um e-mail de confirmacao para <strong>{formData.email}</strong>. 
-                  Por favor, verifique sua caixa de entrada e clique no link para ativar sua conta.
+                  Seu e-mail foi confirmado. A conta esta pronta para uso.
                 </p>
               </>
             )}
@@ -649,7 +707,7 @@ function CadastroContent() {
               }`}
             >
               <span className="flex items-center gap-2">
-                Ir para Login
+                Abrir painel
                 <ArrowRight className="h-5 w-5" />
               </span>
             </Button>

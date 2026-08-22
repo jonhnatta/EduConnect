@@ -1,24 +1,21 @@
 import type { Metadata } from "next"
+import { legalConfig } from "@/lib/config/legal"
 
 export const metadata: Metadata = {
   title: "Política de Privacidade | EduConnect",
   description:
     "Como a EduConnect coleta, usa, compartilha e protege os dados pessoais, em conformidade com a LGPD.",
 }
+export const dynamic = "force-dynamic"
 
-const LAST_UPDATE = "16 de junho de 2026"
+const LAST_UPDATE = "16 de julho de 2026"
 
 export default function PrivacidadePage() {
+  const legal = legalConfig()
   return (
     <>
       <h1>Política de Privacidade</h1>
       <p className="text-sm text-gray-500">Última atualização: {LAST_UPDATE}</p>
-
-      <div className="my-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-        <strong>Aviso:</strong> este documento é um modelo inicial e deve ser revisado por um
-        advogado e ajustado com os dados da empresa controladora antes do lançamento público.
-        Campos entre colchetes <code>[ ]</code> precisam ser preenchidos.
-      </div>
 
       <p>
         A EduConnect (&ldquo;<strong>nós</strong>&rdquo;, &ldquo;<strong>plataforma</strong>&rdquo;)
@@ -28,15 +25,15 @@ export default function PrivacidadePage() {
 
       <h2>1. Controladora dos dados</h2>
       <p>
-        O controlador dos dados é <strong>[NOME DA EMPRESA / RAZÃO SOCIAL]</strong>, inscrita no CNPJ
-        sob nº <strong>[CNPJ]</strong>, com sede em <strong>[ENDEREÇO, CIDADE/UF]</strong>.
-        Encarregado(a) pelo Tratamento de Dados (DPO): <strong>[NOME]</strong>, contato:{" "}
-        <a href="mailto:privacidade@educonnect.com.br">[privacidade@educonnect.com.br]</a>.
+        O controlador dos dados é <strong>{legal.controllerName}</strong>, identificado sob nº{" "}
+        <strong>{legal.controllerId}</strong>, com sede em <strong>{legal.controllerAddress}</strong>.
+        Encarregado(a) pelo Tratamento de Dados (DPO): <strong>{legal.dpoName}</strong>, contato:{" "}
+        <a href={`mailto:${legal.privacyEmail}`}>{legal.privacyEmail}</a>.
       </p>
 
       <h2>2. Dados que coletamos</h2>
       <ul>
-        <li><strong>Cadastro:</strong> nome, e-mail, senha (armazenada com hash), tipo de conta (aluno/professor), data de nascimento e interesses/disciplinas.</li>
+        <li><strong>Cadastro:</strong> nome, e-mail, senha (armazenada com hash), tipo de conta (aluno/professor) e interesses/disciplinas.</li>
         <li><strong>Perfil:</strong> biografia, foto, capa, link público e demais informações que você opta por preencher.</li>
         <li><strong>Verificação de professor:</strong> documento enviado para comprovação de identidade profissional.</li>
         <li><strong>Conteúdo e uso:</strong> conteúdos publicados, turmas, atividades, submissões, comentários, curtidas e itens salvos.</li>
@@ -57,11 +54,10 @@ export default function PrivacidadePage() {
       <h2>4. Compartilhamento e operadores</h2>
       <p>Não vendemos seus dados. Compartilhamos apenas com operadores que viabilizam o serviço:</p>
       <ul>
-        <li><strong>Vercel</strong> — hospedagem, armazenamento de arquivos e métricas.</li>
+        <li><strong>{legal.hostingProvider}</strong> — hospedagem e armazenamento de arquivos.</li>
+        <li><strong>Vercel Analytics</strong> — métricas opcionais, somente após consentimento.</li>
         <li><strong>Resend</strong> — envio de e-mails transacionais.</li>
         <li><strong>Google</strong> — autenticação (quando você usa o login social).</li>
-        <li><strong>xAI</strong> — análise automatizada (moderação) de conteúdo publicado.</li>
-        <li><strong>OpenAI</strong> — análise automatizada do documento de verificação de professor.</li>
       </ul>
       <p>
         Parte desses serviços pode tratar dados fora do Brasil. Adotamos salvaguardas para a
@@ -86,14 +82,14 @@ export default function PrivacidadePage() {
       </ul>
       <p>
         Para exercer seus direitos, escreva para{" "}
-        <a href="mailto:privacidade@educonnect.com.br">[privacidade@educonnect.com.br]</a>.
+        <a href={`mailto:${legal.privacyEmail}`}>{legal.privacyEmail}</a>.
       </p>
 
       <h2>7. Crianças e adolescentes</h2>
       <p>
-        Por se tratar de plataforma educacional, podemos tratar dados de menores. O cadastro de
-        menores deve ser realizado com o consentimento e a supervisão de pais ou responsáveis,
-        sempre no melhor interesse do menor (Art. 14 da LGPD).
+        A plataforma não solicita data de nascimento, documento de menor ou informação de
+        responsável no cadastro. Caso crianças ou adolescentes utilizem o serviço, o tratamento
+        deve observar seu melhor interesse e as regras aplicáveis antes da abertura pública.
       </p>
 
       <h2>8. Segurança</h2>
@@ -118,7 +114,7 @@ export default function PrivacidadePage() {
       <h2>11. Contato</h2>
       <p>
         Dúvidas sobre privacidade:{" "}
-        <a href="mailto:privacidade@educonnect.com.br">[privacidade@educonnect.com.br]</a>.
+        <a href={`mailto:${legal.privacyEmail}`}>{legal.privacyEmail}</a>.
       </p>
     </>
   )

@@ -16,8 +16,8 @@ const steps = [
   {
     number: "03",
     icon: Sparkles,
-    title: "Use com a IA",
-    description: "Publique ou consuma conteúdo com o apoio inteligente da nossa IA."
+    title: "Aprenda e compartilhe",
+    description: "Publique ou consuma conteúdo com sua turma e comunidade."
   },
   {
     number: "04",

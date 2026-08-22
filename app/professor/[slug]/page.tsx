@@ -109,6 +109,12 @@ export default async function PerfilProfessorPublico({
                   initialFollowing={followState.following}
                   initialCount={followState.followersCount}
                 />
+                <Link
+                  href={`/denunciar?targetType=profile&targetId=${profile.id}&returnTo=${encodeURIComponent(`/professor/${slug}`)}`}
+                  className="text-xs text-red-700 hover:underline"
+                >
+                  Denunciar perfil
+                </Link>
               </div>
 
               {/* Bio */}

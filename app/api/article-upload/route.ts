@@ -5,12 +5,29 @@ import {
   uploadTrixArticleImage,
 } from "@/app/actions/content-items"
 import { NextResponse } from "next/server"
+import { getAuthedUser } from "@/lib/auth/user"
+import { checkRateLimit } from "@/lib/security/rate-limit"
 
 export const runtime = "nodejs"
 
 const KINDS = new Set(["trix", "cover-image", "cover-video", "dica-image"])
+const MAX_REQUEST_BYTES = 16 * 1024 * 1024
 
 export async function POST(request: Request) {
+  const user = await getAuthedUser()
+  if (!user) {
+    return NextResponse.json({ ok: false, error: "Nao autenticado" }, { status: 401 })
+  }
+  const allowed = await checkRateLimit(`article-upload:${user.id}`, 30, 3600, { failClosed: true })
+  if (!allowed) return NextResponse.json({ ok: false, error: "Limite de uploads excedido" }, { status: 429 })
+  const contentLength = Number(request.headers.get("content-length") ?? "0")
+  if (process.env.NODE_ENV === "production" && (!Number.isFinite(contentLength) || contentLength <= 0)) {
+    return NextResponse.json({ ok: false, error: "Content-Length obrigatorio" }, { status: 411 })
+  }
+  if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BYTES) {
+    return NextResponse.json({ ok: false, error: "Arquivo muito grande" }, { status: 413 })
+  }
+
   let formData: FormData
   try {
     formData = await request.formData()

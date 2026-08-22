@@ -1,22 +1,20 @@
 import type { Metadata } from "next"
+import { legalConfig } from "@/lib/config/legal"
 
 export const metadata: Metadata = {
   title: "Termos de Uso | EduConnect",
   description: "Termos e condições de uso da plataforma EduConnect.",
 }
+export const dynamic = "force-dynamic"
 
-const LAST_UPDATE = "16 de junho de 2026"
+const LAST_UPDATE = "16 de julho de 2026"
 
 export default function TermosPage() {
+  const legal = legalConfig()
   return (
     <>
       <h1>Termos de Uso</h1>
       <p className="text-sm text-gray-500">Última atualização: {LAST_UPDATE}</p>
-
-      <div className="my-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-        <strong>Aviso:</strong> este documento é um modelo inicial e deve ser revisado por um
-        advogado e ajustado com os dados da empresa antes do lançamento público.
-      </div>
 
       <p>
         Estes Termos regem o uso da plataforma EduConnect. Ao criar uma conta ou usar a plataforma,
@@ -26,8 +24,7 @@ export default function TermosPage() {
       <h2>1. A plataforma</h2>
       <p>
         A EduConnect é uma plataforma educacional que conecta professores e alunos, permitindo
-        publicação de conteúdo, criação de turmas, atividades, avaliações e interação social
-        com apoio de inteligência artificial.
+        publicação de conteúdo, criação de turmas, atividades, avaliações e interação social.
       </p>
 
       <h2>2. Cadastro e conta</h2>
@@ -55,8 +52,8 @@ export default function TermosPage() {
 
       <h2>5. Moderação</h2>
       <p>
-        O conteúdo pode ser analisado por sistemas automatizados e/ou revisão humana. Podemos
-        remover conteúdo e suspender contas que violem estes Termos, com ou sem aviso prévio.
+        O conteúdo pode passar por revisão humana. Podemos remover conteúdo e suspender contas
+        que violem estes Termos, com ou sem aviso prévio.
       </p>
 
       <h2>6. Disponibilidade e período de avaliação</h2>
@@ -87,12 +84,13 @@ export default function TermosPage() {
       <h2>10. Lei aplicável e foro</h2>
       <p>
         Estes Termos são regidos pelas leis do Brasil. Fica eleito o foro da comarca de{" "}
-        <strong>[CIDADE/UF]</strong> para dirimir controvérsias.
+        <strong>{legal.forum}</strong> para dirimir controvérsias, ressalvado o foro legalmente
+        assegurado ao consumidor.
       </p>
 
       <h2>11. Contato</h2>
       <p>
-        Dúvidas: <a href="mailto:contato@educonnect.com.br">[contato@educonnect.com.br]</a>.
+        Dúvidas: <a href={`mailto:${legal.supportEmail}`}>{legal.supportEmail}</a>.
       </p>
     </>
   )

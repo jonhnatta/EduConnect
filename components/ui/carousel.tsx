@@ -95,6 +95,7 @@ function Carousel({
 
   React.useEffect(() => {
     if (!api) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Embla exposes initial selection only after the external API is ready.
     onSelect(api)
     api.on('reInit', onSelect)
     api.on('select', onSelect)

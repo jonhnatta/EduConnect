@@ -14,7 +14,6 @@ import {
   Users,
   UsersRound,
   BarChart3,
-  Bot,
   Rss,
   Settings,
   User,
@@ -44,7 +43,6 @@ const navigation = [
   { name: "Meus Alunos", href: "/dashboard/professor/alunos", icon: UsersRound },
   { name: "Seguidores", href: "/dashboard/professor/seguidores", icon: UsersRound },
   { name: "Analise de Desempenho", href: "/dashboard/professor/analise", icon: BarChart3 },
-  { name: "Revisoes pela IA", href: "/dashboard/professor/revisoes", icon: Bot },
 ]
 
 const bottomNav = [

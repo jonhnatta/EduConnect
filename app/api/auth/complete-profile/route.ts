@@ -4,6 +4,7 @@ import { auth } from "@/auth"
 import { dashboardPathForUserType } from "@/lib/auth/redirect"
 import { upsertProfile } from "@/lib/auth/profile"
 import { dbPool } from "@/lib/db/pool"
+import { PRIVACY_VERSION, TERMS_VERSION } from "@/lib/config/legal"
 
 export const runtime = "nodejs"
 
@@ -55,8 +56,12 @@ export async function POST(request: Request) {
     })
     // Registra o consentimento (LGPD) sem sobrescrever um aceite anterior.
     await client.query(
-      "update public.profiles set terms_accepted_at = coalesce(terms_accepted_at, timezone('utc'::text, now())) where id = $1",
-      [userId],
+      `update public.profiles
+          set terms_accepted_at = coalesce(terms_accepted_at, timezone('utc'::text, now())),
+              terms_accepted_version = $2,
+              privacy_accepted_version = $3
+        where id = $1`,
+      [userId, TERMS_VERSION, PRIVACY_VERSION],
     )
     // Professor nasce com perfil PÚBLICO (descoberta no Explorar); só ajusta a partir do padrão.
     if (parsed.data.userType === "professor") {

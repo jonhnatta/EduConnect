@@ -1,6 +1,7 @@
 "use server"
 
 import { query, queryOne } from "@/lib/db/query"
+import { cacheAside } from "@/lib/cache/cache-aside"
 
 export type ProfessorCard = {
   id: string
@@ -40,6 +41,8 @@ async function fetchTopIds(): Promise<Set<string>> {
      WHERE p.user_type = 'professor'
        AND p.professor_verification_status = 'approved'
        AND coalesce(p.profile_visibility, 'private') = 'public'
+       AND p.deleted_at IS NULL
+       AND p.account_status = 'active'
      GROUP BY p.id
      HAVING COUNT(DISTINCT ci.id) FILTER (WHERE ci.status = 'published' AND ci.visibility = 'public') > 0
      ORDER BY (
@@ -65,6 +68,8 @@ export async function listProfessores(
     "p.user_type = 'professor'",
     "p.professor_verification_status = 'approved'",
     "coalesce(p.profile_visibility, 'private') = 'public'",
+    "p.deleted_at is null",
+    "p.account_status = 'active'",
   ]
 
   if (disciplina) {
@@ -174,6 +179,8 @@ export async function listDisciplinas(): Promise<string[]> {
      WHERE p.user_type = 'professor'
        AND p.professor_verification_status = 'approved'
        AND coalesce(p.profile_visibility, 'private') = 'public'
+       AND p.deleted_at IS NULL
+       AND p.account_status = 'active'
        AND p.interests IS NOT NULL
      ORDER BY disciplina`,
     []
@@ -212,6 +219,37 @@ export type ProfessorProfile = {
 export async function getProfessorProfile(
   slugOrId: string
 ): Promise<ProfessorProfile | null> {
+  const publicProfile = await queryOne<{ id: string; updated_at: string }>(
+    `select id, updated_at
+       from public.profiles
+      where user_type = 'professor'
+        and professor_verification_status = 'approved'
+        and coalesce(profile_visibility, 'private') = 'public'
+        and deleted_at is null
+        and account_status = 'active'
+        and (lower(slug) = lower($1) or id::text = $1)
+      limit 1`,
+    [slugOrId]
+  )
+  if (!publicProfile) return null
+
+  const version = new Date(publicProfile.updated_at).getTime().toString(36)
+  return cacheAside<ProfessorProfile | null>({
+    namespace: "professor-profile",
+    id: `${publicProfile.id}:${version}`,
+    ttlSeconds: 60,
+    load: () => loadProfessorProfile(publicProfile.id),
+    parse: (value) => {
+      if (!value || typeof value !== "object") return null
+      const profile = value as ProfessorProfile
+      return profile.id === publicProfile.id && Array.isArray(profile.posts) ? profile : null
+    },
+  })
+}
+
+async function loadProfessorProfile(
+  professorId: string
+): Promise<ProfessorProfile | null> {
   const prof = await queryOne<{
     id: string
     slug: string | null
@@ -244,9 +282,11 @@ export async function getProfessorProfile(
      WHERE p.user_type = 'professor'
        AND p.professor_verification_status = 'approved'
        AND coalesce(p.profile_visibility, 'private') = 'public'
-       AND (lower(p.slug) = lower($1) OR p.id::text = $1)
+       AND p.deleted_at IS NULL
+       AND p.account_status = 'active'
+       AND p.id = $1
      LIMIT 1`,
-    [slugOrId]
+    [professorId]
   )
 
   if (!prof) return null

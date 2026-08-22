@@ -40,6 +40,7 @@ export function ClassroomPerformancePanel({
   const [pending, startTransition] = useTransition()
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- A server refresh is authoritative over paginated local data.
     setData(initialData)
   }, [initialData])
 

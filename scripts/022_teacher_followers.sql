@@ -45,16 +45,19 @@ CREATE TRIGGER tr_teacher_followers_count
 ALTER TABLE public.teacher_followers ENABLE ROW LEVEL SECURITY;
 
 -- Aluno vê apenas seus próprios follows
+DROP POLICY IF EXISTS "tf_select_own_student" ON public.teacher_followers;
 CREATE POLICY "tf_select_own_student"
   ON public.teacher_followers FOR SELECT
   USING (student_id = auth.uid());
 
 -- Professor vê os próprios seguidores
+DROP POLICY IF EXISTS "tf_select_own_teacher" ON public.teacher_followers;
 CREATE POLICY "tf_select_own_teacher"
   ON public.teacher_followers FOR SELECT
   USING (teacher_id = auth.uid());
 
 -- Apenas alunos podem criar follow para si mesmos
+DROP POLICY IF EXISTS "tf_insert_student" ON public.teacher_followers;
 CREATE POLICY "tf_insert_student"
   ON public.teacher_followers FOR INSERT
   WITH CHECK (
@@ -67,6 +70,7 @@ CREATE POLICY "tf_insert_student"
   );
 
 -- Aluno deleta apenas o próprio follow
+DROP POLICY IF EXISTS "tf_delete_own" ON public.teacher_followers;
 CREATE POLICY "tf_delete_own"
   ON public.teacher_followers FOR DELETE
   USING (student_id = auth.uid());

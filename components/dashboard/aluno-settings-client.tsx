@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
-import { Bell, Eye, Globe, KeyRound, Lock, Loader2, Shield, Sparkles, Trash2 } from "lucide-react"
+import { Bell, Download, Globe, KeyRound, Loader2, Sparkles, Trash2 } from "lucide-react"
 import { updateMySettings, type NotificationPrefs } from "@/app/actions/settings"
 import { changePassword, deleteAccount } from "@/app/actions/account"
 
@@ -59,11 +59,8 @@ export function AlunoSettingsClient({
 }: AlunoSettingsClientProps) {
   const pref = (key: string, fallback = true) =>
     typeof notificationPrefs[key] === "boolean" ? notificationPrefs[key] : fallback
-  const [emailAlerts, setEmailAlerts] = useState(pref("emailAlerts"))
-  const [classroomAlerts, setClassroomAlerts] = useState(pref("classroomAlerts"))
-  const [goalReminders, setGoalReminders] = useState(pref("goalReminders"))
+  const [newContentAlerts, setNewContentAlerts] = useState(pref("new_content"))
   const [publicProfile, setPublicProfile] = useState(profileVisibility === "public")
-  const [mentorSuggestions, setMentorSuggestions] = useState(pref("mentorSuggestions"))
   const [saving, startSaving] = useTransition()
   const [currentPwd, setCurrentPwd] = useState("")
   const [newPwd, setNewPwd] = useState("")
@@ -78,7 +75,7 @@ export function AlunoSettingsClient({
     startSaving(async () => {
       const result = await updateMySettings({
         profileVisibility: publicProfile ? "public" : "private",
-        notificationPrefs: { emailAlerts, classroomAlerts, goalReminders, mentorSuggestions },
+        notificationPrefs: { new_content: newContentAlerts },
       })
       if (result.ok) toast.success("Preferencias salvas")
       else toast.error(result.error)
@@ -129,13 +126,6 @@ export function AlunoSettingsClient({
                 checked={publicProfile}
                 onCheckedChange={setPublicProfile}
               />
-              <SettingRow
-                icon={Shield}
-                title="Sugestoes do Tutor IA"
-                description="Receber orientacoes automaticas com base no seu ritmo e nas materias mais acessadas."
-                checked={mentorSuggestions}
-                onCheckedChange={setMentorSuggestions}
-              />
 
               <div className="rounded-xl border border-dashed border-emerald-200 bg-emerald-50/60 p-4">
                 <div className="flex items-center gap-2">
@@ -160,24 +150,10 @@ export function AlunoSettingsClient({
             <CardContent className="space-y-4">
               <SettingRow
                 icon={Bell}
-                title="Alertas por email"
-                description="Novas salas, mensagens importantes e atualizacoes do seu plano de estudos."
-                checked={emailAlerts}
-                onCheckedChange={setEmailAlerts}
-              />
-              <SettingRow
-                icon={Eye}
-                title="Avisos de sala"
-                description="Receber alertas quando um professor publicar atividade ou material novo."
-                checked={classroomAlerts}
-                onCheckedChange={setClassroomAlerts}
-              />
-              <SettingRow
-                icon={Lock}
-                title="Lembretes de meta diaria"
-                description="Ser lembrado quando sua meta diaria estiver atrasada ou incompleta."
-                checked={goalReminders}
-                onCheckedChange={setGoalReminders}
+                title="Novos conteudos"
+                description="Receber uma notificacao quando um professor seguido publicar conteudo."
+                checked={newContentAlerts}
+                onCheckedChange={setNewContentAlerts}
               />
             </CardContent>
           </Card>
@@ -199,9 +175,9 @@ export function AlunoSettingsClient({
                 </p>
               </div>
               <div className="rounded-xl bg-white/10 p-4">
-                <p className="text-xs uppercase tracking-wide text-emerald-100">Lembretes</p>
+                <p className="text-xs uppercase tracking-wide text-emerald-100">Notificacoes</p>
                 <p className="mt-2 text-sm font-semibold">
-                  {goalReminders ? "Metas diarias ativas" : "Metas diarias silenciosas"}
+                  {newContentAlerts ? "Novos conteudos ativos" : "Novos conteudos silenciados"}
                 </p>
               </div>
             </CardContent>
@@ -273,6 +249,21 @@ export function AlunoSettingsClient({
               >
                 {changingPwd ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 Alterar senha
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="font-display text-lg flex items-center gap-2">
+                <Download className="h-5 w-5" />
+                Exportar meus dados
+              </CardTitle>
+              <CardDescription>Baixe uma copia JSON dos dados associados a sua conta.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button asChild variant="outline" className="w-full">
+                <a href="/api/account/export">Baixar meus dados</a>
               </Button>
             </CardContent>
           </Card>

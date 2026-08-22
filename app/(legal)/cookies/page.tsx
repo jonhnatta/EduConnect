@@ -5,7 +5,7 @@ export const metadata: Metadata = {
   description: "Como a EduConnect usa cookies e tecnologias semelhantes.",
 }
 
-const LAST_UPDATE = "16 de junho de 2026"
+const LAST_UPDATE = "16 de julho de 2026"
 
 export default function CookiesPage() {
   return (
@@ -50,8 +50,8 @@ export default function CookiesPage() {
 
       <h2>3. Cookies de terceiros</h2>
       <p>
-        Serviços como Google (login social) e Vercel (hospedagem/métricas) podem definir cookies
-        próprios. Consulte as políticas desses provedores para mais detalhes.
+        O Google pode definir cookies próprios quando você escolhe o login social. A ferramenta de
+        métricas somente é carregada depois do consentimento explícito no banner.
       </p>
 
       <h2>4. Atualizações</h2>

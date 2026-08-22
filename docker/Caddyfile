@@ -1,0 +1,14 @@
+{$APP_DOMAIN} {
+  encode zstd gzip
+
+  request_body {
+    max_size 20MB
+  }
+
+  reverse_proxy app:3000
+
+  log {
+    output stdout
+    format json
+  }
+}

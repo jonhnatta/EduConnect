@@ -3,6 +3,10 @@ import { z } from "zod"
 import bcrypt from "bcryptjs"
 import { dbPool } from "@/lib/db/pool"
 import { checkRateLimit } from "@/lib/security/rate-limit"
+import { createResetCode } from "@/lib/auth/password-reset"
+import { queueEmailDelivery } from "@/lib/email/delivery"
+import { securityFingerprint, trustedClientIp } from "@/lib/security/request-identity"
+import { PRIVACY_VERSION, TERMS_VERSION } from "@/lib/config/legal"
 
 export const runtime = "nodejs"
 
@@ -12,20 +16,16 @@ const schema = z.object({
   fullName: z.string().min(1).max(200),
   userType: z.enum(["aluno", "professor"]),
   interests: z.array(z.string().max(60)).max(20).optional().default([]),
+  educationLevel: z.string().max(200).optional().default(""),
+  bio: z.string().max(300).optional().default(""),
   // Aceite obrigatório de Termos + Privacidade (consentimento LGPD registrado no servidor).
   acceptedTerms: z.literal(true),
 })
 
-function clientIp(request: Request): string {
-  const fwd = request.headers.get("x-forwarded-for")
-  if (fwd) return fwd.split(",")[0]!.trim()
-  return request.headers.get("x-real-ip") ?? "unknown"
-}
-
 export async function POST(request: Request) {
   // Rate limit por IP: freia criação em massa e enumeração via tentativa repetida.
-  const ip = clientIp(request)
-  const allowed = await checkRateLimit(`signup:${ip}`, 10, 3600)
+  const ip = securityFingerprint(trustedClientIp(request))
+  const allowed = await checkRateLimit(`signup-ip:${ip}`, 10, 3600, { failClosed: true })
   if (!allowed) {
     return NextResponse.json(
       { ok: false, error: "Muitas tentativas. Tente novamente mais tarde." },
@@ -45,8 +45,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "Dados invalidos" }, { status: 400 })
   }
 
-  const { email, password, fullName, userType, interests } = parsed.data
+  const { email, password, fullName, userType, interests, educationLevel, bio } = parsed.data
   const normalizedEmail = email.toLowerCase().trim()
+  const accountAllowed = await checkRateLimit(
+    `signup-account:${securityFingerprint(normalizedEmail)}`,
+    3,
+    3600,
+    { failClosed: true }
+  )
+  if (!accountAllowed) {
+    return NextResponse.json({ ok: false, error: "Muitas tentativas. Tente novamente mais tarde." }, { status: 429 })
+  }
   const passwordHash = await bcrypt.hash(password, 12)
 
   const pool = dbPool()
@@ -61,14 +70,35 @@ export async function POST(request: Request) {
     const userId = userRes.rows[0]?.id
     if (!userId) throw new Error("Falha ao criar usuario")
 
-    // Professor nasce com perfil PÚBLICO (para ser descoberto no Explorar); aluno fica privado.
+    // Todo perfil nasce privado; o professor so pode publica-lo depois da aprovacao.
     await client.query(
-      "insert into public.profiles (id, full_name, user_type, interests, profile_visibility, terms_accepted_at) values ($1, $2, $3, $4, $5, timezone('utc'::text, now()))",
-      [userId, fullName, userType, interests, userType === "professor" ? "public" : "private"]
+      `insert into public.profiles
+         (id, full_name, user_type, interests, education_level, bio,
+          profile_visibility, terms_accepted_at, terms_accepted_version, privacy_accepted_version)
+       values ($1, $2, $3, $4, nullif($5, ''), nullif($6, ''), $7,
+               timezone('utc'::text, now()), $8, $9)`,
+      [userId, fullName, userType, interests, educationLevel, bio, "private", TERMS_VERSION, PRIVACY_VERSION]
     )
 
+    const code = createResetCode()
+    const codeHash = await bcrypt.hash(code, 12)
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000)
+    const verification = await client.query<{ id: string }>(
+      `insert into public.email_verification_codes (user_id, code_hash, expires_at)
+       values ($1, $2, $3)
+       returning id`,
+      [userId, codeHash, expiresAt.toISOString()]
+    )
+    await queueEmailDelivery(client, {
+      recipient: normalizedEmail,
+      template: "email_verification",
+      code,
+      expiresAt,
+      dedupKey: `email-verification:${verification.rows[0]!.id}`,
+    })
+
     await client.query("commit")
-    return NextResponse.json({ ok: true })
+    return NextResponse.json({ ok: true, verificationRequired: true })
   } catch (e: any) {
     await client.query("rollback").catch(() => {})
     const msg = String(e?.message || "")

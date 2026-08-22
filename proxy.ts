@@ -1,5 +1,6 @@
 import { auth } from "@/auth"
 import { NextResponse, type NextRequest } from "next/server"
+import { canonicalAuthPageUrl } from "@/lib/auth/redirect"
 
 function homeFor(userType?: string | null): string {
   if (userType === "professor") return "/dashboard/professor"
@@ -7,9 +8,45 @@ function homeFor(userType?: string | null): string {
   return "/cadastro/tipo-conta"
 }
 
+function publicRequestUrl(request: NextRequest): string {
+  try {
+    const url = new URL(request.url)
+    const forwardedHost =
+      process.env.TRUST_PROXY_HEADERS === "true"
+        ? request.headers.get("x-forwarded-host")?.split(",")[0]?.trim()
+        : null
+    const host = forwardedHost || request.headers.get("host")
+    if (host) url.host = host
+
+    if (process.env.TRUST_PROXY_HEADERS === "true") {
+      const protocol = request.headers
+        .get("x-forwarded-proto")
+        ?.split(",")[0]
+        ?.trim()
+      if (protocol === "http" || protocol === "https") {
+        url.protocol = `${protocol}:`
+      }
+    }
+
+    return url.toString()
+  } catch {
+    return request.url
+  }
+}
+
 export async function proxy(request: NextRequest) {
-  const session = await auth()
   const { pathname } = request.nextUrl
+  if (request.method === "GET" && pathname === "/login") {
+    const canonicalUrl = canonicalAuthPageUrl(
+      publicRequestUrl(request),
+      process.env.AUTH_URL ??
+        process.env.NEXTAUTH_URL ??
+        process.env.NEXT_PUBLIC_APP_URL,
+    )
+    if (canonicalUrl) return NextResponse.redirect(canonicalUrl, 307)
+  }
+
+  const session = await auth()
   const userType = (session?.user as any)?.userType as "aluno" | "professor" | null | undefined
 
   const isDashboard = pathname.startsWith("/dashboard")

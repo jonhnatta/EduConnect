@@ -41,6 +41,8 @@ export default async function PublicStudentProfilePage({
       where lower(slug) = lower($1)
         and user_type = 'aluno'
         and coalesce(profile_visibility, 'private') = 'public'
+        and deleted_at is null
+        and account_status = 'active'
       limit 1`,
     [slug]
   )
@@ -75,6 +77,12 @@ export default async function PublicStudentProfilePage({
                 )}
               </div>
               <Badge className="mt-5 bg-emerald-600 text-white hover:bg-emerald-600">Aluno</Badge>
+              <a
+                href={`/denunciar?targetType=profile&targetId=${profile.id}&returnTo=${encodeURIComponent(`/aluno/${slug}`)}`}
+                className="mt-3 text-xs text-red-700 hover:underline"
+              >
+                Denunciar perfil
+              </a>
             </div>
 
             <div className="space-y-6">

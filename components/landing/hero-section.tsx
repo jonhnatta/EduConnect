@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
-import { GraduationCap, BookOpen, Sparkles, Users, Brain } from "lucide-react"
+import { GraduationCap, BookOpen, Sparkles, Users } from "lucide-react"
 
 export function HeroSection() {
   return (
@@ -19,7 +19,7 @@ export function HeroSection() {
           <div className="text-center lg:text-left">
             <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-sm font-medium backdrop-blur-sm mb-6">
               <Sparkles className="h-4 w-4 text-yellow-300" />
-              <span>Potencializado por Inteligência Artificial</span>
+              <span>Ensino e aprendizagem conectados</span>
             </div>
             
             <h1 className="font-display text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl text-balance">
@@ -27,8 +27,8 @@ export function HeroSection() {
             </h1>
             
             <p className="mt-6 text-lg text-blue-100 leading-relaxed max-w-2xl mx-auto lg:mx-0">
-              Publique conteúdo, gerencie suas turmas e deixe a IA trabalhar por você. 
-              Planos de estudo personalizados, revisão automática de conteúdo e tutoria inteligente.
+              Publique conteúdo, gerencie suas turmas e acompanhe a evolução dos alunos.
+              Organize estudos, atividades e materiais em um único lugar.
             </p>
             
             <div className="mt-10 flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
@@ -58,16 +58,16 @@ export function HeroSection() {
             {/* Stats */}
             <div className="mt-12 grid grid-cols-3 gap-8 border-t border-white/20 pt-8">
               <div>
-                <div className="text-3xl font-bold font-display">10k+</div>
-                <div className="text-sm text-blue-200">Professores</div>
+                <div className="text-xl font-bold font-display">Gratuito</div>
+                <div className="text-sm text-blue-200">no lancamento</div>
               </div>
               <div>
-                <div className="text-3xl font-bold font-display">150k+</div>
-                <div className="text-sm text-blue-200">Alunos</div>
+                <div className="text-xl font-bold font-display">Turmas</div>
+                <div className="text-sm text-blue-200">organizadas</div>
               </div>
               <div>
-                <div className="text-3xl font-bold font-display">500k+</div>
-                <div className="text-sm text-blue-200">Aulas criadas</div>
+                <div className="text-xl font-bold font-display">Conteudos</div>
+                <div className="text-sm text-blue-200">em um so lugar</div>
               </div>
             </div>
           </div>
@@ -79,19 +79,19 @@ export function HeroSection() {
               <div className="rounded-2xl bg-white p-6 shadow-2xl">
                 <div className="flex items-center gap-4 border-b border-gray-100 pb-4">
                   <div className="h-12 w-12 rounded-full bg-gradient-to-br from-[#1D4ED8] to-[#10B981] flex items-center justify-center">
-                    <Brain className="h-6 w-6 text-white" />
+                    <BookOpen className="h-6 w-6 text-white" />
                   </div>
                   <div>
-                    <div className="font-display font-semibold text-gray-900">Tutor Edu</div>
-                    <div className="text-sm text-gray-500">Assistente IA</div>
+                    <div className="font-display font-semibold text-gray-900">Turma de Matematica</div>
+                    <div className="text-sm text-gray-500">Nova atividade publicada</div>
                   </div>
                 </div>
                 <div className="mt-4 space-y-3">
                   <div className="rounded-lg bg-gray-100 p-3 text-sm text-gray-700">
-                    Como posso resolver uma equação do 2º grau?
+                    Equacoes do 2 grau: conceitos e exemplos
                   </div>
                   <div className="rounded-lg bg-[#1D4ED8] p-3 text-sm text-white">
-                    Ótima pergunta! Vamos pensar juntos. O que você já sabe sobre esse tipo de equação?
+                    Material, exercicios e prazo reunidos para a turma.
                   </div>
                 </div>
               </div>
@@ -108,9 +108,9 @@ export function HeroSection() {
               <div className="absolute -bottom-4 -left-4 rounded-xl bg-[#F59E0B] p-4 text-white shadow-lg">
                 <div className="flex items-center gap-2">
                   <Sparkles className="h-5 w-5" />
-                  <span className="font-semibold">Plano Pronto!</span>
+                  <span className="font-semibold">Atividade pronta!</span>
                 </div>
-                <div className="text-xs text-yellow-100 mt-1">Seu plano de estudos foi gerado</div>
+                <div className="text-xs text-yellow-100 mt-1">Disponivel para a turma</div>
               </div>
             </div>
           </div>

@@ -13,14 +13,12 @@ import {
   ChevronRight,
   Plus,
   Bell,
-  Sparkles,
 } from "lucide-react"
 import {
   getProfessorViewStats,
   listMyContentItemsForProfessor,
 } from "@/app/actions/content-items"
 import { getProfessorPendingActivities } from "@/app/actions/classrooms"
-import { listMyReviewedContent } from "@/app/actions/content-review"
 import { requireProfessorAccess } from "@/lib/auth/guards"
 import { queryOne } from "@/lib/db/query"
 
@@ -48,16 +46,14 @@ export default async function ProfessorFeedPage() {
   ).catch(() => null)
   const firstName = profile?.full_name?.split(" ")[0] ?? "Professor"
 
-  const [viewStats, recentContent, pendingResult, allReviews] = await Promise.all([
+  const [viewStats, recentContent, pendingResult] = await Promise.all([
     getProfessorViewStats(),
     listMyContentItemsForProfessor(),
     getProfessorPendingActivities(),
-    listMyReviewedContent(),
   ])
 
   const recentPosts = recentContent.slice(0, 5)
   const pendingActivities = pendingResult.activities
-  const pendingReviews = allReviews.filter((r) => r.status === "aguardando_decisao")
 
   const stats = [
     { label: "Visualizacoes", value: formatCount(viewStats.totalViews), icon: Eye },
@@ -216,30 +212,6 @@ export default async function ProfessorFeedPage() {
 
         {/* Sidebar */}
         <div className="space-y-6">
-          {/* Revisões IA aguardando decisão — só mostra se houver */}
-          {pendingReviews.length > 0 && (
-            <div className="bg-white rounded-xl border border-amber-200">
-              <div className="p-4 border-b border-amber-100 flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-amber-500" />
-                <h2 className="font-display font-semibold text-gray-900">Revisoes IA pendentes</h2>
-                <Badge className="bg-amber-100 text-amber-800 ml-auto">{pendingReviews.length}</Badge>
-              </div>
-              <div className="divide-y divide-gray-100">
-                {pendingReviews.slice(0, 3).map((item) => (
-                  <div key={item.id} className="p-4">
-                    <h3 className="text-sm font-medium text-gray-900 truncate mb-1">{item.title}</h3>
-                    <p className="text-xs text-gray-500 mb-2">Score IA: {item.score}</p>
-                    <Button size="sm" className="w-full bg-amber-500 hover:bg-amber-600" asChild>
-                      <Link href={`/dashboard/professor/criar?edit=${encodeURIComponent(item.id)}`}>
-                        Decidir
-                      </Link>
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
           {/* Notificações — task #17 */}
           <div className="bg-white rounded-xl border border-gray-100">
             <div className="p-4 border-b border-gray-100 flex items-center gap-2">

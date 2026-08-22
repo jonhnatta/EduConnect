@@ -2,21 +2,19 @@
 
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
-import { Bot, CheckCircle2, ChevronRight, FileText, PenSquare, Sparkles } from "lucide-react"
+import { CheckCircle2, ChevronRight, FileText, PenSquare, Sparkles } from "lucide-react"
 import Link from "next/link"
 
 type Props = {
   totalPosts: number
   publishedCount: number
   draftCount: number
-  reviewCount?: number
 }
 
 export function ProfessorFeedSidebar({
   totalPosts,
   publishedCount,
   draftCount,
-  reviewCount = 0,
 }: Props) {
   const pct =
     totalPosts > 0 ? Math.round((publishedCount / totalPosts) * 100) : 0
@@ -31,7 +29,6 @@ export function ProfessorFeedSidebar({
         <div className="text-4xl font-bold font-display">{totalPosts}</div>
         <p className="text-sm text-blue-100 mt-1">
           {publishedCount} publicado(s) · {draftCount} rascunho(s)
-          {reviewCount > 0 ? ` · ${reviewCount} em revisão` : ""}
         </p>
       </div>
 
@@ -77,17 +74,6 @@ export function ProfessorFeedSidebar({
               <div className="text-xs text-gray-500">{draftCount} em edição</div>
             </div>
           </div>
-          {reviewCount > 0 && (
-            <div className="flex items-center gap-3">
-              <div className="h-8 w-8 rounded-lg bg-blue-50 flex items-center justify-center">
-                <Bot className="h-4 w-4 text-blue-600" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-gray-900">Em revisão</div>
-                <div className="text-xs text-gray-500">{reviewCount} aguardando IA</div>
-              </div>
-            </div>
-          )}
         </div>
         <div className="mt-4 pt-4 border-t border-gray-100">
           <div className="flex items-center justify-between text-sm mb-2">

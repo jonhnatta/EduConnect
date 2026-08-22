@@ -21,6 +21,7 @@ import type {
   CreateMaterialInput,
   UpdateMaterialInput,
 } from "@/lib/materials/types"
+import { checkRateLimit } from "@/lib/security/rate-limit"
 
 function asRecord(v: unknown): Record<string, unknown> {
   if (!v) return {}
@@ -78,6 +79,9 @@ export async function uploadMaterialAttachmentFiles(
 
   const access = await getProfessorActionAccess()
   if (!access.ok) return { ok: false, error: access.error }
+  if (!(await checkRateLimit(`material-upload:${access.userId}`, 30, 3600, { failClosed: true }))) {
+    return { ok: false, error: "Limite de uploads excedido" }
+  }
 
   const ok = await assertProfessorOwnsClassroom(classroomId, access.userId)
   if (!ok) return { ok: false, error: "Sala nao encontrada" }
@@ -256,6 +260,7 @@ export async function updateMaterial(
   }
   if (input.status !== undefined) patch.status = input.status
 
+  let removedAttachmentUrls: string[] = []
   if (input.attachments !== undefined) {
     if (input.attachments.length > ACTIVITY_ATTACHMENT_MAX_PER_ACTIVITY) {
       return { ok: false, error: "Numero de anexos acima do permitido" }
@@ -276,8 +281,7 @@ export async function updateMaterial(
       asRecord(row?.settings)
     )
     const newUrls = new Set(input.attachments.map((a) => a.url))
-    const removedUrls = old.filter((a) => !newUrls.has(a.url)).map((a) => a.url)
-    await deleteAttachmentBlobs(removedUrls)
+    removedAttachmentUrls = old.filter((a) => !newUrls.has(a.url)).map((a) => a.url)
 
     const current = asRecord(row?.settings)
     patch.settings = { ...current, attachments: input.attachments }
@@ -307,6 +311,7 @@ export async function updateMaterial(
   } catch (e: any) {
     return { ok: false, error: "Erro ao atualizar" }
   }
+  await deleteAttachmentBlobs(removedAttachmentUrls)
   revalidatePath(`/dashboard/professor/salas/${input.classroomId}`)
   revalidatePath(`/dashboard/aluno/salas/${input.classroomId}`)
   return { ok: true }
@@ -330,8 +335,6 @@ export async function deleteMaterial(
   const urls = parseActivityAttachments(
     asRecord(existing?.settings)
   ).map((a) => a.url)
-  await deleteAttachmentBlobs(urls)
-
   try {
     await query("delete from public.classroom_materials where id = $1 and classroom_id = $2", [
       materialId,
@@ -340,6 +343,7 @@ export async function deleteMaterial(
   } catch (e: any) {
     return { ok: false, error: "Erro ao excluir" }
   }
+  await deleteAttachmentBlobs(urls)
   revalidatePath(`/dashboard/professor/salas/${classroomId}`)
   revalidatePath(`/dashboard/aluno/salas/${classroomId}`)
   return { ok: true }

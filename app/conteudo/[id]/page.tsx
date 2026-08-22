@@ -385,7 +385,15 @@ export default async function ConteudoPublicoPage({ params }: Props) {
           </div>
 
           <div className="p-6">
-            <h1 className="font-display text-2xl font-bold text-gray-900 mb-6">{item.title}</h1>
+            <div className="mb-6 flex items-start justify-between gap-4">
+              <h1 className="font-display text-2xl font-bold text-gray-900">{item.title}</h1>
+              <Link
+                href={`/denunciar?targetType=content_item&targetId=${item.id}&returnTo=${encodeURIComponent(`/conteudo/${item.id}`)}`}
+                className="shrink-0 text-xs text-red-700 hover:underline"
+              >
+                Denunciar
+              </Link>
+            </div>
             {item.body_html ? (
               <RichTextContent html={item.body_html} className="prose prose-sm max-w-none mb-8" />
             ) : null}

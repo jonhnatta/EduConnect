@@ -66,6 +66,9 @@ export async function getProfessorActionAccess(): Promise<ActionGuardedAccess> {
   if (!user) return { ok: false, error: "Nao autenticado" }
 
   const profile = await getProfileAccess(user.id)
+  if (profile?.deleted_at || profile?.account_status !== "active") {
+    return { ok: false, error: "Conta inativa" }
+  }
   if (!profile?.user_type) return { ok: false, error: "Perfil incompleto" }
   if (profile.user_type !== "professor") return { ok: false, error: "Acesso negado" }
 

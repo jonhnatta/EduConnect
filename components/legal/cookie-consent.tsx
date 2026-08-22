@@ -3,18 +3,26 @@
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import { Cookie } from "lucide-react"
+import {
+  COOKIE_CONSENT_EVENT,
+  COOKIE_CONSENT_STORAGE_KEY,
+} from "@/components/legal/consented-analytics"
 
-const STORAGE_KEY = "educonnect:cookie-consent"
+const STORAGE_KEY = COOKIE_CONSENT_STORAGE_KEY
 
 export function CookieConsent() {
   const [visible, setVisible] = useState(false)
 
   useEffect(() => {
+    let timer: number | undefined
     try {
       const choice = localStorage.getItem(STORAGE_KEY)
-      if (!choice) setVisible(true)
+      if (!choice) timer = window.setTimeout(() => setVisible(true), 0)
     } catch {
       // localStorage indisponível (modo privado): não bloqueia o uso.
+    }
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer)
     }
   }, [])
 
@@ -22,6 +30,7 @@ export function CookieConsent() {
     try {
       localStorage.setItem(STORAGE_KEY, choice)
       localStorage.setItem(`${STORAGE_KEY}:at`, new Date().toISOString())
+      window.dispatchEvent(new Event(COOKIE_CONSENT_EVENT))
     } catch {
       // ignora
     }

@@ -21,6 +21,7 @@ import {
   HeadBucketCommand,
   CreateBucketCommand,
 } from "@aws-sdk/client-s3"
+import { scanUploadBuffer } from "@/lib/security/clamav"
 
 export const BLOB_SIM_SCHEME = "blob-sim://"
 
@@ -53,9 +54,7 @@ export function keyFromRef(ref: string): string {
 // ─── Cliente S3 (singleton) ───────────────────────────────────────────────────
 
 declare global {
-  // eslint-disable-next-line no-var
   var __s3Client: S3Client | undefined
-  // eslint-disable-next-line no-var
   var __s3BucketReady: Promise<void> | undefined
 }
 
@@ -78,6 +77,11 @@ function s3(): S3Client {
   })
   globalThis.__s3Client = client
   return client
+}
+
+export async function checkStorageReady(): Promise<void> {
+  if (isUploadSimulator()) return
+  await s3().send(new HeadBucketCommand({ Bucket: bucket() }))
 }
 
 async function ensureBucket(): Promise<void> {
@@ -141,6 +145,7 @@ export async function put(
 ): Promise<PutResult> {
   const buffer = await toBuffer(body)
   const contentType = options?.contentType ?? "application/octet-stream"
+  await scanUploadBuffer(buffer)
 
   if (isUploadSimulator()) {
     const filePath = simFilePath(pathname)

@@ -18,7 +18,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { ActivityExamDefinition } from "@/lib/activities/exam"
 import { useRouter } from "next/navigation"
-import { useEffect, useState, useTransition } from "react"
+import { useCallback, useEffect, useState, useTransition } from "react"
 import { toast } from "sonner"
 
 type Props = {
@@ -142,7 +142,7 @@ export function ContentExerciseSubmissionsDialog({
   const [loading, setLoading] = useState(false)
   const [exam, setExam] = useState<ActivityExamDefinition | null>(null)
 
-  const load = () => {
+  const load = useCallback(() => {
     if (!contentItemId) return
     setLoading(true)
     void Promise.all([
@@ -157,11 +157,13 @@ export function ContentExerciseSubmissionsDialog({
       }
       setRows(subRes.rows)
     })
-  }
+  }, [contentItemId])
 
   useEffect(() => {
-    if (open && contentItemId) load()
-  }, [open, contentItemId])
+    if (!open || !contentItemId) return
+    const timer = window.setTimeout(load, 0)
+    return () => window.clearTimeout(timer)
+  }, [open, contentItemId, load])
 
   if (!contentItemId) return null
 

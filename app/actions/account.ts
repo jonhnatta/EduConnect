@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache"
 import { query, queryOne } from "@/lib/db/query"
 import { requireAuthedUser } from "@/lib/auth/user"
 import { signOut } from "@/auth"
+import { withTransaction } from "@/lib/db/transaction"
 
 export async function changePassword(
   currentPassword: string,
@@ -57,7 +58,10 @@ export async function changePassword(
   if (!valid) return { ok: false, error: "Senha atual incorreta" }
 
   const hash = await bcrypt.hash(newPassword, 12)
-  await query("UPDATE public.users SET password_hash = $1 WHERE id = $2", [hash, user.id])
+  await query(
+    "UPDATE public.users SET password_hash = $1, session_version = session_version + 1 WHERE id = $2",
+    [hash, user.id]
+  )
   // Sucesso: zera o contador de tentativas
   await query("DELETE FROM public.password_change_limits WHERE user_id = $1", [user.id]).catch(() => {})
 
@@ -91,10 +95,50 @@ export async function deleteAccount(
     }
   }
 
-  await query(
-    "UPDATE public.profiles SET deleted_at = now() WHERE id = $1",
-    [user.id]
-  )
+  try {
+    await withTransaction(async (client) => {
+      const marked = await client.query(
+        `update public.profiles
+            set deleted_at = timezone('utc'::text, now()),
+                account_status = 'suspended',
+                profile_visibility = 'private',
+                full_name = 'Conta excluida',
+                slug = null,
+                bio = null,
+                avatar_url = null,
+                cover_url = null,
+                website_url = null,
+                interests = array[]::text[],
+                education_level = null,
+                employment_status = null,
+                study_focus = null,
+                professor_verification_status = case
+                  when professor_verification_status = 'approved' then 'revoked'
+                  else professor_verification_status
+                end,
+                updated_at = timezone('utc'::text, now())
+          where id = $1 and deleted_at is null
+          returning id`,
+        [user.id]
+      )
+      if (!marked.rowCount) throw new Error("Conta ja marcada para exclusao")
+
+      await client.query(
+        "update public.users set session_version = session_version + 1 where id = $1",
+        [user.id]
+      )
+      await client.query(
+        "update public.content_items set status = 'draft' where author_id = $1 and status = 'published'",
+        [user.id]
+      )
+      await client.query(
+        "update public.classrooms set is_public = false, status = 'encerrada' where professor_id = $1",
+        [user.id]
+      )
+    })
+  } catch {
+    return { ok: false, error: "Nao foi possivel excluir a conta" }
+  }
 
   await signOut({ redirect: false })
   return { ok: true }

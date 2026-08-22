@@ -1,314 +1,191 @@
 # EduConnect
 
-EduConnect e uma plataforma educacional social com IA integrada para conectar professores e alunos em um ambiente unico de ensino, conteudo, turmas, atividades e acompanhamento de desempenho.
+EduConnect e uma plataforma educacional para professores e alunos. Professores publicam
+conteudos, organizam turmas e atividades e acompanham o desempenho. Alunos entram em
+turmas, consomem materiais, respondem atividades e acompanham o proprio progresso.
 
-A aplicacao permite que professores publiquem materiais, criem turmas, acompanhem entregas e usem revisao automatica por IA antes da publicacao de artigos. Para alunos, a plataforma oferece feed educacional, entrada em turmas por convite, atividades, exercicios, simulados e acompanhamento de progresso.
+O primeiro lancamento e gratuito e nao expoe funcionalidades de inteligencia artificial.
+A verificacao de professores e feita por analise humana dos documentos enviados.
 
-## Objetivo do projeto
+## Stack
 
-O projeto foi criado para centralizar a jornada de ensino e aprendizagem em uma experiencia simples:
+- Next.js 16, React 19 e TypeScript
+- PostgreSQL 17
+- Redis 7.4 separado para filas duraveis e cache descartavel
+- BullMQ com dispatcher de outbox e workers independentes
+- MinIO/S3 para arquivos privados
+- ClamAV para varredura de todos os uploads
+- Caddy para ingress HTTPS no perfil de producao
+- NextAuth, Tailwind CSS 4, Radix UI e Trix
 
-- Professores conseguem criar conteudos ricos, organizar salas virtuais e acompanhar alunos.
-- Alunos conseguem consumir conteudo, responder atividades e acompanhar sua evolucao.
-- A IA apoia a curadoria, revisao de conteudos e fluxos de aprendizagem.
-- A plataforma combina feed publico, conteudos privados por turma e ferramentas de sala de aula.
-
-## Principais funcionalidades
-
-### Para professores
-
-- Cadastro e area exclusiva de professor.
-- Criacao e gestao de turmas.
-- Convites por codigo/link para entrada de alunos.
-- Criacao de conteudos educacionais:
-  - artigos;
-  - exercicios;
-  - avaliacoes;
-  - simulados;
-  - dicas rapidas com imagem ou video.
-- Editor rico com suporte a anexos e midias.
-- Controle de visibilidade do conteudo:
-  - publico;
-  - privado;
-  - restrito a turmas selecionadas.
-- Revisao de artigos por IA antes da publicacao.
-- Painel de analise de desempenho.
-- Consulta de alunos e historico por turma.
-
-### Para alunos
-
-- Cadastro e area exclusiva de aluno.
-- Feed de conteudos educacionais.
-- Entrada em turmas por codigo ou link de convite.
-- Visualizacao de materiais, atividades e conteudos publicados.
-- Resposta de exercicios, avaliacoes e simulados.
-- Feedback de questoes objetivas e acompanhamento de pontuacao.
-- Plano de estudos e progresso do aluno.
-- Area para explorar professores.
-
-### Inteligencia artificial
-
-O projeto possui um fluxo de revisao automatica de artigos usando xAI. Ao enviar um artigo para revisao, o sistema avalia:
-
-- verificacao de fatos;
-- risco de plagio;
-- adequacao do conteudo;
-- qualidade educacional.
-
-Com base na pontuacao, o artigo pode ser publicado automaticamente, enviado para decisao do professor ou voltar para revisao.
-
-## Stack tecnica
-
-- Next.js 16 com App Router.
-- React 19.
-- TypeScript.
-- Postgres (conexao direta via `pg`).
-- NextAuth (Credentials) para autenticacao.
-- Vercel Blob para arquivos e anexos.
-- xAI para revisao automatica de conteudo.
-- Tailwind CSS 4.
-- shadcn/ui e Radix UI para componentes de interface.
-- Trix para edicao de texto rico.
-- Recharts para visualizacoes de desempenho.
-- Vercel Analytics.
-
-## Estrutura principal
+## Arquitetura de runtime
 
 ```text
-app/
-  actions/                         Server Actions da aplicacao
-  api/                             Rotas internas para uploads e anexos
-  cadastro/                        Fluxo de cadastro
-  login/                           Login
-  conteudo/[id]/                   Pagina publica/privada de conteudo
-  dashboard/aluno/                 Area do aluno
-  dashboard/professor/             Area do professor
-  entrar/[codigo]/                 Entrada em turma por convite
+cliente -> app Next.js -> PostgreSQL
+                    |-> Redis cache
 
-components/
-  dashboard/                       Componentes dos paineis de aluno/professor
-  landing/                         Landing page institucional
-  ui/                              Componentes base de interface
+transacao de negocio -> outbox_events -> dispatcher -> Redis queue -> worker
 
-lib/
-  activities/                      Tipos e logica de atividades/provas
-  classrooms/                      Tipos e utilitarios de turmas
-  content/                         Tipos, configuracoes e agente de revisao
-  student-planner/                 Utilitarios do plano de estudos
-
-scripts/
-  001_*.sql ... 014_*.sql          Scripts SQL para preparar o banco
+uploads -> app Next.js -> MinIO privado
 ```
+
+A publicacao de artigos e dicas grava a alteracao e o evento de notificacao na mesma
+transacao. O dispatcher publica os eventos no BullMQ. O worker registra cada execucao em
+`job_executions`, permitindo retry sem duplicar notificacoes.
 
 ## Requisitos
 
-- Node.js compativel com Next.js 16.
-- npm.
-- Banco Postgres acessivel via `DATABASE_URL`.
-- Bucket/credenciais do Vercel Blob para uploads.
-- Chave da xAI para revisao automatica de artigos.
+- Docker Engine com Compose v2 para executar a stack completa; ou
+- Node.js 24, npm, PostgreSQL, Redis e storage S3 compativel para execucao sem Docker.
 
-## Como rodar localmente
+## Executar com Docker
 
-1. Instale as dependencias:
-
-```bash
-npm install
-```
-
-2. Configure as variaveis de ambiente em `.env.local` ou `.env.development.local`:
-
-```bash
-DATABASE_URL=
-AUTH_SECRET=
-AUTH_TRUST_HOST=true
-BLOB_READ_WRITE_TOKEN=
-XAI_API_KEY=
-NEXT_PUBLIC_APP_URL=
-```
-
-Variaveis principais:
-
-- `DATABASE_URL`: string de conexao do Postgres.
-- `AUTH_SECRET`: segredo do NextAuth.
-- `AUTH_TRUST_HOST`: use `true` em desenvolvimento.
-- `BLOB_READ_WRITE_TOKEN`: token do Vercel Blob para upload e leitura de arquivos.
-- `XAI_API_KEY`: chave usada pelo agente de revisao de artigos.
-- `NEXT_PUBLIC_APP_URL`: URL base da aplicacao para gerar links absolutos.
-
-3. Prepare o banco no Postgres executando:
-
-```bash
-node scripts/apply-sql.mjs scripts/100_bootstrap_postgres.sql scripts/200_app_schema_postgres.sql
-```
-
-4. Rode o servidor de desenvolvimento:
-
-```bash
-npm run dev
-```
-
-5. Abra a aplicacao em:
-
-```text
-http://localhost:3000
-```
-
-## Rodar com Docker
-
-A forma mais rapida de subir tudo (Postgres + aplicacao) e via Docker Compose. Nao
-precisa de Node nem Postgres instalados localmente.
-
-1. (Opcional) Crie um arquivo `.env` a partir do exemplo e ajuste os segredos:
+1. Crie o arquivo de ambiente:
 
 ```bash
 cp .env.docker.example .env
 ```
 
-2. Suba a stack (build da imagem + Postgres + app):
+2. Troque todos os valores `change-*` e `troque-*`. As senhas usadas em URLs devem ser
+formadas por letras, numeros, hifen ou sublinhado.
+
+3. Suba a stack:
 
 ```bash
 docker compose up -d --build
 ```
 
-3. Abra a aplicacao em `http://localhost:3000`.
-
-O servico `db` cria o schema automaticamente na **primeira** inicializacao, rodando
-`scripts/100_bootstrap_postgres.sql` e `scripts/200_app_schema_postgres.sql` via
-`docker-entrypoint-initdb.d`. A aplicacao conecta no Postgres pela rede interna do
-Compose (`DATABASE_URL=postgresql://app_user:...@db:5432/appdb`, com `DATABASE_SSL=false`).
-
-Comandos uteis:
+4. Verifique os servicos:
 
 ```bash
-docker compose logs -f app        # acompanhar logs da aplicacao
-docker compose ps                 # status dos containers
-docker compose down               # parar (mantem os dados no volume pgdata)
-docker compose down -v            # parar e APAGAR os dados do banco
-APP_PORT=3001 docker compose up -d # publicar o app em outra porta do host
+docker compose ps
+docker compose logs migrate minio-init dispatcher worker app
+curl --fail http://localhost:3000/api/health/live
+curl --fail http://localhost:3000/api/health/ready
 ```
 
-Observacoes:
+A aplicacao fica em `http://localhost:3000`. Use sempre esse origin no navegador: o
+callback OAuth e o cookie PKCE precisam usar o mesmo host (nao misture `localhost` com
+`127.0.0.1`). PostgreSQL, Redis e MinIO permanecem apenas na rede interna do Compose.
+Somente a porta HTTP da aplicacao e publicada no host.
 
-- O schema so e aplicado em um volume vazio. Para reaplicar em um banco ja existente,
-  use `node scripts/apply-sql.mjs scripts/100_bootstrap_postgres.sql scripts/200_app_schema_postgres.sql`
-  apontando o `DATABASE_URL` para o container, ou recrie o volume com `docker compose down -v`.
-- Defina um `AUTH_SECRET` forte (`openssl rand -base64 32`) e os tokens de
-  `BLOB_READ_WRITE_TOKEN`/`XAI_API_KEY` no `.env` para habilitar upload e revisao de conteudo.
+Servicos:
 
-## Scripts disponiveis
+- `db`: PostgreSQL persistente;
+- `migrate`: aplica migrations com lock, checksum e historico;
+- `redis-queue`: fila duravel com AOF e politica `noeviction`;
+- `redis-cache`: cache descartavel com limite de memoria;
+- `minio`: storage privado;
+- `minio-init`: cria bucket, usuario e policy minima;
+- `dispatcher`: entrega a outbox ao BullMQ;
+- `worker`: processa jobs de notificacao;
+- `scheduler`: agenda o purge de contas apos a retencao;
+- `app`: servidor Next.js sem privilegios.
+
+O perfil de producao adiciona o Caddy:
 
 ```bash
-npm run dev      # inicia o ambiente de desenvolvimento
-npm run build    # gera o build de producao
-npm run start    # inicia a aplicacao em modo producao apos o build
-npm run lint     # executa o lint configurado no package.json
+docker compose --profile production up -d --build
 ```
 
-Observacao: o script de lint usa `eslint .`. Se o comando falhar com `eslint: command not found`, instale/configure o ESLint no projeto antes de usar essa validacao.
+O perfil `operations` executa os jobs one-shot de backup de Postgres, MinIO e Restic. Consulte
+`docs/RUNBOOK_PRODUCAO_DOCKER.md` antes de usa-lo.
 
-## GitHub Project e demandas
-
-O repositorio possui um utilitario para ler o GitHub Project
-`https://github.com/users/warleymendeslopes/projects/3` e criar demandas nos
-status `Backlog` ou `Ready`.
-
-Crie um arquivo `.env.github.local` com um token do GitHub:
+Para parar sem apagar dados:
 
 ```bash
-GITHUB_TOKEN=github_pat_seu_token
-GITHUB_PROJECT_OWNER=warleymendeslopes
-GITHUB_PROJECT_OWNER_TYPE=user
-GITHUB_PROJECT_NUMBER=3
-GITHUB_REPO=warleymendeslopes/EduConnect
+docker compose down
 ```
 
-Para Project de usuario, use um personal access token classic com os scopes
-`project` e `repo` se o repositorio for privado, ou `project` e `public_repo`
-se ele for publico.
-Depois, use:
+Nao use `docker compose down -v` em ambientes com dados importantes, pois esse comando
+remove os volumes persistentes.
+
+## Migrations
+
+O manifesto canonico esta em `scripts/migrate.mjs`. Cada migration e executada uma unica
+vez, dentro de uma transacao, e registrada em `public.schema_migrations`. Um checksum
+alterado em migration ja aplicada interrompe o processo.
 
 ```bash
-npm run github:project -- info
-npm run backlog:add -- --title "Criar painel do professor" --body "Detalhes da demanda"
-npm run ready:add -- --title "Ajustar login do aluno" --body "Detalhes da demanda"
+npm run db:migrate
 ```
 
-Por padrao, o utilitario cria uma issue no repositorio e adiciona a issue ao
-Project. Para criar apenas um draft item dentro do Project, use:
+Use `DATABASE_MIGRATION_URL` com o usuario administrativo somente no processo de migration.
+A aplicacao, dispatcher e worker devem usar `DATABASE_URL` com o usuario restrito de
+runtime. No Compose, o migrator provisiona e atualiza esse papel automaticamente.
+
+Para criar uma nova migration:
+
+1. Adicione um arquivo SQL novo em `scripts/` sem editar migrations ja aplicadas.
+2. Inclua uma nova versao no fim de `MIGRATIONS` em `scripts/migrate.mjs`.
+3. Execute a migration em um banco limpo e em uma copia de banco existente.
+
+## Desenvolvimento sem Docker
+
+Configure ao menos:
 
 ```bash
-npm run github:project -- backlog --draft --title "Ideia para priorizar"
+DATABASE_URL=postgresql://...
+AUTH_SECRET=...
+AUTH_URL=http://localhost:3000
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+REDIS_QUEUE_URL=redis://...
+REDIS_CACHE_URL=redis://...
+S3_ENDPOINT=http://localhost:9000
+S3_BUCKET=educonnect
+S3_REGION=us-east-1
+S3_ACCESS_KEY=...
+S3_SECRET_KEY=...
+S3_FORCE_PATH_STYLE=true
+PROFESSOR_VERIFICATION_PROVIDER=none
 ```
 
-## Fluxos importantes
+Depois:
 
-### Publicacao de conteudo
-
-1. O professor cria um conteudo no painel.
-2. Define tipo, titulo, corpo, midias, tags, disciplina, nivel e visibilidade.
-3. Dependendo do tipo, adiciona questoes, datas de abertura/entrega ou anexos.
-4. Artigos podem passar por revisao de IA.
-5. Conteudos publicados aparecem no feed dos alunos conforme a visibilidade.
-
-### Turmas
-
-1. O professor cria uma sala com disciplina, nivel e limite opcional de alunos.
-2. O sistema gera um codigo/link de convite.
-3. Alunos entram pela rota `/entrar/[codigo]` ou pelo painel de aluno.
-4. Professor acompanha alunos, materiais, atividades e desempenho.
-
-### Avaliacoes e exercicios
-
-1. O professor cria questoes objetivas ou abertas.
-2. O aluno responde pela pagina do conteudo ou atividade.
-3. Questoes objetivas podem gerar pontuacao automatica.
-4. Questoes abertas ficam disponiveis para correcao do professor.
-5. O desempenho entra nos paineis de acompanhamento.
-
-## Banco de dados e seguranca
-
-O projeto usa Postgres direto. Os scripts SQL criam tabelas, funcoes e triggers para:
-
-- perfis de usuario;
-- turmas e membros;
-- atividades e materiais;
-- entregas de atividades;
-- conteudos globais;
-- reacoes e compartilhamentos;
-- entregas de exercicios;
-- avaliacoes e simulados;
-- resultados de revisao por IA;
-- estatisticas de desempenho.
-
-As permissoes sao separadas por perfil de usuario (`aluno` e `professor`) e por relacao com turmas/conteudos.
-
-## Status atual
-
-O projeto ja possui uma base funcional com landing page, autenticacao, dashboards, criacao de conteudo, turmas, exercicios, simulados, dicas, upload de midias, revisao por IA e analise de desempenho.
-
-Alguns pontos ainda podem evoluir:
-
-- configuracao completa do ESLint;
-- ajustes de compatibilidade do `next.config.mjs` com Next.js 16;
-- ampliacao dos testes automatizados;
-- documentacao de deploy em producao;
-- painel administrativo para aprovacao e moderacao de professores.
-
-## Deploy
-
-O projeto e adequado para deploy na Vercel. Antes de publicar, configure no ambiente de producao:
-
-- `DATABASE_URL` do Postgres;
-- `AUTH_SECRET` do NextAuth;
-- token do Vercel Blob;
-- chave da xAI;
-- URL publica da aplicacao;
-
-## Repositorio
-
-Repositorio remoto configurado:
-
-```text
-git@github.com:warleymendeslopes/EduConnect.git
+```bash
+npm install
+npm run db:migrate
+npm run dev
 ```
+
+## Validacao
+
+```bash
+npx tsc --noEmit
+npm run lint
+npm run test:oauth
+npm run test:password-reset
+npm test
+npm run build
+docker compose config --quiet
+```
+
+O build nao ignora erros de TypeScript. Os endpoints de saude sao:
+
+- `GET /api/health/live`: confirma que o processo HTTP esta vivo;
+- `GET /api/health/ready`: confirma banco e migrations antes de receber trafego.
+
+## Seguranca e operacao
+
+- Nunca use as credenciais administrativas do PostgreSQL ou MinIO na aplicacao.
+- Mantenha `PROFESSOR_VERIFICATION_PROVIDER=none` no primeiro lancamento.
+- Use HTTPS no proxy reverso e preserve os cabecalhos definidos em `next.config.mjs`.
+- Redis e PostgreSQL nao devem ter portas publicas.
+- Segredos nao devem ser commitados; `.env` e apenas local.
+- Backups de PostgreSQL e MinIO precisam ser armazenados fora do mesmo host e ter restore
+testado antes do lancamento publico.
+
+## Documentacao de producao
+
+- `docs/AUDITORIA_PRODUCAO_ESCALABILIDADE_2026-07-14.md`
+- `docs/PLANO_DEMANDAS_PRODUCAO_REDIS_2026-07-14.md`
+- `docs/DEC-01_PUBLICO_ALVO_MENORES_2026-07-14.md`
+- `docs/DEC-02_IA_NO_LANCAMENTO_2026-07-14.md`
+- `docs/DEC-03_SELO_PROFESSOR_OPERACAO_HUMANA_2026-07-14.md`
+- `docs/DEC-04_NEGOCIO_FORNECEDORES_2026-07-14.md`
+
+Cloud, dominio, TLS, monitoramento externo e destino dos backups ainda precisam ser
+definidos antes de abrir o ambiente ao publico.
+
+O status objetivo do release esta em `docs/STATUS_RELEASE_2026-07-16.md`; os comandos de deploy,
+backup e restore estao em `docs/RUNBOOK_PRODUCAO_DOCKER.md`.

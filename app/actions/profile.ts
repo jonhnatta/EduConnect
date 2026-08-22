@@ -19,6 +19,7 @@ import {
 } from "@/lib/profile/constants"
 import { buildStudentProfilePath, buildTeacherProfilePath, slugifyProfileValue } from "@/lib/profile/public"
 import { dbPool } from "@/lib/db/pool"
+import { checkRateLimit } from "@/lib/security/rate-limit"
 
 export type ProfileVisibility = "public" | "private"
 export type DashboardProfile = {
@@ -144,7 +145,6 @@ export async function updateDashboardProfile(input: unknown): Promise<
 > {
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return { ok: false, error: "Nao autenticado" }
-
   const parsed = updateProfileSchema.safeParse(input)
   if (!parsed.success) {
     return { ok: false, error: parsed.error.errors[0]?.message ?? "Dados invalidos" }
@@ -245,6 +245,9 @@ export async function uploadProfileImage(
 
   const user = await requireAuthedUser().catch(() => null)
   if (!user) return { ok: false, error: "Nao autenticado" }
+  if (!(await checkRateLimit(`profile-upload:${user.id}`, 20, 3600, { failClosed: true }))) {
+    return { ok: false, error: "Limite de uploads excedido" }
+  }
 
   const raw = formData.get("file")
   if (!(raw instanceof File) || raw.size === 0) {

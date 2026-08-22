@@ -235,12 +235,22 @@ export async function getExamForStudent(
   const member = await assertStudentMember(classroomId, user.id)
   if (!member) return { ok: false, error: "Voce nao participa desta sala" }
 
-  const data = await queryOne<{ settings: any; status: string }>(
-    "select settings, status from public.classroom_activities where id = $1 and classroom_id = $2",
+  const data = await queryOne<{ settings: any; status: string; starts_at: string | Date | null; due_at: string | Date | null }>(
+    "select settings, status, starts_at, due_at from public.classroom_activities where id = $1 and classroom_id = $2",
     [activityId, classroomId]
   )
   if (!data || data.status === "rascunho") {
     return { ok: false, error: "Atividade nao encontrada" }
+  }
+
+  const submitted = await queryOne<{ status: string }>(
+    "select status from public.classroom_activity_submissions where activity_id = $1 and student_id = $2",
+    [activityId, user.id]
+  )
+  if (submitted?.status !== "enviado") {
+    if (data.status === "encerrada") return { ok: false, error: "Atividade encerrada" }
+    const windowError = assertActivityWindowAllowed(data.starts_at, data.due_at)
+    if (windowError) return { ok: false, error: windowError }
   }
 
   const exam = parseExamFromSettings(
@@ -250,6 +260,29 @@ export async function getExamForStudent(
   const err = validateExamDefinition(exam)
   if (err) return { ok: false, error: err }
   return { ok: true, exam: toPublicExam(exam) }
+}
+
+/** Gabarito objetivo liberado somente ao membro que já concluiu a própria entrega. */
+export async function getMcqSolutionsForActivity(
+  classroomId: string,
+  activityId: string
+): Promise<Record<string, number> | null> {
+  const user = await requireAuthedUser().catch(() => null)
+  if (!user || !(await assertStudentMember(classroomId, user.id))) return null
+
+  const row = await queryOne<{ settings: unknown }>(
+    `select a.settings
+       from public.classroom_activities a
+       join public.classroom_activity_submissions s
+         on s.activity_id = a.id and s.student_id = $3 and s.status = 'enviado'
+      where a.id = $1 and a.classroom_id = $2`,
+    [activityId, classroomId, user.id]
+  )
+  const exam = parseExamFromSettings(asRecord(row?.settings))
+  if (!exam) return null
+  return Object.fromEntries(
+    exam.questions.filter((q) => q.type === "mcq").map((q) => [q.id, q.correctIndex])
+  )
 }
 
 export async function getMySubmission(
@@ -406,21 +439,24 @@ export async function submitExam(
 
   if (existing) {
     try {
-      await query(
+      const submitted = await queryOne<{ id: string }>(
         `update public.classroom_activity_submissions
          set answers = $1::jsonb, status = 'enviado', score_mcq = $2, open_scores = $3::jsonb, score_total = $4, submitted_at = $5
-         where id = $6 and status = 'rascunho'`,
+         where id = $6 and status = 'rascunho'
+         returning id`,
         [JSON.stringify(sanitized), scoreMcq, JSON.stringify(openScores), scoreTotal, now, existing.id]
       )
+      if (!submitted) return { ok: false, error: "Prova ja enviada" }
     } catch (e: any) {
       return { ok: false, error: "Erro ao enviar" }
     }
   } else {
     try {
-      await query(
+      await queryOne<{ id: string }>(
         `insert into public.classroom_activity_submissions
          (activity_id, student_id, status, answers, score_mcq, open_scores, score_total, submitted_at)
-         values ($1,$2,'enviado',$3::jsonb,$4,$5::jsonb,$6,$7)`,
+         values ($1,$2,'enviado',$3::jsonb,$4,$5::jsonb,$6,$7)
+         returning id`,
         [activityId, user.id, JSON.stringify(sanitized), scoreMcq, JSON.stringify(openScores), scoreTotal, now]
       )
     } catch (e: any) {
@@ -547,17 +583,23 @@ export async function submitTrabalho(
   const attachJson = JSON.stringify(uploaded)
   try {
     if (existing) {
-      await query(
+      const submitted = await queryOne<{ id: string }>(
         `update public.classroom_activity_submissions
          set status = 'enviado', submission_text = $1, submission_attachments = $2::jsonb, submitted_at = $3
-         where id = $4 and status = 'rascunho'`,
+         where id = $4 and status = 'rascunho'
+         returning id`,
         [text || null, attachJson, now, existing.id]
       )
+      if (!submitted) {
+        await Promise.all(uploaded.map((a) => del(a.pathname).catch(() => {})))
+        return { ok: false, error: "Trabalho ja enviado" }
+      }
     } else {
-      await query(
+      await queryOne<{ id: string }>(
         `insert into public.classroom_activity_submissions
          (activity_id, student_id, status, submission_text, submission_attachments, submitted_at)
-         values ($1,$2,'enviado',$3,$4::jsonb,$5)`,
+         values ($1,$2,'enviado',$3,$4::jsonb,$5)
+         returning id`,
         [activityId, user.id, text || null, attachJson, now]
       )
     }

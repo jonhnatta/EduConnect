@@ -8,7 +8,6 @@ import { Menu, X, GraduationCap } from "lucide-react"
 const navigation = [
   { name: "Funcionalidades", href: "#funcionalidades" },
   { name: "Como funciona", href: "#como-funciona" },
-  { name: "Depoimentos", href: "#depoimentos" },
 ]
 
 export function Header() {

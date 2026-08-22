@@ -3,20 +3,12 @@ import { NextRequest, NextResponse } from "next/server"
 import { queryOne } from "@/lib/db/query"
 import { getAuthedUser } from "@/lib/auth/user"
 import { applySafeServingHeaders } from "@/lib/http/safe-serving"
+import { contentItemIdFromArticlePath } from "@/lib/http/blob-paths"
 
 export const runtime = "nodejs"
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-
 function extractContentItemId(pathname: string): string | null {
-  // Rejeita traversal antes de qualquer uso do pathname no backend de blob.
-  if (pathname.includes("..") || pathname.includes("//") || pathname.includes("\\")) {
-    return null
-  }
-  const parts = pathname.split("/").filter(Boolean)
-  if (parts[0] !== "articles" || !parts[1]) return null
-  return UUID_RE.test(parts[1]) ? parts[1] : null
+  return contentItemIdFromArticlePath(pathname)
 }
 
 function sanitizeDownloadFilename(name: string): string {
