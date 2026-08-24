@@ -275,11 +275,19 @@ test("Qdrant deletion is tenant safe", async () => {
 })
 
 test("telemetry sanitizes secrets, emails, cycles and oversized values", () => {
-  const cyclic: Record<string, unknown> = { email: "teacher@example.com", apiKey: "sk-live", nested: { answerKey: "B" } }
+  const cyclic: Record<string, unknown> = {
+    email: "teacher@example.com",
+    apiKey: "sk-live",
+    auth: "Bearer highly-secret",
+    author: "Ana",
+    nested: { answerKey: "B" },
+  }
   cyclic.self = cyclic
   const sanitized = sanitizeTelemetryValue(cyclic) as Record<string, unknown>
   assert.equal(sanitized.email, "[email-redacted]")
   assert.equal(sanitized.apiKey, "[redacted]")
+  assert.equal(sanitized.auth, "[redacted]")
+  assert.equal(sanitized.author, "Ana")
   assert.deepEqual(sanitized.nested, { answerKey: "[redacted]" })
   assert.equal(sanitized.self, "[circular]")
   assert.ok(JSON.stringify(sanitizeTelemetryValue("x".repeat(20_000))).length < 9_000)

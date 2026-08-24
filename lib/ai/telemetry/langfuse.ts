@@ -7,6 +7,11 @@ const MAX_STRING_LENGTH = 8_000
 const SENSITIVE_KEY = /(password|secret|token|authorization|cookie|apikey|answerkey|gabarito|headers?)/i
 const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi
 
+function isSensitiveKey(key: string): boolean {
+  const normalized = key.replace(/[^a-z0-9]/gi, "")
+  return normalized.toLowerCase() === "auth" || SENSITIVE_KEY.test(normalized)
+}
+
 export type TelemetryOperation = {
   name: string
   input?: unknown
@@ -58,8 +63,7 @@ export function sanitizeTelemetryValue(value: unknown): unknown {
 
     const result: Record<string, unknown> = {}
     for (const [key, nested] of entries) {
-      const normalizedKey = key.replace(/[^a-z0-9]/gi, "")
-      if (SENSITIVE_KEY.test(normalizedKey)) {
+      if (isSensitiveKey(key)) {
         result[key] = REDACTED
         continue
       }
