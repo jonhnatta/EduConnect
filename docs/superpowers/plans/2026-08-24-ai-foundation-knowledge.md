@@ -214,7 +214,6 @@ git commit -m "feat(ai): validate feature flags and provider config"
 **Files:**
 - Create: `scripts/052_ai_foundation.sql`
 - Modify: `scripts/migrate.mjs`
-- Modify: `scripts/200_app_schema_postgres.sql`
 - Create: `tests/ai-schema.test.ts`
 
 - [ ] **Step 1: Escrever teste estrutural da migração**
@@ -225,6 +224,8 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 
 const sql = readFileSync(new URL("../scripts/052_ai_foundation.sql", import.meta.url), "utf8")
+const baseline = readFileSync(new URL("../scripts/200_app_schema_postgres.sql", import.meta.url), "utf8")
+const runner = readFileSync(new URL("../scripts/migrate.mjs", import.meta.url), "utf8")
 
 test("AI migration has ownership, quota and immutable draft confirmation", () => {
   for (const table of ["ai_beta_access", "ai_conversations", "ai_messages", "ai_runs", "ai_tool_executions", "ai_citations", "ai_draft_actions", "ai_usage_daily", "ai_documents"]) {
@@ -233,6 +234,8 @@ test("AI migration has ownership, quota and immutable draft confirmation", () =>
   assert.match(sql, /payload_hash text not null/i)
   assert.match(sql, /expires_at timestamptz not null/i)
   assert.match(sql, /unique \(teacher_id, usage_date\)/i)
+  assert.doesNotMatch(baseline, /052_ai_foundation|public\.ai_beta_access/i)
+  assert.equal((runner.match(/\["00560", "ai_foundation", "scripts\/052_ai_foundation\.sql"\]/g) ?? []).length, 1)
 })
 ```
 
@@ -245,6 +248,8 @@ Expected: FAIL por arquivo ausente.
 - [ ] **Step 3: Criar migração**
 
 Criar as nove tabelas indicadas no teste, UUIDs com `gen_random_uuid()`, FKs para `profiles`, timestamps UTC, checks dos estados definidos no PRD e índices em `teacher_id`, `conversation_id`, `status`, `created_at` e `expires_at`.
+
+Garantir ownership composto entre professor e turma, triggers de manutenção de `updated_at` e uma função/trigger de banco que torne o conteúdo do draft imutável, valide transições e grave confirmação/aplicação com horário autoritativo do PostgreSQL.
 
 O bloco de cotas deve conter exatamente:
 
@@ -271,19 +276,19 @@ Adicionar ao fim de `MIGRATIONS`:
 ["00560", "ai_foundation", "scripts/052_ai_foundation.sql"],
 ```
 
-Espelhar a estrutura no baseline `scripts/200_app_schema_postgres.sql`.
+Não alterar `scripts/200_app_schema_postgres.sql`. A migração histórica 00200 é imutável porque o runner valida seu checksum. Toda a fundação de IA pertence exclusivamente à migração 00560.
 
 - [ ] **Step 5: Validar**
 
 Run: `node --test tests/ai-schema.test.ts && npm run db:migrate && npm run db:migrate`
 
-Expected: teste PASS, primeira migração aplicada e segunda execução sem alteração ou checksum mismatch.
+Expected: teste PASS, baseline 00200 sem a seção 052, primeira migração aplicada e segunda execução sem alteração ou checksum mismatch.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add scripts/052_ai_foundation.sql scripts/migrate.mjs scripts/200_app_schema_postgres.sql tests/ai-schema.test.ts
-git commit -m "feat(ai): add transactional AI foundation schema"
+git add scripts/052_ai_foundation.sql scripts/migrate.mjs tests/ai-schema.test.ts docs/superpowers/plans/2026-08-24-ai-foundation-knowledge.md
+git commit -m "fix(ai): preserve migration history and draft integrity"
 ```
 
 ### Task 4: Acesso ao beta e reserva de cota

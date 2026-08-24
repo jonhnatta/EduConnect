@@ -1,3 +1,6 @@
+create unique index if not exists uq_classrooms_id_professor
+  on public.classrooms (id, professor_id);
+
 create table if not exists public.ai_beta_access (
   id uuid primary key default gen_random_uuid(),
   teacher_id uuid not null references public.profiles(id) on delete cascade,
@@ -16,11 +19,16 @@ create table if not exists public.ai_beta_access (
 create index if not exists idx_ai_beta_access_enabled_expires
   on public.ai_beta_access (enabled, expires_at);
 
+drop trigger if exists handle_ai_beta_access_updated_at on public.ai_beta_access;
+create trigger handle_ai_beta_access_updated_at
+  before update on public.ai_beta_access
+  for each row execute function public.handle_updated_at();
+
 create table if not exists public.ai_conversations (
   id uuid primary key default gen_random_uuid(),
   teacher_id uuid not null references public.profiles(id) on delete cascade,
   title text not null,
-  classroom_id uuid references public.classrooms(id) on delete set null,
+  classroom_id uuid,
   status text not null default 'active' check (status in ('active', 'archived', 'deleted')),
   created_at timestamptz not null default timezone('utc'::text, now()),
   updated_at timestamptz not null default timezone('utc'::text, now()),
@@ -33,7 +41,10 @@ create table if not exists public.ai_conversations (
     or (status = 'deleted' and deleted_at is not null)
   ),
   check (archived_at is null or archived_at >= created_at),
-  check (deleted_at is null or deleted_at >= created_at)
+  check (deleted_at is null or deleted_at >= created_at),
+  foreign key (classroom_id, teacher_id)
+    references public.classrooms(id, professor_id)
+    on delete set null (classroom_id)
 );
 
 create index if not exists idx_ai_conversations_teacher_created
@@ -42,6 +53,11 @@ create index if not exists idx_ai_conversations_status_created
   on public.ai_conversations (status, created_at desc);
 create index if not exists idx_ai_conversations_classroom
   on public.ai_conversations (classroom_id) where classroom_id is not null;
+
+drop trigger if exists handle_ai_conversations_updated_at on public.ai_conversations;
+create trigger handle_ai_conversations_updated_at
+  before update on public.ai_conversations
+  for each row execute function public.handle_updated_at();
 
 create table if not exists public.ai_messages (
   id uuid primary key default gen_random_uuid(),
@@ -147,9 +163,6 @@ create table if not exists public.ai_citations (
   unique (message_id, display_order)
 );
 
-create index if not exists idx_ai_citations_message
-  on public.ai_citations (message_id, display_order);
-
 create table if not exists public.ai_draft_actions (
   id uuid primary key default gen_random_uuid(),
   teacher_id uuid not null references public.profiles(id) on delete cascade,
@@ -165,7 +178,7 @@ create table if not exists public.ai_draft_actions (
   applied_at timestamptz,
   created_at timestamptz not null default timezone('utc'::text, now()),
   check (expires_at > created_at),
-  check ((status in ('confirmed', 'applied') and confirmed_at is not null) or (status in ('proposed', 'rejected') and confirmed_at is null) or status in ('expired', 'failed')),
+  check ((status in ('confirmed', 'applied') and confirmed_at is not null) or (status = 'proposed' and confirmed_at is null) or status in ('expired', 'rejected', 'failed')),
   check (confirmed_at is null or confirmed_at >= created_at),
   check (confirmed_at is null or confirmed_at < expires_at),
   check ((status = 'applied' and applied_at is not null) or (status <> 'applied' and applied_at is null)),
@@ -173,6 +186,107 @@ create table if not exists public.ai_draft_actions (
   foreign key (conversation_id, teacher_id)
     references public.ai_conversations(id, teacher_id) on delete cascade
 );
+
+create or replace function public.enforce_ai_draft_action_transition()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_now timestamptz := clock_timestamp();
+begin
+  if tg_op = 'INSERT' then
+    if new.status <> 'proposed' then
+      raise exception 'AI draft actions must be inserted as proposed'
+        using errcode = '23514';
+    end if;
+    if new.confirmed_at is not null or new.applied_at is not null then
+      raise exception 'AI draft timestamps are managed by the database'
+        using errcode = '23514';
+    end if;
+    return new;
+  end if;
+
+  if row(
+    new.id,
+    new.teacher_id,
+    new.conversation_id,
+    new.action_type,
+    new.target_type,
+    new.target_id,
+    new.payload,
+    new.payload_hash,
+    new.expires_at,
+    new.created_at
+  ) is distinct from row(
+    old.id,
+    old.teacher_id,
+    old.conversation_id,
+    old.action_type,
+    old.target_type,
+    old.target_id,
+    old.payload,
+    old.payload_hash,
+    old.expires_at,
+    old.created_at
+  ) then
+    raise exception 'AI draft identity and payload are immutable'
+      using errcode = '22023';
+  end if;
+
+  if old.status in ('applied', 'expired', 'rejected', 'failed') then
+    if new.status <> old.status then
+      raise exception 'AI draft terminal status is immutable'
+        using errcode = '22023';
+    end if;
+  elsif not (
+    (old.status = 'proposed' and new.status in ('proposed', 'confirmed', 'rejected', 'expired', 'failed'))
+    or (old.status = 'confirmed' and new.status in ('confirmed', 'applied', 'rejected', 'expired', 'failed'))
+  ) then
+    raise exception 'Invalid AI draft status transition from % to %', old.status, new.status
+      using errcode = '22023';
+  end if;
+
+  if old.status = 'proposed' and new.status = 'confirmed' then
+    if new.confirmed_at is not null then
+      raise exception 'confirmed_at is managed by the database'
+        using errcode = '22023';
+    end if;
+    if timezone('utc'::text, now()) >= timezone('utc'::text, new.expires_at)
+      or timezone('utc'::text, v_now) >= timezone('utc'::text, new.expires_at) then
+      raise exception 'Expired AI draft cannot be confirmed'
+        using errcode = '22023';
+    end if;
+    new.confirmed_at := v_now;
+    new.applied_at := null;
+  elsif old.status = 'confirmed' and new.status = 'applied' then
+    if new.applied_at is not null then
+      raise exception 'applied_at is managed by the database'
+        using errcode = '22023';
+    end if;
+    if timezone('utc'::text, now()) >= timezone('utc'::text, new.expires_at)
+      or timezone('utc'::text, v_now) >= timezone('utc'::text, new.expires_at) then
+      raise exception 'Expired AI draft cannot be applied'
+        using errcode = '22023';
+    end if;
+    new.confirmed_at := old.confirmed_at;
+    new.applied_at := v_now;
+  else
+    if new.confirmed_at is distinct from old.confirmed_at
+      or new.applied_at is distinct from old.applied_at then
+      raise exception 'AI draft timestamps are managed by the database'
+        using errcode = '22023';
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists enforce_ai_draft_action_transition on public.ai_draft_actions;
+create trigger enforce_ai_draft_action_transition
+  before insert or update on public.ai_draft_actions
+  for each row execute function public.enforce_ai_draft_action_transition();
 
 create index if not exists idx_ai_draft_actions_teacher_created
   on public.ai_draft_actions (teacher_id, created_at desc);
@@ -194,10 +308,15 @@ create table if not exists public.ai_usage_daily (
   unique (teacher_id, usage_date)
 );
 
+drop trigger if exists handle_ai_usage_daily_updated_at on public.ai_usage_daily;
+create trigger handle_ai_usage_daily_updated_at
+  before update on public.ai_usage_daily
+  for each row execute function public.handle_updated_at();
+
 create table if not exists public.ai_documents (
   id uuid primary key default gen_random_uuid(),
   teacher_id uuid not null references public.profiles(id) on delete cascade,
-  classroom_id uuid references public.classrooms(id) on delete set null,
+  classroom_id uuid,
   source_type text not null,
   source_id text not null,
   version integer not null check (version > 0),
@@ -217,7 +336,10 @@ create table if not exists public.ai_documents (
     or (status = 'deleted' and deleted_at is not null)
   ),
   check (indexed_at is null or indexed_at >= created_at),
-  check (deleted_at is null or deleted_at >= created_at)
+  check (deleted_at is null or deleted_at >= created_at),
+  foreign key (classroom_id, teacher_id)
+    references public.classrooms(id, professor_id)
+    on delete set null (classroom_id)
 );
 
 create index if not exists idx_ai_documents_teacher_created
@@ -226,3 +348,8 @@ create index if not exists idx_ai_documents_status_created
   on public.ai_documents (status, created_at);
 create index if not exists idx_ai_documents_classroom
   on public.ai_documents (classroom_id) where classroom_id is not null;
+
+drop trigger if exists handle_ai_documents_updated_at on public.ai_documents;
+create trigger handle_ai_documents_updated_at
+  before update on public.ai_documents
+  for each row execute function public.handle_updated_at();
