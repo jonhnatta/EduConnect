@@ -9,6 +9,13 @@ export const QUEUE_NAMES = [
   "account.purge",
   "cache.invalidate",
   "maintenance.cleanup",
+  "ai.generate",
+  "ai.ingest",
+  "ai.embed",
+  "ai.web-research",
+  "ai.evaluate",
+  "ai.delete",
+  "ai.reconcile",
 ] as const
 
 export type QueueName = (typeof QUEUE_NAMES)[number]

@@ -155,7 +155,7 @@ test("production boundaries enforce current migrations, privacy and RBAC", () =>
   const profileImage = readFileSync(new URL("../app/api/profile-image/route.ts", import.meta.url), "utf8")
   const worker = readFileSync(new URL("../workers/worker.mjs", import.meta.url), "utf8")
   const queueAdmin = readFileSync(new URL("../app/actions/admin-queue-operations.ts", import.meta.url), "utf8")
-  assert.match(ready, /version = '00560'/)
+  assert.match(ready, /version = '00570'/)
   assert.match(profileImage, /user\?\.id !== profileId/)
   assert.match(worker, /user_can_view_content_item\(\$4::uuid, tf\.student_id\)/)
   assert.match(queueAdmin, /admin\.role !== "admin"/)

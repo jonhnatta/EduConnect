@@ -275,6 +275,40 @@ services:
       - no-new-privileges:true
     networks: [backend]
 
+  ai-worker:
+    profiles: [ai]
+    build:
+      context: .
+      target: worker
+    image: educonnect-worker:local
+    command: ["node", "workers/ai-worker.mjs"]
+    restart: unless-stopped
+    init: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis-queue:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_RUNTIME_USER:-app_runtime}:${POSTGRES_RUNTIME_PASSWORD:?POSTGRES_RUNTIME_PASSWORD must be set}@db:5432/${POSTGRES_DB:-appdb}
+      DATABASE_SSL: "false"
+      REDIS_QUEUE_URL: redis://:${REDIS_QUEUE_PASSWORD:?REDIS_QUEUE_PASSWORD must be set}@redis-queue:6379/0
+      REDIS_NAMESPACE: ${REDIS_NAMESPACE:-educonnect:local}
+      AI_TENANT_ID: ${AI_TENANT_ID:-educonnect}
+      AI_WORKER_CONCURRENCY: ${AI_WORKER_CONCURRENCY:-2}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-educonnect_knowledge}
+    mem_limit: ${AI_WORKER_MEM_LIMIT:-768m}
+    cpus: ${AI_WORKER_CPUS:-1.0}
+    pids_limit: ${AI_WORKER_PIDS_LIMIT:-256}
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+
   dispatcher:
     build:
       context: .

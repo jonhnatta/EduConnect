@@ -22,7 +22,7 @@ export async function GET() {
     }>(
       `select to_regclass('public.users')::text as users,
               to_regclass('public.schema_migrations')::text as migrations,
-              exists (select 1 from public.schema_migrations where version = '00560') as current,
+              exists (select 1 from public.schema_migrations where version = '00570') as current,
               (
                 select count(*) = 2
                   from public.service_heartbeats
