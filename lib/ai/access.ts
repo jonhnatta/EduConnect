@@ -29,8 +29,21 @@ export type AiUsageReservation =
   | { ok: true }
   | {
       ok: false
-      code: "beta_disabled" | "daily_quota_exceeded" | "monthly_quota_exceeded"
+      code:
+        | "feature_disabled"
+        | "professor_not_approved"
+        | "account_inactive"
+        | "beta_disabled"
+        | "daily_quota_exceeded"
+        | "monthly_quota_exceeded"
     }
+
+type TeacherProfileRow = QueryResultRow & {
+  user_type: string | null
+  professor_verification_status: string | null
+  account_status: string
+  deleted_at: Date | string | null
+}
 
 type BetaAccessRow = QueryResultRow & {
   enabled: boolean
@@ -114,6 +127,9 @@ export async function reserveAiUsage(
     throw new TypeError("estimatedTokens must be a positive safe integer")
   }
 
+  const config = readAiConfig()
+  if (!config.enabled) return { ok: false, code: "feature_disabled" }
+
   let transactionStarted = false
 
   try {
@@ -130,6 +146,35 @@ export async function reserveAiUsage(
       [normalizedTeacherId]
     )
 
+    const profileResult = await client.query<TeacherProfileRow>(
+      `SELECT
+         user_type,
+         professor_verification_status,
+         account_status,
+         deleted_at
+       FROM public.profiles
+       WHERE id = $1
+       FOR SHARE`,
+      [normalizedTeacherId]
+    )
+
+    const profile = profileResult.rows[0]
+    if (!profile) {
+      await client.query("COMMIT")
+      return { ok: false, code: "professor_not_approved" }
+    }
+    if (profile.account_status !== "active" || profile.deleted_at !== null) {
+      await client.query("COMMIT")
+      return { ok: false, code: "account_inactive" }
+    }
+    if (
+      profile.user_type !== "professor" ||
+      profile.professor_verification_status !== "approved"
+    ) {
+      await client.query("COMMIT")
+      return { ok: false, code: "professor_not_approved" }
+    }
+
     const betaResult = await client.query<BetaAccessRow>(
       `SELECT enabled, daily_request_limit, monthly_token_limit
          FROM public.ai_beta_access
@@ -137,7 +182,8 @@ export async function reserveAiUsage(
           AND enabled = TRUE
           AND (starts_at IS NULL OR starts_at <= clock_timestamp())
           AND (expires_at IS NULL OR expires_at > clock_timestamp())
-        LIMIT 1`,
+        LIMIT 1
+        FOR SHARE`,
       [normalizedTeacherId]
     )
 
@@ -147,7 +193,6 @@ export async function reserveAiUsage(
       return { ok: false, code: "beta_disabled" }
     }
 
-    const config = readAiConfig()
     const dailyLimit = positiveDailyLimit(beta.daily_request_limit, config.dailyRequests)
     const monthlyLimit = positiveMonthlyLimit(beta.monthly_token_limit, config.monthlyTokens)
 
