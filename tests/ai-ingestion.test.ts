@@ -13,6 +13,7 @@ import {
   parseAiQueuePayload as parseAiQueuePayloadCore,
   partitionAuthorizedDocuments,
   planReconciliation,
+  validateCollectionDimensions,
 } from "../workers/ai-ingestion-core.mjs"
 import { QUEUE_NAMES } from "../lib/queue/contracts.ts"
 
@@ -79,6 +80,12 @@ test("canonical text is normalized once and hashes the same representation used 
   assert.equal(chunks.length, 1)
   assert.equal(chunks[0].content, canonical)
   assert.equal(chunks[0].contentHash, hashContent(canonical))
+})
+
+test("Qdrant collection bootstrap validates configured vector dimensions", () => {
+  assert.doesNotThrow(() => validateCollectionDimensions({ config: { params: { vectors: { size: 1536, distance: "Cosine" } } } }, 1536))
+  assert.throws(() => validateCollectionDimensions({ config: { params: { vectors: { size: 3072, distance: "Cosine" } } } }, 1536), /qdrant_collection_incompatible/)
+  assert.throws(() => validateCollectionDimensions({ config: { params: { vectors: { size: 1536, distance: "Dot" } } } }, 1536), /qdrant_collection_incompatible/)
 })
 
 test("AI queue contracts parse the strict dispatcher envelope", () => {
@@ -162,6 +169,7 @@ test("AI knowledge migration is registered and enforces tenant-owned version int
   assert.match(sql, /create or replace function public\.activate_ai_document_version/)
   assert.match(sql, /pg_advisory_xact_lock/)
   assert.match(sql, /set is_current = false/)
+  assert.match(sql, /add column if not exists lease_owner uuid/)
   assert.doesNotMatch(sql, /create table if not exists public\.ai_documents/)
 })
 
@@ -176,6 +184,10 @@ test("dedicated AI worker is tenant-safe and only consumes implemented queues", 
     assert.doesNotMatch(worker, new RegExp(`new Worker\\(\\s*["']${queue.replace(".", "\\.")}["']`))
   }
   assert.match(worker, /insert into public\.job_executions/i)
+  assert.match(worker, /lease_owner/i)
+  assert.match(worker, /where job_key = \$1 and lease_owner = \$2/i)
+  assert.match(worker, /moveToDelayed\(/)
+  assert.match(worker, /new DelayedError\(/)
   assert.match(worker, /insert into public\.job_dead_letters/i)
   assert.match(worker, /p\.user_type = 'professor'/i)
   assert.match(worker, /p\.account_status = 'active'/i)
@@ -205,6 +217,9 @@ test("dedicated AI worker is tenant-safe and only consumes implemented queues", 
   const embedBody = worker.slice(embedStart, deleteStart)
   assert.ok(embedBody.indexOf("qdrant.delete") < embedBody.indexOf("qdrant.upsert"))
   assert.match(embedBody, /sourceFilter\(document\)/)
+  assert.ok(embedBody.indexOf("openai.embeddings.create") < embedBody.indexOf('client.query("begin")'))
+  assert.ok(embedBody.indexOf("loadAuthorizedSource(document, client, true)") < embedBody.indexOf("qdrant.delete"))
+  assert.ok(embedBody.indexOf("qdrant.upsert") < embedBody.lastIndexOf('client.query("commit")'))
 
   const reconcileStart = worker.indexOf("async function reconcile")
   const optionsStart = worker.indexOf("const workerOptions", reconcileStart)
@@ -216,6 +231,21 @@ test("dedicated AI worker is tenant-safe and only consumes implemented queues", 
   assert.match(worker, /partitionAuthorizedDocuments\(/)
   assert.match(worker, /for \(const document of partition\.revoked\) await markRevokedDocument/)
   assert.match(worker, /set status = 'deleted', indexed_at = null,\s*deleted_at = timezone/)
+  assert.match(worker, /createCollection\(/)
+  for (const field of ["tenant_id", "teacher_id", "classroom_id", "source_type", "source_id", "active"]) {
+    assert.match(worker, new RegExp(`field_name: ["']${field}["']`))
+  }
+  assert.match(worker, /getCollection\(/)
+  assert.match(worker, /embedding\.length !== configuredEmbeddingDimensions/)
+  assert.match(worker, /loadAuthorizedSource\(document, client, true\)/)
+  assert.match(worker, /for update of (?:ci|m|a)/i)
+  assert.match(worker, /function qdrantProvider/)
+  assert.match(worker, /function embeddingProviders/)
+  const deleteBody = worker.slice(worker.indexOf("async function deleteDocument"), worker.indexOf("async function markRevokedDocument"))
+  assert.doesNotMatch(deleteBody, /embeddingProviders\(/)
+  assert.doesNotMatch(reconcileBody, /embeddingProviders\(/)
+  assert.match(worker, /status <> 'completed'[\s\S]*locked_until < timezone/)
+  assert.match(worker, /set locked_until =[\s\S]*where job_key = \$1 and lease_owner = \$2 and status = 'processing'/)
 })
 
 test("reconciliation paginates and classifies missing, extra and orphan points", async () => {

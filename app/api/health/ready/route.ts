@@ -4,7 +4,7 @@ import { checkStorageReady } from "@/lib/blob"
 import { pingClamav } from "@/lib/security/clamav"
 import { pingRedis } from "@/lib/redis/health"
 import { assertProductionConfig } from "@/lib/config/production"
-import { checkAiDependenciesReady } from "@/lib/ai/health"
+import { checkAiDependenciesReady, requiredQueueServices } from "@/lib/ai/health"
 
 export const dynamic = "force-dynamic"
 
@@ -14,6 +14,7 @@ export async function GET() {
       assertProductionConfig()
       if (process.env.MALWARE_SCAN_ENABLED !== "true") throw new Error("malware scan disabled")
     }
+    const queueServices = requiredQueueServices()
     const row = await queryOne<{
       users: string | null
       migrations: string | null
@@ -24,12 +25,13 @@ export async function GET() {
               to_regclass('public.schema_migrations')::text as migrations,
               exists (select 1 from public.schema_migrations where version = '00570') as current,
               (
-                select count(*) = 2
+                select count(*) = cardinality($1::text[])
                   from public.service_heartbeats
-                 where service_name in ('dispatcher', 'worker')
+                 where service_name = any($1::text[])
                    and status = 'ready'
                    and heartbeat_at > timezone('utc'::text, now()) - interval '30 seconds'
-              ) as queue_services_ready`
+              ) as queue_services_ready`,
+      [queueServices]
     )
     if (!row?.users || !row.migrations || !row.current || !row.queue_services_ready) {
       throw new Error("runtime unavailable")

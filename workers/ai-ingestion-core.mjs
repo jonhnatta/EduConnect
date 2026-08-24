@@ -48,6 +48,14 @@ export function documentJobMatchesCurrent(data, document) {
     document.embedding_model === data.embeddingModel
 }
 
+export function validateCollectionDimensions(collection, expectedDimensions) {
+  const vectors = collection?.config?.params?.vectors
+  if (!vectors || typeof vectors !== "object" || Array.isArray(vectors) ||
+      vectors.size !== expectedDimensions || String(vectors.distance).toLowerCase() !== "cosine") {
+    throw new Error("qdrant_collection_incompatible")
+  }
+}
+
 const HTML_ENTITIES = { amp: "&", apos: "'", gt: ">", lt: "<", nbsp: " ", quot: '"' }
 function decodeHtmlEntities(value) {
   return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, code) => {

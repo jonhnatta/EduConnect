@@ -19,6 +19,7 @@ const AI_PROVIDER_URL_VARIABLES = [
 const AI_LIMIT_VARIABLES = [
   "AI_DAILY_REQUEST_LIMIT",
   "AI_MONTHLY_TOKEN_LIMIT",
+  "AI_EMBEDDING_DIMENSIONS",
 ] as const
 
 function normalized(env: Env, name: string): string {
@@ -86,6 +87,7 @@ export function readAiConfig(env: Env = process.env) {
     internalRag: enabled && normalized(env, "FEATURE_AI_INTERNAL_RAG") === "true",
     model: normalized(env, "OPENAI_COPILOT_MODEL") || "gpt-5-mini",
     embeddingModel: normalized(env, "OPENAI_EMBEDDING_MODEL") || "text-embedding-3-small",
+    embeddingDimensions: positiveIntegerOrDefault(normalized(env, "AI_EMBEDDING_DIMENSIONS"), 1536),
     workerBaseUrl: withoutTrailingSlash(normalized(env, "LANGFUSE_WORKER_BASE_URL")),
     dailyRequests: positiveIntegerOrDefault(normalized(env, "AI_DAILY_REQUEST_LIMIT"), 20),
     monthlyTokens: positiveIntegerOrDefault(normalized(env, "AI_MONTHLY_TOKEN_LIMIT"), 1_000_000),

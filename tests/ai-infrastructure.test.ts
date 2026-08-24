@@ -105,6 +105,15 @@ test("disabled AI readiness performs no dependency requests", async () => {
   assert.equal(calls, 0)
 })
 
+test("readiness requires the AI worker heartbeat only when Copilot is enabled", async () => {
+  const { requiredQueueServices } = await import("../lib/ai/health.ts")
+  assert.deepEqual(requiredQueueServices({ FEATURE_AI_COPILOT: "false" }), ["dispatcher", "worker"])
+  assert.deepEqual(requiredQueueServices({ FEATURE_AI_COPILOT: "true" }), ["dispatcher", "worker", "ai-worker"])
+  const route = readFileSync(new URL("../app/api/health/ready/route.ts", import.meta.url), "utf8")
+  assert.match(route, /requiredQueueServices/)
+  assert.match(route, /service_name = any\(\$1::text\[\]\)/)
+})
+
 test("enabled AI readiness checks normalized endpoints with isolated credentials", async () => {
   const { checkAiDependenciesReady } = await import("../lib/ai/health.ts")
   const calls: Array<{ url: string; init?: RequestInit }> = []

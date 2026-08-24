@@ -11,6 +11,9 @@ begin
 end;
 $$;
 
+alter table public.job_executions
+  add column if not exists lease_owner uuid;
+
 alter table public.ai_documents
   add column if not exists is_current boolean not null default false,
   add column if not exists embedding_model text not null default 'text-embedding-3-small',

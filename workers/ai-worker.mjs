@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { Worker } from "bullmq"
+import { DelayedError, Worker } from "bullmq"
 import OpenAI from "openai"
 import pg from "pg"
 import { QdrantClient } from "@qdrant/js-client-rest"
@@ -12,6 +12,7 @@ import {
   parseAiQueuePayload,
   partitionAuthorizedDocuments,
   planReconciliation,
+  validateCollectionDimensions,
 } from "./ai-ingestion-core.mjs"
 import { log, logError, redisConnection } from "./runtime.mjs"
 
@@ -19,9 +20,12 @@ const databaseUrl = process.env.DATABASE_URL
 const redisUrl = process.env.REDIS_QUEUE_URL
 const namespace = process.env.REDIS_NAMESPACE
 const configuredTenantId = process.env.AI_TENANT_ID || "educonnect"
+const configuredEmbeddingModel = process.env.OPENAI_EMBEDDING_MODEL?.trim() || "text-embedding-3-small"
+const configuredEmbeddingDimensions = Number(process.env.AI_EMBEDDING_DIMENSIONS || "1536")
 if (!databaseUrl) throw new Error("Missing env var: DATABASE_URL")
 if (!redisUrl) throw new Error("Missing env var: REDIS_QUEUE_URL")
 if (!namespace) throw new Error("Missing env var: REDIS_NAMESPACE")
+if (!Number.isInteger(configuredEmbeddingDimensions) || configuredEmbeddingDimensions <= 0) throw new Error("invalid_embedding_dimensions")
 
 const pool = new pg.Pool({
   connectionString: databaseUrl,
@@ -60,40 +64,60 @@ async function heartbeat(status = "ready") {
 
 async function idempotent(job, handler) {
   const jobKey = `${job.queueName}:${job.id}`
+  const leaseOwner = randomUUID()
   const claimed = await pool.query(
     `insert into public.job_executions
-       (job_key, queue_name, status, locked_until)
-     values ($1, $2, 'processing', timezone('utc'::text, now()) + interval '10 minutes')
+       (job_key, queue_name, status, locked_until, lease_owner)
+     values ($1, $2, 'processing', timezone('utc'::text, now()) + interval '10 minutes', $3)
      on conflict (job_key) do update set
        status = 'processing', attempts = public.job_executions.attempts + 1,
+       lease_owner = excluded.lease_owner,
        locked_until = timezone('utc'::text, now()) + interval '10 minutes',
        updated_at = timezone('utc'::text, now()), last_error = null
      where public.job_executions.status <> 'completed'
        and (public.job_executions.locked_until is null
          or public.job_executions.locked_until < timezone('utc'::text, now()))
      returning job_key`,
-    [jobKey, job.queueName]
+    [jobKey, job.queueName, leaseOwner]
   )
   if (!claimed.rowCount) {
-    const state = await pool.query("select status from public.job_executions where job_key = $1", [jobKey])
+    const state = await pool.query("select status, locked_until from public.job_executions where job_key = $1", [jobKey])
     if (state.rows[0]?.status === "completed") return
-    throw new Error("ai_job_already_leased")
+    const resumeAt = Math.max(Date.now() + 1_000, new Date(state.rows[0]?.locked_until ?? Date.now()).getTime() + 100)
+    await job.moveToDelayed(resumeAt, job.token)
+    throw new DelayedError()
   }
+  let leaseLost = false
+  const renewLease = async () => {
+    const renewed = await pool.query(
+      `update public.job_executions
+          set locked_until = timezone('utc'::text, now()) + interval '10 minutes', updated_at = timezone('utc'::text, now())
+        where job_key = $1 and lease_owner = $2 and status = 'processing'`,
+      [jobKey, leaseOwner]
+    )
+    if (!renewed.rowCount) leaseLost = true
+  }
+  const leaseTimer = setInterval(() => void renewLease().catch(() => { leaseLost = true }), 60_000)
   try {
     await handler(job)
-    await pool.query(
+    if (leaseLost) throw new Error("ai_job_lease_lost")
+    const completed = await pool.query(
       `update public.job_executions set status = 'completed',
-         completed_at = timezone('utc'::text, now()), locked_until = null,
-         updated_at = timezone('utc'::text, now()) where job_key = $1`,
-      [jobKey]
+         completed_at = timezone('utc'::text, now()), locked_until = null, lease_owner = null,
+         updated_at = timezone('utc'::text, now()) where job_key = $1 and lease_owner = $2`,
+      [jobKey, leaseOwner]
     )
+    if (!completed.rowCount) throw new Error("ai_job_lease_lost")
   } catch (error) {
     await pool.query(
-      `update public.job_executions set status = 'failed', locked_until = null,
-         last_error = $2, updated_at = timezone('utc'::text, now()) where job_key = $1`,
-      [jobKey, error instanceof Error ? error.message.slice(0, 1_000) : "ai_job_failed"]
+      `update public.job_executions set status = 'failed', locked_until = null, lease_owner = null,
+         last_error = $3, updated_at = timezone('utc'::text, now())
+       where job_key = $1 and lease_owner = $2`,
+      [jobKey, leaseOwner, error instanceof Error ? error.message.slice(0, 1_000) : "ai_job_failed"]
     ).catch(() => {})
     throw error
+  } finally {
+    clearInterval(leaseTimer)
   }
 }
 
@@ -131,7 +155,7 @@ async function currentDocumentUnderLock(client, data, initial) {
   return documentJobMatchesCurrent(data, document) ? document : null
 }
 
-async function loadAuthorizedSource(document, executor = pool) {
+async function loadAuthorizedSource(document, executor = pool, forUpdate = false) {
   if (document.source_type === "content_item") {
     const result = await executor.query(
       `select ci.title, ci.body_html as body, ci.visibility, ci.updated_at
@@ -140,7 +164,7 @@ async function loadAuthorizedSource(document, executor = pool) {
           and ($3::uuid is null or exists (
             select 1 from public.content_item_classrooms cic
              where cic.content_item_id = ci.id and cic.classroom_id = $3
-          ))`,
+          )) ${forUpdate ? "for update of ci" : ""}`,
       [document.source_id, document.teacher_id, document.classroom_id]
     )
     if (result.rowCount !== 1) throw new Error("unauthorized_ai_source")
@@ -151,7 +175,7 @@ async function loadAuthorizedSource(document, executor = pool) {
       `select m.title, m.description as body, 'classrooms'::text as visibility, m.updated_at
          from public.classroom_materials m join public.classrooms c on c.id = m.classroom_id
         where m.id = $1 and c.professor_id = $2 and m.status = 'publicado'
-          and m.classroom_id = $3`,
+          and m.classroom_id = $3 ${forUpdate ? "for update of m" : ""}`,
       [document.source_id, document.teacher_id, document.classroom_id]
     )
     if (result.rowCount !== 1) throw new Error("unauthorized_ai_source")
@@ -162,7 +186,7 @@ async function loadAuthorizedSource(document, executor = pool) {
       `select a.title, a.description as body, 'classrooms'::text as visibility, a.updated_at
          from public.classroom_activities a join public.classrooms c on c.id = a.classroom_id
         where a.id = $1 and c.professor_id = $2 and a.status in ('aberta', 'encerrada')
-          and a.classroom_id = $3`,
+          and a.classroom_id = $3 ${forUpdate ? "for update of a" : ""}`,
       [document.source_id, document.teacher_id, document.classroom_id]
     )
     if (result.rowCount !== 1) throw new Error("unauthorized_ai_source")
@@ -192,7 +216,7 @@ async function ingest(job) {
       return
     }
     assertSourcePayload(data, document)
-    const source = await loadAuthorizedSource(document, client)
+    const source = await loadAuthorizedSource(document, client, true)
     const text = normalizeDocumentText(`${source.title}\n${source.body ?? ""}`)
     if (!text) throw new Error("empty_ai_source")
     const chunks = chunkNormalizedDocument(text, { maxChars: 1_500, overlapChars: 200 })
@@ -244,17 +268,68 @@ async function ingest(job) {
   }
 }
 
-function providerClients() {
-  const apiKey = process.env.OPENAI_API_KEY?.trim()
+function qdrantProvider() {
   const qdrantUrl = process.env.QDRANT_URL?.trim()
   const qdrantApiKey = process.env.QDRANT_API_KEY?.trim()
-  if (!apiKey) throw new Error("missing_openai_api_key")
   if (!qdrantUrl) throw new Error("missing_qdrant_url")
   if (!qdrantApiKey) throw new Error("missing_qdrant_api_key")
   return {
-    openai: new OpenAI({ apiKey, maxRetries: 0, timeout: 30_000 }),
-    qdrant: new QdrantClient({ url: qdrantUrl, apiKey: qdrantApiKey, timeout: 30_000 }),
+    qdrant: new QdrantClient({ url: qdrantUrl, apiKey: qdrantApiKey, timeout: 30_000, checkCompatibility: false }),
     collection: process.env.QDRANT_COLLECTION || "educonnect_knowledge",
+  }
+}
+
+function embeddingProviders() {
+  const apiKey = process.env.OPENAI_API_KEY?.trim()
+  if (!apiKey) throw new Error("missing_openai_api_key")
+  return { ...qdrantProvider(), openai: new OpenAI({ apiKey, maxRetries: 0, timeout: 30_000 }) }
+}
+
+function qdrantConflict(error) {
+  return error && typeof error === "object" && (error.status === 409 || /already exists/i.test(String(error.message)))
+}
+
+async function bootstrapQdrant() {
+  const { qdrant, collection } = qdrantProvider()
+  let details
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      await qdrant.getCollections()
+      try {
+        details = await qdrant.getCollection(collection)
+      } catch (error) {
+        if (!(error && typeof error === "object" && error.status === 404)) throw error
+        try {
+          await qdrant.createCollection(collection, {
+            vectors: { size: configuredEmbeddingDimensions, distance: "Cosine" },
+          })
+        } catch (createError) {
+          if (!qdrantConflict(createError)) throw createError
+        }
+        details = await qdrant.getCollection(collection)
+      }
+      validateCollectionDimensions(details, configuredEmbeddingDimensions)
+      const indexes = [
+        { field_name: "tenant_id", field_schema: "keyword" },
+        { field_name: "teacher_id", field_schema: "keyword" },
+        { field_name: "classroom_id", field_schema: "keyword" },
+        { field_name: "source_type", field_schema: "keyword" },
+        { field_name: "source_id", field_schema: "keyword" },
+        { field_name: "active", field_schema: "bool" },
+      ]
+      for (const index of indexes) {
+        try {
+          await qdrant.createPayloadIndex(collection, { wait: true, ...index })
+        } catch (error) {
+          if (!qdrantConflict(error)) throw error
+        }
+      }
+      return
+    } catch (error) {
+      if (error instanceof Error && error.message === "qdrant_collection_incompatible") throw error
+      if (attempt === 7) throw new Error("qdrant_bootstrap_failed")
+      await new Promise((resolve) => setTimeout(resolve, Math.min(5_000, 250 * (2 ** attempt))))
+    }
   }
 }
 
@@ -271,18 +346,22 @@ async function embed(job) {
   const data = parseJob(job)
   const initial = await documentForJob(pool, data)
   if (!initial.is_current) return
-  const source = await loadAuthorizedSource(initial)
+  await loadAuthorizedSource(initial)
   const chunksBefore = await pool.query(
     `select id, chunk_index, content, content_hash from public.ai_document_chunks
       where document_id = $1 and teacher_id = $2 order by chunk_index`,
     [initial.id, initial.teacher_id]
   )
   if (!chunksBefore.rowCount) throw new Error("missing_ai_chunks")
-  const { openai, qdrant, collection } = providerClients()
+  if (initial.embedding_model !== configuredEmbeddingModel ||
+      (initial.embedding_dimensions && initial.embedding_dimensions !== configuredEmbeddingDimensions)) {
+    throw new Error("embedding_configuration_mismatch")
+  }
+  const { openai, qdrant, collection } = embeddingProviders()
   const response = await openai.embeddings.create({ model: initial.embedding_model, input: chunksBefore.rows.map((row) => row.content) })
   const ordered = [...response.data].sort((left, right) => left.index - right.index)
   const dimensions = ordered[0]?.embedding.length
-  if (ordered.length !== chunksBefore.rowCount || !dimensions || ordered.some((item) => item.embedding.length !== dimensions || item.embedding.some((value) => !Number.isFinite(value)))) {
+  if (ordered.length !== chunksBefore.rowCount || dimensions !== configuredEmbeddingDimensions || ordered.some((item) => item.embedding.length !== configuredEmbeddingDimensions || item.embedding.some((value) => !Number.isFinite(value)))) {
     throw new Error("invalid_embedding_response")
   }
 
@@ -294,7 +373,9 @@ async function embed(job) {
       await client.query("commit")
       return
     }
-    const currentSource = await loadAuthorizedSource(document, client)
+    const currentSource = await loadAuthorizedSource(document, client, true)
+    const currentText = normalizeDocumentText(`${currentSource.title}\n${currentSource.body ?? ""}`)
+    if (hashContent(currentText) !== document.content_hash) throw new Error("stale_embedding_source")
     const chunksNow = await client.query(
       `select id, chunk_index, content, content_hash from public.ai_document_chunks
         where document_id = $1 and teacher_id = $2 order by chunk_index for update`,
@@ -354,7 +435,7 @@ async function deleteDocument(job) {
   const initial = await documentForJob(pool, data)
   assertSourcePayload(data, initial)
   if (!initial.is_current) return
-  const { qdrant, collection } = providerClients()
+  const { qdrant, collection } = qdrantProvider()
   const client = await pool.connect()
   try {
     await client.query("begin")
@@ -447,7 +528,7 @@ async function currentDocumentBySource(client, teacherId, sourceType, sourceId) 
   if (!result.rowCount) return null
   const document = result.rows[0]
   try {
-    await loadAuthorizedSource(document, client)
+    await loadAuthorizedSource(document, client, true)
   } catch (error) {
     if (!(error instanceof Error) || error.message !== "unauthorized_ai_source") throw error
     await markRevokedDocument(client, document)
@@ -549,7 +630,7 @@ async function enqueueMissingDocument(documentId, data) {
 async function reconcile(job) {
   const data = parseJob(job)
   const documents = await loadCurrentDocuments(data.teacherId)
-  const { qdrant, collection } = providerClients()
+  const { qdrant, collection } = qdrantProvider()
   const scope = { tenantId: configuredTenantId, teacherId: data.teacherId }
   const points = await collectQdrantPages(
     (offset) => qdrant.scroll(collection, {
@@ -577,6 +658,7 @@ const workerOptions = {
   prefix: namespace,
   concurrency: Number(process.env.AI_WORKER_CONCURRENCY || "2"),
 }
+await bootstrapQdrant()
 const workers = [
   new Worker("ai.ingest", (job) => idempotent(job, ingest), workerOptions),
   new Worker("ai.embed", (job) => idempotent(job, embed), workerOptions),

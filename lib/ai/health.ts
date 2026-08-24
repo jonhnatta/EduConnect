@@ -4,6 +4,12 @@ type Fetcher = typeof fetch
 
 const AI_UNAVAILABLE_MESSAGE = "AI dependencies unavailable"
 
+export function requiredQueueServices(env: Env = process.env): string[] {
+  return env.FEATURE_AI_COPILOT?.trim() === "true"
+    ? ["dispatcher", "worker", "ai-worker"]
+    : ["dispatcher", "worker"]
+}
+
 function withoutTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "")
 }
