@@ -56,13 +56,36 @@ test("accepts only same-origin internal citation paths", () => {
 })
 
 test("rejects approved Copilot responses without citations", () => {
-  assert.equal(
-    copilotResponseSchema.safeParse({
-      ...validResponse,
-      citations: [],
-    }).success,
-    false
-  )
+  for (const decision of ["approved", "approved_with_warning"] as const) {
+    assert.equal(
+      copilotResponseSchema.safeParse({
+        ...validResponse,
+        citations: [],
+        safety: { ...validResponse.safety, decision },
+      }).success,
+      false,
+      `expected ${decision} without citations to be rejected`
+    )
+  }
+})
+
+test("allows non-approved Copilot responses without citations", () => {
+  for (const decision of [
+    "blocked",
+    "abstain",
+    "regenerate",
+    "human_review_required",
+  ] as const) {
+    assert.equal(
+      copilotResponseSchema.safeParse({
+        ...validResponse,
+        citations: [],
+        safety: { ...validResponse.safety, decision },
+      }).success,
+      true,
+      `expected ${decision} without citations to be accepted`
+    )
+  }
 })
 
 test("rejects incomplete web citations", () => {

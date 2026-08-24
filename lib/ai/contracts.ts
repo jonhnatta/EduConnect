@@ -38,12 +38,26 @@ export const usageSchema = z.object({
   outputTokens: z.number().int().nonnegative(),
 })
 
-export const copilotResponseSchema = z.object({
-  text: z.string().min(1),
-  citations: z.array(citationSchema).min(1),
-  usage: usageSchema,
-  safety: safetyResultSchema,
-})
+export const copilotResponseSchema = z
+  .object({
+    text: z.string().min(1),
+    citations: z.array(citationSchema),
+    usage: usageSchema,
+    safety: safetyResultSchema,
+  })
+  .superRefine((response, context) => {
+    const requiresCitation =
+      response.safety.decision === "approved" ||
+      response.safety.decision === "approved_with_warning"
+
+    if (requiresCitation && response.citations.length === 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["citations"],
+        message: "Approved responses require at least one citation",
+      })
+    }
+  })
 
 export type CopilotResponse = z.infer<typeof copilotResponseSchema>
 export type Citation = z.infer<typeof citationSchema>
