@@ -7,9 +7,14 @@ const REQUIRED_AI_PROVIDER_VARIABLES = [
   "LANGFUSE_BASE_URL",
   "LANGFUSE_PUBLIC_KEY",
   "LANGFUSE_SECRET_KEY",
+  "LANGFUSE_WORKER_BASE_URL",
 ] as const
 
-const AI_PROVIDER_URL_VARIABLES = ["QDRANT_URL", "LANGFUSE_BASE_URL"] as const
+const AI_PROVIDER_URL_VARIABLES = [
+  "QDRANT_URL",
+  "LANGFUSE_BASE_URL",
+  "LANGFUSE_WORKER_BASE_URL",
+] as const
 
 const AI_LIMIT_VARIABLES = [
   "AI_DAILY_REQUEST_LIMIT",
@@ -40,6 +45,10 @@ function isPositiveInteger(value: string): boolean {
 
 function positiveIntegerOrDefault(value: string, defaultValue: number): number {
   return value && isPositiveInteger(value) ? Number(value) : defaultValue
+}
+
+function withoutTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "")
 }
 
 export function aiConfigErrors(env: Env): string[] {
@@ -77,6 +86,7 @@ export function readAiConfig(env: Env = process.env) {
     internalRag: enabled && normalized(env, "FEATURE_AI_INTERNAL_RAG") === "true",
     model: normalized(env, "OPENAI_COPILOT_MODEL") || "gpt-5-mini",
     embeddingModel: normalized(env, "OPENAI_EMBEDDING_MODEL") || "text-embedding-3-small",
+    workerBaseUrl: withoutTrailingSlash(normalized(env, "LANGFUSE_WORKER_BASE_URL")),
     dailyRequests: positiveIntegerOrDefault(normalized(env, "AI_DAILY_REQUEST_LIMIT"), 20),
     monthlyTokens: positiveIntegerOrDefault(normalized(env, "AI_MONTHLY_TOKEN_LIMIT"), 1_000_000),
   }

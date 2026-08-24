@@ -1,3 +1,7 @@
+# Opt-in: inclua este overlay somente depois de provisionar todos os segredos de IA.
+# O compose base continua independente da infraestrutura de IA.
+# Este overlay falha sem todos os segredos obrigatorios por design.
+
 x-langfuse-environment: &langfuse-environment
   HOSTNAME: 0.0.0.0
   NEXTAUTH_URL: http://langfuse:3000
@@ -33,11 +37,6 @@ x-langfuse-environment: &langfuse-environment
 
 services:
   app:
-    depends_on:
-      qdrant:
-        condition: service_healthy
-      langfuse:
-        condition: service_healthy
     environment:
       FEATURE_AI_COPILOT: ${FEATURE_AI_COPILOT:-false}
       FEATURE_AI_WEB_SEARCH: ${FEATURE_AI_WEB_SEARCH:-false}
@@ -48,6 +47,7 @@ services:
       QDRANT_URL: http://qdrant:6333
       QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set}
       LANGFUSE_BASE_URL: http://langfuse:3000
+      LANGFUSE_WORKER_BASE_URL: http://langfuse-worker:3030
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?LANGFUSE_PUBLIC_KEY must be set}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?LANGFUSE_SECRET_KEY must be set}
       AI_DAILY_REQUEST_LIMIT: ${AI_DAILY_REQUEST_LIMIT:-20}
@@ -66,6 +66,9 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+    mem_limit: ${QDRANT_MEM_LIMIT:-1g}
+    cpus: ${QDRANT_CPUS:-1.0}
+    pids_limit: ${QDRANT_PIDS_LIMIT:-256}
     security_opt:
       - no-new-privileges:true
     networks: [backend]
@@ -91,11 +94,14 @@ services:
       LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?LANGFUSE_PUBLIC_KEY must be set}
       LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?LANGFUSE_SECRET_KEY must be set}
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/public/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/public/health?failIfDatabaseUnavailable=true').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 20s
+    mem_limit: ${LANGFUSE_WEB_MEM_LIMIT:-2g}
+    cpus: ${LANGFUSE_WEB_CPUS:-1.5}
+    pids_limit: ${LANGFUSE_WEB_PIDS_LIMIT:-512}
     security_opt:
       - no-new-privileges:true
     networks: [backend]
@@ -112,6 +118,9 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+    mem_limit: ${LANGFUSE_WORKER_MEM_LIMIT:-2g}
+    cpus: ${LANGFUSE_WORKER_CPUS:-1.5}
+    pids_limit: ${LANGFUSE_WORKER_PIDS_LIMIT:-512}
     security_opt:
       - no-new-privileges:true
     networks: [backend]
@@ -132,6 +141,9 @@ services:
       interval: 3s
       timeout: 3s
       retries: 10
+    mem_limit: ${LANGFUSE_POSTGRES_MEM_LIMIT:-1g}
+    cpus: ${LANGFUSE_POSTGRES_CPUS:-1.0}
+    pids_limit: ${LANGFUSE_POSTGRES_PIDS_LIMIT:-256}
     security_opt:
       - no-new-privileges:true
     networks: [backend]
@@ -154,6 +166,9 @@ services:
       timeout: 5s
       retries: 10
       start_period: 1s
+    mem_limit: ${LANGFUSE_CLICKHOUSE_MEM_LIMIT:-4g}
+    cpus: ${LANGFUSE_CLICKHOUSE_CPUS:-2.0}
+    pids_limit: ${LANGFUSE_CLICKHOUSE_PIDS_LIMIT:-512}
     security_opt:
       - no-new-privileges:true
     networks: [backend]
@@ -180,6 +195,9 @@ services:
       interval: 3s
       timeout: 10s
       retries: 10
+    mem_limit: ${LANGFUSE_REDIS_MEM_LIMIT:-512m}
+    cpus: ${LANGFUSE_REDIS_CPUS:-0.5}
+    pids_limit: ${LANGFUSE_REDIS_PIDS_LIMIT:-256}
     security_opt:
       - no-new-privileges:true
     networks: [backend]
@@ -203,6 +221,9 @@ services:
       timeout: 5s
       retries: 10
       start_period: 1s
+    mem_limit: ${LANGFUSE_MINIO_MEM_LIMIT:-1g}
+    cpus: ${LANGFUSE_MINIO_CPUS:-1.0}
+    pids_limit: ${LANGFUSE_MINIO_PIDS_LIMIT:-256}
     security_opt:
       - no-new-privileges:true
     networks: [backend]

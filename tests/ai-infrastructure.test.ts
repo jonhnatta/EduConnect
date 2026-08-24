@@ -48,12 +48,17 @@ test("AI compose keeps every dependency private, persistent and hardened", () =>
     assert.match(block, /healthcheck:/, `${service} needs a healthcheck`)
     assert.match(block, /security_opt:\n\s+- no-new-privileges:true/, `${service} needs no-new-privileges`)
     assert.match(block, /networks: \[backend\]/, `${service} must use only backend`)
+    assert.match(block, /mem_limit: \$\{[A-Z0-9_]+:-[^}]+\}/, `${service} needs a configurable memory limit`)
+    assert.match(block, /cpus: \$\{[A-Z0-9_]+:-[^}]+\}/, `${service} needs a configurable CPU limit`)
+    assert.match(block, /pids_limit: \$\{[A-Z0-9_]+:-(?:256|512)\}/, `${service} needs a configurable PID limit`)
   }
 
   assert.match(compose, /docker\.io\/qdrant\/qdrant:v1\.19\.0@sha256:[a-f0-9]{64}/)
   assert.match(compose, /docker\.io\/langfuse\/langfuse:3@sha256:[a-f0-9]{64}/)
   assert.match(compose, /docker\.io\/langfuse\/langfuse-worker:3@sha256:[a-f0-9]{64}/)
   assert.match(compose, /QDRANT__SERVICE__API_KEY: \$\{QDRANT_API_KEY:\?[^}]+\}/)
+  assert.match(serviceBlock(compose, "langfuse"), /api\/public\/health\?failIfDatabaseUnavailable=true/)
+  assert.match(serviceBlock(compose, "langfuse-worker"), /127\.0\.0\.1:3030\/api\/health/)
 
   for (const volume of [
     "qdrantdata",
@@ -75,13 +80,16 @@ test("AI compose requires dedicated secrets and wires the app overlay", () => {
   }
 
   const app = serviceBlock(compose, "app")
+  assert.doesNotMatch(app, /depends_on:/)
   assert.match(app, /QDRANT_URL: http:\/\/qdrant:6333/)
   assert.match(app, /QDRANT_API_KEY: \$\{QDRANT_API_KEY:\?[^}]+\}/)
   assert.match(app, /LANGFUSE_BASE_URL: http:\/\/langfuse:3000/)
+  assert.match(app, /LANGFUSE_WORKER_BASE_URL: http:\/\/langfuse-worker:3030/)
   assert.match(app, /LANGFUSE_PUBLIC_KEY: \$\{LANGFUSE_PUBLIC_KEY:\?[^}]+\}/)
   assert.match(app, /LANGFUSE_SECRET_KEY: \$\{LANGFUSE_SECRET_KEY:\?[^}]+\}/)
-  assert.match(app, /qdrant:\n\s+condition: service_healthy/)
-  assert.match(app, /langfuse:\n\s+condition: service_healthy/)
+  assert.match(compose, /^# Opt-in:/)
+  assert.match(compose, /compose base continua independente da infraestrutura de IA/i)
+  assert.match(compose, /falha sem todos os segredos obrigatorios/i)
 })
 
 test("disabled AI readiness performs no dependency requests", async () => {
@@ -110,17 +118,26 @@ test("enabled AI readiness checks normalized endpoints with isolated credentials
     QDRANT_URL: "http://qdrant:6333/",
     QDRANT_API_KEY: "qdrant-secret",
     LANGFUSE_BASE_URL: "http://langfuse:3000///",
+    LANGFUSE_WORKER_BASE_URL: "http://langfuse-worker:3030////",
     LANGFUSE_PUBLIC_KEY: "pk-test",
     LANGFUSE_SECRET_KEY: "sk-test",
   }, fetcher)
 
-  assert.equal(calls.length, 2)
+  assert.equal(calls.length, 3)
   assert.deepEqual(calls.map(({ url }) => url), [
     "http://qdrant:6333/healthz",
-    "http://langfuse:3000/api/public/health",
+    "http://langfuse:3000/api/public/health?failIfDatabaseUnavailable=true",
+    "http://langfuse-worker:3030/api/health",
   ])
   assert.equal(new Headers(calls[0].init?.headers).get("api-key"), "qdrant-secret")
   assert.equal(new Headers(calls[1].init?.headers).has("api-key"), false)
+  assert.equal(new Headers(calls[2].init?.headers).has("api-key"), false)
+  for (const call of calls.slice(1)) {
+    const serializedInit = JSON.stringify(call.init)
+    for (const secret of ["openai-secret", "qdrant-secret", "pk-test", "sk-test"]) {
+      assert.equal(serializedInit.includes(secret), false)
+    }
+  }
   assert.ok(calls.every(({ init }) => init?.signal instanceof AbortSignal))
 })
 
@@ -132,11 +149,12 @@ test("AI readiness sanitizes non-ok dependency responses", async () => {
     QDRANT_URL: "http://private-qdrant:6333",
     QDRANT_API_KEY: "qdrant-secret",
     LANGFUSE_BASE_URL: "http://private-langfuse:3000",
+    LANGFUSE_WORKER_BASE_URL: "http://private-langfuse-worker:3030",
     LANGFUSE_PUBLIC_KEY: "pk-test",
     LANGFUSE_SECRET_KEY: "sk-test",
   }
   const fetcher = async (input: string | URL | Request) => new Response("sensitive body", {
-    status: String(input).includes("qdrant") ? 503 : 200,
+    status: String(input).includes("worker") ? 503 : 200,
   })
 
   await assert.rejects(checkAiDependenciesReady(env, fetcher), (error: Error) => {
@@ -155,6 +173,7 @@ test("AI readiness sanitizes fetch errors", async () => {
     QDRANT_URL: "http://qdrant:6333",
     QDRANT_API_KEY: "qdrant-secret",
     LANGFUSE_BASE_URL: "http://langfuse:3000",
+    LANGFUSE_WORKER_BASE_URL: "http://langfuse-worker:3030",
     LANGFUSE_PUBLIC_KEY: "pk-test",
     LANGFUSE_SECRET_KEY: "sk-test",
   }

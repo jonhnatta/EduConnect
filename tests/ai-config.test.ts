@@ -8,6 +8,7 @@ const enabledAiEnv = (overrides: Record<string, string | undefined> = {}) => ({
   QDRANT_URL: "http://qdrant:6333",
   QDRANT_API_KEY: "qdrant-test-key",
   LANGFUSE_BASE_URL: "http://langfuse:3000",
+  LANGFUSE_WORKER_BASE_URL: "http://langfuse-worker:3030",
   LANGFUSE_PUBLIC_KEY: "langfuse-public-test-key",
   LANGFUSE_SECRET_KEY: "langfuse-secret-test-key",
   ...overrides,
@@ -25,6 +26,7 @@ test("AI provider configuration is required in a stable order when the copilot i
     "LANGFUSE_BASE_URL is required",
     "LANGFUSE_PUBLIC_KEY is required",
     "LANGFUSE_SECRET_KEY is required",
+    "LANGFUSE_WORKER_BASE_URL is required",
   ])
 })
 
@@ -78,6 +80,17 @@ test("AI provider URLs must be absolute HTTP or HTTPS URLs", () => {
   assert.deepEqual(aiConfigErrors(enabledAiEnv({ LANGFUSE_BASE_URL: "ftp://host" })), [
     "LANGFUSE_BASE_URL must be an absolute HTTP or HTTPS URL",
   ])
+  assert.deepEqual(aiConfigErrors(enabledAiEnv({ LANGFUSE_WORKER_BASE_URL: "/worker" })), [
+    "LANGFUSE_WORKER_BASE_URL must be an absolute HTTP or HTTPS URL",
+  ])
+})
+
+test("AI configuration normalizes the Langfuse worker base URL", () => {
+  const config = readAiConfig(enabledAiEnv({
+    LANGFUSE_WORKER_BASE_URL: "  http://langfuse-worker:3030///  ",
+  }))
+
+  assert.equal(config.workerBaseUrl, "http://langfuse-worker:3030")
 })
 
 test("AI models are trimmed and blank values use safe defaults", () => {

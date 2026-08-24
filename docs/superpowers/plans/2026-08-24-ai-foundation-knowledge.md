@@ -147,7 +147,7 @@ test("disabled AI does not require provider secrets", () => {
 
 test("enabled AI requires OpenAI, Qdrant and Langfuse", () => {
   const errors = aiConfigErrors({ FEATURE_AI_COPILOT: "true" })
-  assert.deepEqual(errors, ["OPENAI_API_KEY is required", "QDRANT_URL is required", "QDRANT_API_KEY is required", "LANGFUSE_BASE_URL is required", "LANGFUSE_PUBLIC_KEY is required", "LANGFUSE_SECRET_KEY is required"])
+  assert.deepEqual(errors, ["OPENAI_API_KEY is required", "QDRANT_URL is required", "QDRANT_API_KEY is required", "LANGFUSE_BASE_URL is required", "LANGFUSE_PUBLIC_KEY is required", "LANGFUSE_SECRET_KEY is required", "LANGFUSE_WORKER_BASE_URL is required"])
 })
 
 test("config applies beta defaults", () => {
@@ -168,7 +168,7 @@ Expected: FAIL por módulo ausente.
 ```ts
 type Env = Record<string, string | undefined>
 
-const requiredWhenEnabled = ["OPENAI_API_KEY", "QDRANT_URL", "QDRANT_API_KEY", "LANGFUSE_BASE_URL", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"] as const
+const requiredWhenEnabled = ["OPENAI_API_KEY", "QDRANT_URL", "QDRANT_API_KEY", "LANGFUSE_BASE_URL", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_WORKER_BASE_URL"] as const
 
 export function aiConfigErrors(env: Env): string[] {
   if (env.FEATURE_AI_COPILOT !== "true") return []
@@ -377,21 +377,24 @@ Expected: FAIL por compose ausente.
 
 - [ ] **Step 3: Criar compose de IA**
 
-Usar Qdrant `v1.19.0` e as imagens oficiais Langfuse major 3 fixadas por digest, conforme o compose self-hosted atual. A documentação v4 não é uma tag de imagem. Usar ClickHouse, Postgres, Redis e MinIO exclusivos do Langfuse, todos com versão imutável ou digest. Reutilizar a rede interna do projeto, volumes nomeados e MinIO somente por credencial dedicada. Não publicar portas por padrão. Todos os serviços terão healthcheck, `no-new-privileges` e versões fixas.
+Usar Qdrant `v1.19.0` e as imagens oficiais Langfuse major 3 fixadas por digest, conforme o compose self-hosted atual. A documentação v4 não é uma tag de imagem. Usar ClickHouse, Postgres, Redis e MinIO exclusivos do Langfuse, todos com versão imutável ou digest. Reutilizar a rede interna do projeto, volumes nomeados e MinIO somente por credencial dedicada. Não publicar portas por padrão. Todos os sete serviços terão healthcheck, `no-new-privileges`, `mem_limit`, `cpus`, `pids_limit` e versões fixas. Os limites iniciais devem ser parametrizáveis e dimensionados novamente em produção conforme a carga observada.
 
 As variáveis mínimas serão `QDRANT_API_KEY`, `LANGFUSE_NEXTAUTH_SECRET`, `LANGFUSE_SALT`, `LANGFUSE_ENCRYPTION_KEY`, `LANGFUSE_DB_PASSWORD`, `LANGFUSE_CLICKHOUSE_PASSWORD`, `LANGFUSE_REDIS_PASSWORD`, `LANGFUSE_MINIO_ACCESS_KEY`, `LANGFUSE_MINIO_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY` e `LANGFUSE_SECRET_KEY`.
+
+O overlay `docker-compose.ai.yml` é opt-in e mantém `${VAR:?}` tanto nos serviços quanto no bloco da aplicação. O compose base deve continuar validando sem segredos de IA. O compose combinado representa a ativação da infraestrutura e deve falhar no parsing enquanto qualquer segredo obrigatório estiver ausente. O bloco `app` recebe os endpoints internos, incluindo `LANGFUSE_WORKER_BASE_URL=http://langfuse-worker:3030`, mas não depende de Qdrant ou Langfuse via `depends_on`. Com a flag desligada, a aplicação inicia sem depender da saúde da IA. Com a flag ligada, o readiness fecha enquanto qualquer dependência estiver indisponível.
 
 - [ ] **Step 4: Implementar health condicional**
 
 ```ts
 export async function checkAiDependenciesReady(env: NodeJS.ProcessEnv = process.env) {
-  if (env.FEATURE_AI_COPILOT !== "true") return
-  const headers = { "api-key": env.QDRANT_API_KEY! }
-  const [qdrant, langfuse] = await Promise.all([
-    fetch(`${env.QDRANT_URL}/healthz`, { headers, signal: AbortSignal.timeout(3000) }),
-    fetch(`${env.LANGFUSE_BASE_URL}/api/public/health`, { signal: AbortSignal.timeout(3000) }),
+  if (env.FEATURE_AI_COPILOT?.trim() !== "true") return
+  const config = readAiConfig(env)
+  const [qdrant, langfuse, worker] = await Promise.all([
+    fetch(`${env.QDRANT_URL}/healthz`, { headers: { "api-key": env.QDRANT_API_KEY! }, signal: AbortSignal.timeout(3000) }),
+    fetch(`${env.LANGFUSE_BASE_URL}/api/public/health?failIfDatabaseUnavailable=true`, { signal: AbortSignal.timeout(3000) }),
+    fetch(`${config.workerBaseUrl}/api/health`, { signal: AbortSignal.timeout(3000) }),
   ])
-  if (!qdrant.ok || !langfuse.ok) throw new Error("AI dependencies unavailable")
+  if (!qdrant.ok || !langfuse.ok || !worker.ok) throw new Error("AI dependencies unavailable")
 }
 ```
 
@@ -399,9 +402,13 @@ Chamar essa função no readiness somente quando a flag estiver habilitada.
 
 - [ ] **Step 5: Validar compose e testes**
 
-Run: `node --test tests/ai-infrastructure.test.ts && docker compose -f docker-compose.yml -f docker-compose.ai.yml config --quiet`
+Run: `node --test tests/ai-infrastructure.test.ts`
 
-Expected: PASS e código 0.
+Run sem segredos de IA: `FEATURE_AI_COPILOT=false docker compose --env-file .env.docker.example -f docker-compose.yml config --quiet`
+
+Run com todos os segredos de teste injetados: `docker compose --env-file .env.docker.example -f docker-compose.yml -f docker-compose.ai.yml config --quiet`
+
+Expected: testes PASS e os dois comandos de config com código 0. Confirmar também que o segundo comando falha no parsing quando os segredos obrigatórios do overlay são removidos.
 
 - [ ] **Step 6: Commit**
 

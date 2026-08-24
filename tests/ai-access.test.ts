@@ -11,6 +11,7 @@ const AI_ENV = {
   QDRANT_URL: "http://qdrant.test",
   QDRANT_API_KEY: "test-qdrant-key",
   LANGFUSE_BASE_URL: "http://langfuse.test",
+  LANGFUSE_WORKER_BASE_URL: "http://langfuse-worker.test",
   LANGFUSE_PUBLIC_KEY: "test-langfuse-public-key",
   LANGFUSE_SECRET_KEY: "test-langfuse-secret-key",
   AI_DAILY_REQUEST_LIMIT: "20",

@@ -15,21 +15,26 @@ export async function checkAiDependenciesReady(
   if (env.FEATURE_AI_COPILOT?.trim() !== "true") return
 
   try {
-    readAiConfig(env)
+    const config = readAiConfig(env)
 
     const qdrantUrl = withoutTrailingSlash(env.QDRANT_URL!.trim())
     const langfuseUrl = withoutTrailingSlash(env.LANGFUSE_BASE_URL!.trim())
-    const [qdrant, langfuse] = await Promise.all([
+    const [qdrant, langfuse, langfuseWorker] = await Promise.all([
       fetcher(`${qdrantUrl}/healthz`, {
         headers: { "api-key": env.QDRANT_API_KEY!.trim() },
         signal: AbortSignal.timeout(3_000),
       }),
-      fetcher(`${langfuseUrl}/api/public/health`, {
+      fetcher(`${langfuseUrl}/api/public/health?failIfDatabaseUnavailable=true`, {
+        signal: AbortSignal.timeout(3_000),
+      }),
+      fetcher(`${config.workerBaseUrl}/api/health`, {
         signal: AbortSignal.timeout(3_000),
       }),
     ])
 
-    if (!qdrant.ok || !langfuse.ok) throw new Error(AI_UNAVAILABLE_MESSAGE)
+    if (!qdrant.ok || !langfuse.ok || !langfuseWorker.ok) {
+      throw new Error(AI_UNAVAILABLE_MESSAGE)
+    }
   } catch {
     throw new Error(AI_UNAVAILABLE_MESSAGE)
   }

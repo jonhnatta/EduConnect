@@ -97,6 +97,7 @@ test("production config rejects remote HTTP and mismatched origins", () => {
     "LANGFUSE_BASE_URL is required",
     "LANGFUSE_PUBLIC_KEY is required",
     "LANGFUSE_SECRET_KEY is required",
+    "LANGFUSE_WORKER_BASE_URL is required",
   ])
   assert.deepEqual(productionConfigErrors({
     ...common,
@@ -108,6 +109,7 @@ test("production config rejects remote HTTP and mismatched origins", () => {
     QDRANT_URL: "not a url",
     QDRANT_API_KEY: "qdrant-test-key",
     LANGFUSE_BASE_URL: "http://langfuse:3000",
+    LANGFUSE_WORKER_BASE_URL: "http://langfuse-worker:3030",
     LANGFUSE_PUBLIC_KEY: "langfuse-public-test-key",
     LANGFUSE_SECRET_KEY: "langfuse-secret-test-key",
     AI_DAILY_REQUEST_LIMIT: "0",
