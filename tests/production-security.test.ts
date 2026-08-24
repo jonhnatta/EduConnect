@@ -98,6 +98,23 @@ test("production config rejects remote HTTP and mismatched origins", () => {
     "LANGFUSE_PUBLIC_KEY is required",
     "LANGFUSE_SECRET_KEY is required",
   ])
+  assert.deepEqual(productionConfigErrors({
+    ...common,
+    AUTH_URL: "http://localhost:3000",
+    NEXT_PUBLIC_APP_URL: "http://localhost:3000",
+    ALLOW_INSECURE_LOCAL_ORIGIN: "true",
+    FEATURE_AI_COPILOT: "true",
+    OPENAI_API_KEY: "openai-test-key",
+    QDRANT_URL: "not a url",
+    QDRANT_API_KEY: "qdrant-test-key",
+    LANGFUSE_BASE_URL: "http://langfuse:3000",
+    LANGFUSE_PUBLIC_KEY: "langfuse-public-test-key",
+    LANGFUSE_SECRET_KEY: "langfuse-secret-test-key",
+    AI_DAILY_REQUEST_LIMIT: "0",
+  }), [
+    "QDRANT_URL must be an absolute HTTP or HTTPS URL",
+    "AI_DAILY_REQUEST_LIMIT must be a positive integer",
+  ])
 })
 
 test("blob serving paths are validated as a complete strict pathname", () => {
