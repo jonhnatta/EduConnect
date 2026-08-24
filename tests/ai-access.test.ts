@@ -3,6 +3,8 @@ import test from "node:test"
 import type { PoolClient, QueryResultRow } from "pg"
 import { decideAiAccess, reserveAiUsage } from "../lib/ai/access.ts"
 
+const VALID_TEACHER_ID = "123e4567-e89b-12d3-a456-426614174000"
+
 const allowedAccess = {
   approved: true,
   betaEnabled: true,
@@ -126,7 +128,7 @@ function successfulReservationResults(beta: BetaFixture = activeBeta): FakeResul
 test("usage reservation executes the transaction in snapshot-safe order", async () => {
   const client = new FakeClient(successfulReservationResults())
 
-  assert.deepEqual(await reserveAiUsage(asPoolClient(client), "teacher-1", 250), { ok: true })
+  assert.deepEqual(await reserveAiUsage(asPoolClient(client), VALID_TEACHER_ID, 250), { ok: true })
 
   assert.deepEqual(client.calls.map(({ sql }) => sql.trim().split(/\s+/)[0].toUpperCase()), [
     "BEGIN",
@@ -147,15 +149,15 @@ test("usage reservation executes the transaction in snapshot-safe order", async 
   assert.match(client.calls[4].sql, /on conflict \(teacher_id, usage_date\) do update/i)
   assert.match(client.calls[4].sql, /request_count < \$3/i)
   assert.match(client.calls[4].sql, /\$4::bigint \+ \$2::bigint <= \$5::bigint/i)
-  assert.deepEqual(client.calls[1].values, ["teacher-1"])
-  assert.deepEqual(client.calls[4].values, ["teacher-1", 250, 20, "100", "1000000"])
-  assert.equal(client.calls.some(({ sql }) => sql.includes("teacher-1")), false)
+  assert.deepEqual(client.calls[1].values, [VALID_TEACHER_ID])
+  assert.deepEqual(client.calls[4].values, [VALID_TEACHER_ID, 250, 20, "100", "1000000"])
+  assert.equal(client.calls.some(({ sql }) => sql.includes(VALID_TEACHER_ID)), false)
 })
 
 test("usage reservation commits beta_disabled when enrollment is absent", async () => {
   const client = new FakeClient([{}, {}, { rows: [] }, {}])
 
-  assert.deepEqual(await reserveAiUsage(asPoolClient(client), "teacher-1", 250), {
+  assert.deepEqual(await reserveAiUsage(asPoolClient(client), VALID_TEACHER_ID, 250), {
     ok: false,
     code: "beta_disabled",
   })
@@ -176,7 +178,7 @@ test("usage reservation returns monthly quota before writing", async () => {
     {},
   ])
 
-  assert.deepEqual(await reserveAiUsage(asPoolClient(client), "teacher-1", 101), {
+  assert.deepEqual(await reserveAiUsage(asPoolClient(client), VALID_TEACHER_ID, 101), {
     ok: false,
     code: "monthly_quota_exceeded",
   })
@@ -194,7 +196,7 @@ test("usage reservation reports daily quota when the guarded upsert writes no ro
     {},
   ])
 
-  assert.deepEqual(await reserveAiUsage(asPoolClient(client), "teacher-1", 250), {
+  assert.deepEqual(await reserveAiUsage(asPoolClient(client), VALID_TEACHER_ID, 250), {
     ok: false,
     code: "daily_quota_exceeded",
   })
@@ -208,12 +210,12 @@ test("usage reservation applies positive beta quota overrides", async () => {
     monthly_token_limit: "2000",
   }))
 
-  assert.deepEqual(await reserveAiUsage(asPoolClient(client), "teacher-1", 250), { ok: true })
-  assert.deepEqual(client.calls[4].values, ["teacher-1", 250, 7, "100", "2000"])
+  assert.deepEqual(await reserveAiUsage(asPoolClient(client), VALID_TEACHER_ID, 250), { ok: true })
+  assert.deepEqual(client.calls[4].values, [VALID_TEACHER_ID, 250, 7, "100", "2000"])
 })
 
 test("usage reservation validates arguments before BEGIN", async () => {
-  for (const [teacherId, tokens] of [["", 1], ["   ", 1], ["teacher-1", 0], ["teacher-1", 1.5]] as const) {
+  for (const [teacherId, tokens] of [["", 1], ["   ", 1], [VALID_TEACHER_ID, 0], [VALID_TEACHER_ID, 1.5]] as const) {
     const client = new FakeClient([])
 
     await assert.rejects(() => reserveAiUsage(asPoolClient(client), teacherId, tokens), TypeError)
@@ -221,10 +223,20 @@ test("usage reservation validates arguments before BEGIN", async () => {
   }
 })
 
+test("usage reservation rejects a non-UUID teacher id before BEGIN", async () => {
+  const client = new FakeClient([])
+
+  await assert.rejects(
+    () => reserveAiUsage(asPoolClient(client), "teacher-1", 250),
+    TypeError
+  )
+  assert.equal(client.calls.length, 0)
+})
+
 test("usage reservation rolls back and preserves database errors", async () => {
   const failure = new Error("database unavailable")
   const client = new FakeClient([{}, {}, { error: failure }, {}])
 
-  await assert.rejects(() => reserveAiUsage(asPoolClient(client), "teacher-1", 250), failure)
+  await assert.rejects(() => reserveAiUsage(asPoolClient(client), VALID_TEACHER_ID, 250), failure)
   assert.equal(client.calls.at(-1)?.sql, "ROLLBACK")
 })

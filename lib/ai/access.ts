@@ -1,6 +1,8 @@
 import type { PoolClient, QueryResultRow } from "pg"
 import { readAiConfig } from "./config.ts"
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export type AiAccessState = {
   approved: boolean
   betaEnabled: boolean
@@ -105,7 +107,9 @@ export async function reserveAiUsage(
   estimatedTokens: number
 ): Promise<AiUsageReservation> {
   const normalizedTeacherId = teacherId.trim()
-  if (!normalizedTeacherId) throw new TypeError("teacherId must not be empty")
+  if (!UUID_PATTERN.test(normalizedTeacherId)) {
+    throw new TypeError("teacherId must be a canonical UUID")
+  }
   if (!isPositiveInteger(estimatedTokens)) {
     throw new TypeError("estimatedTokens must be a positive safe integer")
   }
