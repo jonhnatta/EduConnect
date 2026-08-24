@@ -1,14 +1,16 @@
-import { createHash, randomUUID } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import { Worker } from "bullmq"
 import OpenAI from "openai"
 import pg from "pg"
 import { QdrantClient } from "@qdrant/js-client-rest"
 import {
-  chunkDocument,
+  chunkNormalizedDocument,
   collectQdrantPages,
   documentJobMatchesCurrent,
+  hashContent,
   normalizeDocumentText,
   parseAiQueuePayload,
+  partitionAuthorizedDocuments,
   planReconciliation,
 } from "./ai-ingestion-core.mjs"
 import { log, logError, redisConnection } from "./runtime.mjs"
@@ -193,8 +195,8 @@ async function ingest(job) {
     const source = await loadAuthorizedSource(document, client)
     const text = normalizeDocumentText(`${source.title}\n${source.body ?? ""}`)
     if (!text) throw new Error("empty_ai_source")
-    const chunks = chunkDocument(text, { maxChars: 1_500, overlapChars: 200 })
-    if (!chunks.length || document.content_hash !== createHash("sha256").update(text).digest("hex")) {
+    const chunks = chunkNormalizedDocument(text, { maxChars: 1_500, overlapChars: 200 })
+    if (!chunks.length || document.content_hash !== hashContent(text)) {
       throw new Error("source_content_hash_mismatch")
     }
     await client.query(
@@ -378,6 +380,16 @@ async function deleteDocument(job) {
   }
 }
 
+async function markRevokedDocument(executor, document) {
+  await executor.query(
+    `update public.ai_documents
+        set status = 'deleted', indexed_at = null,
+            deleted_at = timezone('utc'::text, now()), error_code = null
+      where id = $1 and teacher_id = $2 and is_current and status = 'indexed'`,
+    [document.id, document.teacher_id]
+  )
+}
+
 async function loadCurrentDocuments(teacherId) {
   const documents = []
   let cursor = null
@@ -392,8 +404,12 @@ async function loadCurrentDocuments(teacherId) {
         order by d.id limit 200`,
       [teacherId, cursor]
     )
-    for (const document of page.rows) {
-      await loadAuthorizedSource(document)
+    const partition = await partitionAuthorizedDocuments(
+      page.rows,
+      (document) => loadAuthorizedSource(document)
+    )
+    for (const document of partition.revoked) await markRevokedDocument(pool, document)
+    for (const document of partition.authorized) {
       const chunks = await pool.query(
         `select id, chunk_index, content_hash from public.ai_document_chunks
           where document_id = $1 and teacher_id = $2 order by chunk_index`,
@@ -430,7 +446,13 @@ async function currentDocumentBySource(client, teacherId, sourceType, sourceId) 
   )
   if (!result.rowCount) return null
   const document = result.rows[0]
-  await loadAuthorizedSource(document, client)
+  try {
+    await loadAuthorizedSource(document, client)
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "unauthorized_ai_source") throw error
+    await markRevokedDocument(client, document)
+    return null
+  }
   const chunks = await client.query(
     `select id, chunk_index, content_hash from public.ai_document_chunks
       where document_id = $1 and teacher_id = $2 order by chunk_index for update`,

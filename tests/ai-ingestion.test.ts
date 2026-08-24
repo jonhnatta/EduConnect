@@ -5,9 +5,13 @@ import { AI_QUEUE_NAMES, parseAiQueuePayload } from "../lib/ai/ingestion/events.
 import { chunkDocument } from "../lib/ai/ingestion/chunk.ts"
 import {
   chunkDocument as chunkDocumentCore,
+  chunkNormalizedDocument,
   collectQdrantPages,
   documentJobMatchesCurrent,
+  hashContent,
+  normalizeDocumentText,
   parseAiQueuePayload as parseAiQueuePayloadCore,
+  partitionAuthorizedDocuments,
   planReconciliation,
 } from "../workers/ai-ingestion-core.mjs"
 import { QUEUE_NAMES } from "../lib/queue/contracts.ts"
@@ -66,6 +70,15 @@ test("API and worker share one sanitizing chunk implementation", () => {
   const chunks = chunkDocument(dangerous, { maxChars: 80, overlapChars: 10 })
   assert.ok(chunks.length > 0)
   assert.equal(chunks.some((chunk) => /roubar|onload|onerror|script|svg|img/i.test(chunk.content)), false)
+})
+
+test("canonical text is normalized once and hashes the same representation used by chunks", () => {
+  const canonical = normalizeDocumentText("<p>&lt;equacao&gt; valor &amp; teste</p>")
+  assert.equal(canonical, "<equacao> valor & teste")
+  const chunks = chunkNormalizedDocument(canonical, { maxChars: 100, overlapChars: 10 })
+  assert.equal(chunks.length, 1)
+  assert.equal(chunks[0].content, canonical)
+  assert.equal(chunks[0].contentHash, hashContent(canonical))
 })
 
 test("AI queue contracts parse the strict dispatcher envelope", () => {
@@ -173,7 +186,8 @@ test("dedicated AI worker is tenant-safe and only consumes implemented queues", 
   assert.match(worker, /tenant_id["']?,\s*match:\s*\{\s*value:\s*configuredTenantId/i)
   assert.match(worker, /content_hash/i)
   assert.match(worker, /throw new Error\("unsupported_ai_source_type"\)/)
-  assert.match(worker, /chunkDocument\(text, \{ maxChars: 1_500, overlapChars: 200 \}\)/)
+  assert.match(worker, /chunkNormalizedDocument\(text, \{ maxChars: 1_500, overlapChars: 200 \}\)/)
+  assert.doesNotMatch(worker, /chunkDocument\(text,/)
   assert.doesNotMatch(worker, /function (?:preferredChunkEnd|chunksFor|normalizedText|payloadFor)/)
   assert.match(worker, /set status = 'extracting', indexed_at = null,\s*deleted_at = null, error_code = null/i)
   assert.match(worker, /id:\s*chunk\.id/)
@@ -199,6 +213,9 @@ test("dedicated AI worker is tenant-safe and only consumes implemented queues", 
   assert.doesNotMatch(reconcileBody, /key:\s*["']active["']/)
   assert.match(worker, /data\.tenantId !== configuredTenantId/)
   assert.match(worker, /has_id:\s*\[point\.id\]/)
+  assert.match(worker, /partitionAuthorizedDocuments\(/)
+  assert.match(worker, /for \(const document of partition\.revoked\) await markRevokedDocument/)
+  assert.match(worker, /set status = 'deleted', indexed_at = null,\s*deleted_at = timezone/)
 })
 
 test("reconciliation paginates and classifies missing, extra and orphan points", async () => {
@@ -259,6 +276,37 @@ test("reconciliation paginates and classifies missing, extra and orphan points",
     }), { tenantId: "educonnect", teacherId }),
     /reconcile_scope_violation/
   )
+})
+
+test("reconciliation isolates a revoked source and continues with valid documents", async () => {
+  const revoked = { id: "revoked", sourceId: "source-revoked" }
+  const valid = { id: "valid", sourceId: "source-valid" }
+  const visited: string[] = []
+  const partition = await partitionAuthorizedDocuments([revoked, valid], async (document: typeof valid) => {
+    visited.push(document.id)
+    if (document.id === revoked.id) throw new Error("unauthorized_ai_source")
+  })
+  assert.deepEqual(visited, ["revoked", "valid"])
+  assert.deepEqual(partition.authorized, [valid])
+  assert.deepEqual(partition.revoked, [revoked])
+
+  const scope = { tenantId: "educonnect", teacherId }
+  const validDocument = {
+    id: documentId, teacherId, sourceType: "content_item", sourceId,
+    version: 2, embeddingModel: "text-embedding-3-small", embeddingDimensions: 2,
+    chunks: [{ id: "valid-point", index: 0, contentHash: "a".repeat(64) }],
+  }
+  const payload = {
+    tenant_id: "educonnect", teacher_id: teacherId, source_type: "content_item",
+    version: 2, embedding_model: "text-embedding-3-small", embedding_dimensions: 2,
+    chunk_index: 0, content_hash: "a".repeat(64), active: true,
+  }
+  const plan = planReconciliation([validDocument], [
+    { id: "revoked-point", payload: { ...payload, document_id: classroomId, source_id: revoked.sourceId } },
+    { id: "valid-point", payload: { ...payload, document_id: documentId, source_id: sourceId } },
+  ], scope)
+  assert.deepEqual(plan.extraPointIds, ["revoked-point"])
+  assert.deepEqual(plan.missingDocumentIds, [])
 })
 
 test("an older document job becomes a no-op after a newer version is current", () => {

@@ -76,6 +76,9 @@ export function normalizeDocumentText(input) {
     .replace(/ *\n+ */g, "\n")
     .trim()
 }
+export function hashContent(content) {
+  return createHash("sha256").update(content).digest("hex")
+}
 function preferredEnd(text, start, hardEnd, overlapChars) {
   if (hardEnd >= text.length) return text.length
   const window = text.slice(start, hardEnd)
@@ -91,11 +94,14 @@ function preferredEnd(text, start, hardEnd, overlapChars) {
   return whitespace >= minimumLength ? start + whitespace : hardEnd
 }
 export function chunkDocument(input, options) {
+  if (typeof input !== "string") throw new Error("invalid_chunk_options")
+  return chunkNormalizedDocument(normalizeDocumentText(input), options)
+}
+export function chunkNormalizedDocument(text, options) {
   const { maxChars, overlapChars } = options
-  if (typeof input !== "string" || !Number.isInteger(maxChars) || !Number.isInteger(overlapChars) || maxChars <= 0 || overlapChars < 0 || overlapChars >= maxChars) {
+  if (typeof text !== "string" || !Number.isInteger(maxChars) || !Number.isInteger(overlapChars) || maxChars <= 0 || overlapChars < 0 || overlapChars >= maxChars) {
     throw new Error("invalid_chunk_options")
   }
-  const text = normalizeDocumentText(input)
   if (!text) return []
   const chunks = []
   let start = 0
@@ -103,12 +109,27 @@ export function chunkDocument(input, options) {
     const hardEnd = Math.min(text.length, start + maxChars)
     const end = preferredEnd(text, start, hardEnd, overlapChars)
     const content = text.slice(start, end).trim()
-    if (content) chunks.push({ index: chunks.length, content, contentHash: createHash("sha256").update(content).digest("hex") })
+    if (content) chunks.push({ index: chunks.length, content, contentHash: hashContent(content) })
     if (end >= text.length) break
     const nextStart = end - overlapChars
     start = nextStart > start ? nextStart : start + 1
   }
   return chunks
+}
+
+export async function partitionAuthorizedDocuments(documents, authorize) {
+  const authorized = []
+  const revoked = []
+  for (const document of documents) {
+    try {
+      await authorize(document)
+      authorized.push(document)
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "unauthorized_ai_source") throw error
+      revoked.push(document)
+    }
+  }
+  return { authorized, revoked }
 }
 
 function requireScopedPoint(point, scope) {
