@@ -83,9 +83,10 @@ export interface VectorStore {
       payload: Record<string, unknown>
     }[]
   ): Promise<void>
-  deleteBySource(sourceId: string, teacherId: string): Promise<void>
+  deleteBySource(sourceId: string, tenantId: string, teacherId: string): Promise<void>
   search(input: {
     vector: readonly number[]
+    tenantId: string
     teacherId: string
     classroomId?: string
     limit: number

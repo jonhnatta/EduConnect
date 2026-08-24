@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto"
 import DOMPurify from "isomorphic-dompurify"
 import { z } from "zod"
+import {
+  REQUIRED_VECTOR_SCHEMA_VERSION,
+  SPARSE_VECTOR_SCHEMA,
+  validateHybridCollection,
+} from "./ai-vector-core.mjs"
 
 export const AI_QUEUE_NAMES = [
   "ai.generate", "ai.ingest", "ai.embed", "ai.web-research",
@@ -49,17 +54,16 @@ export function documentJobMatchesCurrent(data, document) {
 }
 
 export function validateCollectionDimensions(collection, expectedDimensions) {
-  const vectors = collection?.config?.params?.vectors
-  if (!vectors || typeof vectors !== "object" || Array.isArray(vectors) ||
-      vectors.size !== expectedDimensions || String(vectors.distance).toLowerCase() !== "cosine") {
-    throw new Error("qdrant_collection_incompatible")
-  }
+  validateHybridCollection(collection, expectedDimensions)
 }
 
 export function validateVectorMetadata(actual, expected) {
   if (!actual || actual.embedding_model !== expected.embedding_model ||
       actual.schema_version !== expected.schema_version || actual.dimensions !== expected.dimensions ||
-      String(actual.distance).toLowerCase() !== String(expected.distance).toLowerCase()) {
+      String(actual.distance).toLowerCase() !== String(expected.distance).toLowerCase() ||
+      actual.sparse_schema !== expected.sparse_schema ||
+      expected.schema_version !== REQUIRED_VECTOR_SCHEMA_VERSION ||
+      expected.sparse_schema !== SPARSE_VECTOR_SCHEMA) {
     throw new Error("qdrant_collection_incompatible")
   }
 }
@@ -216,6 +220,8 @@ function pointMatchesExpected(point, document, chunk, scope) {
     payload.source_type === document.sourceType && payload.source_id === document.sourceId &&
     payload.version === document.version && payload.embedding_model === document.embeddingModel &&
     payload.embedding_dimensions === document.embeddingDimensions && payload.chunk_index === chunk.index &&
+    payload.vector_schema_version === REQUIRED_VECTOR_SCHEMA_VERSION &&
+    payload.sparse_schema === SPARSE_VECTOR_SCHEMA &&
     payload.content_hash === chunk.contentHash && payload.active === true
 }
 export function planReconciliation(documents, points, scope) {

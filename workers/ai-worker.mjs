@@ -19,6 +19,13 @@ import {
   validateVectorMetadata,
   withTimedBootstrapLock,
 } from "./ai-ingestion-core.mjs"
+import {
+  DENSE_VECTOR_NAME,
+  REQUIRED_VECTOR_SCHEMA_VERSION,
+  SPARSE_VECTOR_NAME,
+  SPARSE_VECTOR_SCHEMA,
+  sparseVectorForText,
+} from "./ai-vector-core.mjs"
 import { log, logError, redisConnection } from "./runtime.mjs"
 
 const databaseUrl = process.env.DATABASE_URL
@@ -27,13 +34,13 @@ const namespace = process.env.REDIS_NAMESPACE
 const configuredTenantId = process.env.AI_TENANT_ID || "educonnect"
 const configuredEmbeddingModel = process.env.OPENAI_EMBEDDING_MODEL?.trim() || "text-embedding-3-small"
 const configuredEmbeddingDimensions = Number(process.env.AI_EMBEDDING_DIMENSIONS || "1536")
-const configuredVectorSchemaVersion = Number(process.env.AI_VECTOR_SCHEMA_VERSION || "1")
+const configuredVectorSchemaVersion = Number(process.env.AI_VECTOR_SCHEMA_VERSION || String(REQUIRED_VECTOR_SCHEMA_VERSION))
 const VECTOR_METADATA_POINT_ID = "00000000-0000-4000-8000-000000000001"
 if (!databaseUrl) throw new Error("Missing env var: DATABASE_URL")
 if (!redisUrl) throw new Error("Missing env var: REDIS_QUEUE_URL")
 if (!namespace) throw new Error("Missing env var: REDIS_NAMESPACE")
 if (!Number.isInteger(configuredEmbeddingDimensions) || configuredEmbeddingDimensions <= 0) throw new Error("invalid_embedding_dimensions")
-if (!Number.isInteger(configuredVectorSchemaVersion) || configuredVectorSchemaVersion <= 0) throw new Error("invalid_vector_schema_version")
+if (configuredVectorSchemaVersion !== REQUIRED_VECTOR_SCHEMA_VERSION) throw new Error("invalid_vector_schema_version")
 
 const pool = new pg.Pool({
   connectionString: databaseUrl,
@@ -342,7 +349,7 @@ function qdrantProvider() {
   if (!qdrantApiKey) throw new Error("missing_qdrant_api_key")
   return {
     qdrant: new QdrantClient({ url: qdrantUrl, apiKey: qdrantApiKey, timeout: 30_000, checkCompatibility: false }),
-    collection: process.env.QDRANT_COLLECTION || "educonnect_knowledge",
+    collection: process.env.QDRANT_COLLECTION || "educonnect_knowledge_v2",
   }
 }
 
@@ -367,7 +374,8 @@ async function bootstrapQdrantUnderLock(qdrant, collection) {
         if (!(error && typeof error === "object" && error.status === 404)) throw error
         try {
           await qdrant.createCollection(collection, {
-            vectors: { size: configuredEmbeddingDimensions, distance: "Cosine" },
+            vectors: { [DENSE_VECTOR_NAME]: { size: configuredEmbeddingDimensions, distance: "Cosine" } },
+            sparse_vectors: { [SPARSE_VECTOR_NAME]: {} },
           })
         } catch (createError) {
           if (!qdrantConflict(createError)) throw createError
@@ -379,6 +387,7 @@ async function bootstrapQdrantUnderLock(qdrant, collection) {
         schema_version: configuredVectorSchemaVersion,
         dimensions: configuredEmbeddingDimensions,
         distance: "Cosine",
+        sparse_schema: SPARSE_VECTOR_SCHEMA,
       }
       let metadataPoints = await qdrant.retrieve(collection, { ids: [VECTOR_METADATA_POINT_ID], with_payload: true, with_vector: false })
       const exactCount = await qdrant.count(collection, { exact: true })
@@ -389,7 +398,10 @@ async function bootstrapQdrantUnderLock(qdrant, collection) {
         sentinelVector[0] = 1
         await qdrant.upsert(collection, { wait: true, ordering: "strong", points: [{
           id: VECTOR_METADATA_POINT_ID,
-          vector: sentinelVector,
+          vector: {
+            [DENSE_VECTOR_NAME]: sentinelVector,
+            [SPARSE_VECTOR_NAME]: sparseVectorForText("educonnect vector metadata"),
+          },
           payload: { tenant_id: "__system__", active: false, kind: "vector_metadata", ...expectedMetadata },
         }] })
         metadataPoints = await qdrant.retrieve(collection, { ids: [VECTOR_METADATA_POINT_ID], with_payload: true, with_vector: false })
@@ -561,7 +573,10 @@ async function embed(job) {
       ordering: "strong",
       points: chunksNow.rows.map((chunk, index) => ({
         id: chunk.id,
-        vector: ordered[index].embedding,
+        vector: {
+          [DENSE_VECTOR_NAME]: ordered[index].embedding,
+          [SPARSE_VECTOR_NAME]: sparseVectorForText(chunk.content),
+        },
         payload: {
           tenant_id: configuredTenantId,
           teacher_id: document.teacher_id,
@@ -577,6 +592,8 @@ async function embed(job) {
           version: document.version,
           embedding_model: document.embedding_model,
           embedding_dimensions: dimensions,
+          vector_schema_version: configuredVectorSchemaVersion,
+          sparse_schema: SPARSE_VECTOR_SCHEMA,
           publication_attempt_id: publicationAttemptId,
           indexed_at: indexedAt,
           active: true,

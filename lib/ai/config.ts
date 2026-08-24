@@ -72,6 +72,10 @@ export function aiConfigErrors(env: Env): string[] {
       errors.push(`${name} must be a positive integer`)
     }
   }
+  const vectorSchemaVersion = normalized(env, "AI_VECTOR_SCHEMA_VERSION")
+  if (vectorSchemaVersion && vectorSchemaVersion !== "2") {
+    errors.push("AI_VECTOR_SCHEMA_VERSION must be 2")
+  }
 
   return errors
 }
@@ -88,6 +92,7 @@ export function readAiConfig(env: Env = process.env) {
     model: normalized(env, "OPENAI_COPILOT_MODEL") || "gpt-5-mini",
     embeddingModel: normalized(env, "OPENAI_EMBEDDING_MODEL") || "text-embedding-3-small",
     embeddingDimensions: positiveIntegerOrDefault(normalized(env, "AI_EMBEDDING_DIMENSIONS"), 1536),
+    vectorSchemaVersion: 2,
     workerBaseUrl: withoutTrailingSlash(normalized(env, "LANGFUSE_WORKER_BASE_URL")),
     dailyRequests: positiveIntegerOrDefault(normalized(env, "AI_DAILY_REQUEST_LIMIT"), 20),
     monthlyTokens: positiveIntegerOrDefault(normalized(env, "AI_MONTHLY_TOKEN_LIMIT"), 1_000_000),

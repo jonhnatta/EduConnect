@@ -35,6 +35,16 @@ test("AI configuration applies request and token limits by default", () => {
 
   assert.equal(config.dailyRequests, 20)
   assert.equal(config.monthlyTokens, 1_000_000)
+  assert.equal(config.vectorSchemaVersion, 2)
+})
+
+test("hybrid retrieval refuses a legacy or unknown vector schema", () => {
+  assert.deepEqual(aiConfigErrors(enabledAiEnv({ AI_VECTOR_SCHEMA_VERSION: "1" })), [
+    "AI_VECTOR_SCHEMA_VERSION must be 2",
+  ])
+  assert.deepEqual(aiConfigErrors(enabledAiEnv({ AI_VECTOR_SCHEMA_VERSION: "3" })), [
+    "AI_VECTOR_SCHEMA_VERSION must be 2",
+  ])
 })
 
 test("AI limits must be positive finite integers when the copilot is enabled", () => {

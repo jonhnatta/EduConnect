@@ -20,6 +20,12 @@ import {
   validateVectorMetadata,
   withTimedBootstrapLock,
 } from "../workers/ai-ingestion-core.mjs"
+import {
+  REQUIRED_VECTOR_SCHEMA_VERSION,
+  SPARSE_VECTOR_SCHEMA,
+  sparseVectorForText,
+  validateHybridCollection,
+} from "../workers/ai-vector-core.mjs"
 import { QUEUE_NAMES } from "../lib/queue/contracts.ts"
 
 const teacherId = "b1f5cfd8-9bba-4ff8-8775-78901d802de8"
@@ -87,17 +93,25 @@ test("canonical text is normalized once and hashes the same representation used 
   assert.equal(chunks[0].contentHash, hashContent(canonical))
 })
 
-test("Qdrant collection bootstrap validates configured vector dimensions", () => {
-  assert.doesNotThrow(() => validateCollectionDimensions({ config: { params: { vectors: { size: 1536, distance: "Cosine" } } } }, 1536))
-  assert.throws(() => validateCollectionDimensions({ config: { params: { vectors: { size: 3072, distance: "Cosine" } } } }, 1536), /qdrant_collection_incompatible/)
-  assert.throws(() => validateCollectionDimensions({ config: { params: { vectors: { size: 1536, distance: "Dot" } } } }, 1536), /qdrant_collection_incompatible/)
+test("Qdrant collection bootstrap requires named dense and sparse vectors", () => {
+  const compatible = { config: { params: {
+    vectors: { dense: { size: 1536, distance: "Cosine" } },
+    sparse_vectors: { sparse: {} },
+  } } }
+  assert.doesNotThrow(() => validateCollectionDimensions(compatible, 1536))
+  assert.doesNotThrow(() => validateHybridCollection(compatible, 1536))
+  assert.throws(() => validateCollectionDimensions({ config: { params: { vectors: { size: 1536, distance: "Cosine" } } } }, 1536), /qdrant_collection_incompatible/)
+  assert.throws(() => validateHybridCollection({ config: { params: { vectors: { dense: { size: 3072, distance: "Cosine" } }, sparse_vectors: { sparse: {} } } } }, 1536), /qdrant_collection_incompatible/)
+  assert.throws(() => validateHybridCollection({ config: { params: { vectors: { dense: { size: 1536, distance: "Dot" } }, sparse_vectors: { sparse: {} } } } }, 1536), /qdrant_collection_incompatible/)
+  assert.throws(() => validateHybridCollection({ config: { params: { vectors: { dense: { size: 1536, distance: "Cosine" } } } } }, 1536), /qdrant_collection_incompatible/)
 })
 
 test("Qdrant metadata sentinel rejects another model or schema at the same dimension", () => {
-  const expected = { embedding_model: "text-embedding-3-small", schema_version: 1, dimensions: 1536, distance: "Cosine" }
+  const expected = { embedding_model: "text-embedding-3-small", schema_version: REQUIRED_VECTOR_SCHEMA_VERSION, dimensions: 1536, distance: "Cosine", sparse_schema: SPARSE_VECTOR_SCHEMA }
   assert.doesNotThrow(() => validateVectorMetadata(expected, expected))
   assert.throws(() => validateVectorMetadata({ ...expected, embedding_model: "local-e5" }, expected), /qdrant_collection_incompatible/)
-  assert.throws(() => validateVectorMetadata({ ...expected, schema_version: 2 }, expected), /qdrant_collection_incompatible/)
+  assert.throws(() => validateVectorMetadata({ ...expected, schema_version: 1 }, expected), /qdrant_collection_incompatible/)
+  assert.throws(() => validateVectorMetadata({ ...expected, sparse_schema: "other" }, expected), /qdrant_collection_incompatible/)
 })
 
 test("a collection without metadata can only be adopted while proven empty", () => {
@@ -121,7 +135,7 @@ test("collection bootstrap serializes competing models and rejects the second sp
     timeoutMs: 1_000,
     retryMs: 1,
   }, async () => {
-    const expected = { embedding_model: embeddingModel, schema_version: 1, dimensions: 1536, distance: "Cosine" }
+    const expected = { embedding_model: embeddingModel, schema_version: REQUIRED_VECTOR_SCHEMA_VERSION, dimensions: 1536, distance: "Cosine", sparse_schema: SPARSE_VECTOR_SCHEMA }
     if (metadata) validateVectorMetadata(metadata, expected)
     else metadata = expected
   })
@@ -129,6 +143,17 @@ test("collection bootstrap serializes competing models and rejects the second sp
   const results = await Promise.allSettled([run("model-a"), run("model-b")])
   assert.equal(results.filter((result) => result.status === "fulfilled").length, 1)
   assert.equal(results.filter((result) => result.status === "rejected").length, 1)
+})
+
+test("shared sparse vectors are deterministic, finite and sensitive to term frequency", () => {
+  const first = sparseVectorForText("Triângulo ângulo ângulo")
+  const second = sparseVectorForText("triângulo ÂNGULO ângulo")
+  const different = sparseVectorForText("triângulo ângulo")
+  assert.deepEqual(first, second)
+  assert.notDeepEqual(first, different)
+  assert.equal(first.indices.length, first.values.length)
+  assert.ok(first.indices.every((value, index) => Number.isInteger(value) && value >= 0 && (index === 0 || value > first.indices[index - 1])))
+  assert.ok(first.values.every((value) => Number.isFinite(value) && value > 0))
 })
 
 test("a timed-out or lost transaction compensates the exact attempted point ids", async () => {
@@ -307,6 +332,11 @@ test("dedicated AI worker is tenant-safe and only consumes implemented queues", 
   assert.match(worker, /for \(const document of partition\.revoked\) await markRevokedDocument/)
   assert.match(worker, /set status = 'deleted', indexed_at = null,\s*deleted_at = timezone/)
   assert.match(worker, /createCollection\(/)
+  assert.match(worker, /vectors:\s*\{\s*\[DENSE_VECTOR_NAME\]/)
+  assert.match(worker, /sparse_vectors:\s*\{\s*\[SPARSE_VECTOR_NAME\]/)
+  assert.match(embedBody, /\[SPARSE_VECTOR_NAME\]: sparseVectorForText\(chunk\.content\)/)
+  assert.doesNotMatch(worker, /recreateCollection|deleteCollection/)
+  assert.match(worker, /educonnect_knowledge_v2/)
   for (const field of ["tenant_id", "teacher_id", "classroom_id", "source_type", "source_id", "active"]) {
     assert.match(worker, new RegExp(`field_name: ["']${field}["']`))
   }
@@ -364,6 +394,8 @@ test("reconciliation paginates and classifies missing, extra and orphan points",
     version: 2,
     embedding_model: "text-embedding-3-small",
     embedding_dimensions: 2,
+    vector_schema_version: REQUIRED_VECTOR_SCHEMA_VERSION,
+    sparse_schema: SPARSE_VECTOR_SCHEMA,
     chunk_index: 0,
     content_hash: "a".repeat(64),
     active: true,
@@ -434,6 +466,7 @@ test("reconciliation isolates a revoked source and continues with valid document
   const payload = {
     tenant_id: "educonnect", teacher_id: teacherId, source_type: "content_item",
     version: 2, embedding_model: "text-embedding-3-small", embedding_dimensions: 2,
+    vector_schema_version: REQUIRED_VECTOR_SCHEMA_VERSION, sparse_schema: SPARSE_VECTOR_SCHEMA,
     chunk_index: 0, content_hash: "a".repeat(64), active: true,
   }
   const plan = planReconciliation([validDocument], [

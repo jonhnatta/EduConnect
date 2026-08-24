@@ -11,12 +11,14 @@ import {
   sanitizeTelemetryValue,
 } from "../lib/ai/telemetry/langfuse.ts"
 import { QdrantVectorStore } from "../lib/ai/vector/qdrant.ts"
+import { sparseVectorForText } from "../workers/ai-vector-core.mjs"
 import {
   registerLangfuseInstrumentation,
   shouldRegisterLangfuse,
 } from "../instrumentation.ts"
 
 const teacherId = "b1f5cfd8-9bba-4ff8-8775-78901d802de8"
+const tenantId = "educonnect"
 const classroomId = "d62c4498-c421-463a-b2bb-3b8802631ac9"
 const citation = {
   kind: "internal" as const,
@@ -200,11 +202,17 @@ test("Qdrant upsert validates tenant payload before writing", async () => {
   const point = {
     id: "9568440d-e0dd-45ba-a544-355fbe6358e0",
     vector: [0.1, 0.2],
-    payload: { ...citation, teacher_id: teacherId, classroom_id: classroomId, source_id: "source-1", active: true },
+    payload: { ...citation, tenant_id: tenantId, teacher_id: teacherId, classroom_id: classroomId, source_id: "source-1", active: true },
   }
 
   await store.upsert([point])
-  assert.deepEqual(calls[0], ["knowledge", { wait: true, points: [point] }])
+  assert.deepEqual(calls[0], ["knowledge", { wait: true, points: [{
+    ...point,
+    vector: {
+      dense: point.vector,
+      sparse: sparseVectorForText(citation.excerpt),
+    },
+  }] }])
   await assert.rejects(
     store.upsert([{ ...point, payload: { ...point.payload, teacher_id: "not-a-uuid" } }]),
     /invalid_qdrant_point/
@@ -221,14 +229,14 @@ test("Qdrant rejects point ids unsupported by the real service", async () => {
   await assert.rejects(store.upsert([{
     id: "point-1",
     vector: [0.1],
-    payload: { ...citation, teacher_id: teacherId, source_id: "source-1", active: true },
+    payload: { ...citation, tenant_id: tenantId, teacher_id: teacherId, source_id: "source-1", active: true },
   }]), /invalid_qdrant_point/)
   assert.equal(writes, 0)
 })
 
 test("Qdrant search enforces tenant filters and revalidates response scope", async () => {
   const calls: unknown[][] = []
-  const validPayload = { ...citation, teacher_id: teacherId, classroom_id: classroomId, source_id: "source-1", active: true }
+  const validPayload = { ...citation, tenant_id: tenantId, teacher_id: teacherId, classroom_id: classroomId, source_id: "source-1", active: true }
   const client = {
     upsert: async () => ({}),
     delete: async () => ({}),
@@ -239,10 +247,12 @@ test("Qdrant search enforces tenant filters and revalidates response scope", asy
   }
   const store = new QdrantVectorStore(client, "knowledge")
 
-  assert.deepEqual(await store.search({ vector: [0.1], teacherId, classroomId, limit: 8 }), [citation])
+  assert.deepEqual(await store.search({ vector: [0.1], tenantId, teacherId, classroomId, limit: 8 }), [citation])
   assert.deepEqual(calls[0], ["knowledge", {
     query: [0.1],
+    using: "dense",
     filter: { must: [
+      { key: "tenant_id", match: { value: tenantId } },
       { key: "teacher_id", match: { value: teacherId } },
       { key: "active", match: { value: true } },
       { key: "classroom_id", match: { value: classroomId } },
@@ -253,7 +263,7 @@ test("Qdrant search enforces tenant filters and revalidates response scope", asy
 
   client.query = async () => ({ points: [{ id: "bad", payload: { ...validPayload, teacher_id: "47b608d8-0ea1-4826-b088-eb29c2dd948b" } }] })
   await assert.rejects(
-    store.search({ vector: [0.1], teacherId, classroomId, limit: 8 }),
+    store.search({ vector: [0.1], tenantId, teacherId, classroomId, limit: 8 }),
     /retrieval_scope_violation/
   )
 })
@@ -264,10 +274,11 @@ test("Qdrant deletion is tenant safe", async () => {
     { upsert: async () => ({}), query: async () => ({ points: [] }), delete: async (...args: unknown[]) => { calls.push(args); return {} } },
     "knowledge"
   )
-  await store.deleteBySource("source-1", teacherId)
+  await store.deleteBySource("source-1", tenantId, teacherId)
   assert.deepEqual(calls[0], ["knowledge", {
     wait: true,
     filter: { must: [
+      { key: "tenant_id", match: { value: tenantId } },
       { key: "teacher_id", match: { value: teacherId } },
       { key: "source_id", match: { value: "source-1" } },
     ] },

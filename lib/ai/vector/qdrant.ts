@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { citationSchema, type Citation, type VectorStore } from "../contracts.ts"
+import { DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME, sparseVectorForText } from "../../../workers/ai-vector-core.mjs"
 
 type QdrantClient = {
   upsert(collection: string, input: unknown): Promise<unknown>
@@ -9,6 +10,7 @@ type QdrantClient = {
 
 const scopedPayloadSchema = z
   .object({
+    tenant_id: z.string().trim().min(1).max(100),
     teacher_id: z.string().uuid(),
     classroom_id: z.string().uuid().optional(),
     source_id: z.string().trim().min(1),
@@ -40,6 +42,12 @@ function requireNonEmpty(value: string, errorCode: string): string {
   return normalized
 }
 
+function requireTenantId(value: string): string {
+  const normalized = requireNonEmpty(value, "invalid_tenant_id")
+  if (normalized.length > 100) throw new Error("invalid_tenant_id")
+  return normalized
+}
+
 export class QdrantVectorStore implements VectorStore {
   private readonly client: QdrantClient
   private readonly collection: string
@@ -67,19 +75,24 @@ export class QdrantVectorStore implements VectorStore {
       wait: true,
       points: points.map((point) => ({
         id: point.id,
-        vector: [...point.vector],
+        vector: {
+          [DENSE_VECTOR_NAME]: [...point.vector],
+          [SPARSE_VECTOR_NAME]: sparseVectorForText(String(point.payload.excerpt)),
+        },
         payload: { ...point.payload },
       })),
     })
   }
 
-  async deleteBySource(sourceId: string, teacherId: string): Promise<void> {
+  async deleteBySource(sourceId: string, tenantId: string, teacherId: string): Promise<void> {
     const source = requireNonEmpty(sourceId, "invalid_source_id")
+    const tenant = requireTenantId(tenantId)
     requireUuid(teacherId, "invalid_teacher_id")
     await this.client.delete(this.collection, {
       wait: true,
       filter: {
         must: [
+          { key: "tenant_id", match: { value: tenant } },
           { key: "teacher_id", match: { value: teacherId } },
           { key: "source_id", match: { value: source } },
         ],
@@ -89,10 +102,12 @@ export class QdrantVectorStore implements VectorStore {
 
   async search(input: {
     vector: readonly number[]
+    tenantId: string
     teacherId: string
     classroomId?: string
     limit: number
   }): Promise<readonly Citation[]> {
+    const tenant = requireTenantId(input.tenantId)
     requireUuid(input.teacherId, "invalid_teacher_id")
     if (input.classroomId !== undefined) requireUuid(input.classroomId, "invalid_classroom_id")
     if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 50) {
@@ -101,6 +116,7 @@ export class QdrantVectorStore implements VectorStore {
     if (!validVector(input.vector)) throw new Error("invalid_search_vector")
 
     const must: Record<string, unknown>[] = [
+      { key: "tenant_id", match: { value: tenant } },
       { key: "teacher_id", match: { value: input.teacherId } },
       { key: "active", match: { value: true } },
     ]
@@ -109,6 +125,7 @@ export class QdrantVectorStore implements VectorStore {
     }
     const response = await this.client.query(this.collection, {
       query: [...input.vector],
+      using: DENSE_VECTOR_NAME,
       filter: { must },
       limit: input.limit,
       with_payload: true,
@@ -119,6 +136,7 @@ export class QdrantVectorStore implements VectorStore {
       const parsed = scopedPayloadSchema.safeParse(point.payload)
       if (
         !parsed.success ||
+        parsed.data.tenant_id !== tenant ||
         parsed.data.teacher_id !== input.teacherId ||
         parsed.data.active !== true ||
         (input.classroomId !== undefined && parsed.data.classroom_id !== input.classroomId)

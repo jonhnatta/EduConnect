@@ -590,7 +590,7 @@ Expected: FAIL por módulo ausente.
 
 - [ ] **Step 3: Implementar filtro e busca**
 
-`buildKnowledgeFilter` aceitará somente um objeto de acesso construído no backend. `searchKnowledge` gerará embedding, executará busca densa e esparsa, aplicará reciprocal rank fusion, limitará a 8 trechos e revalidará `teacher_id`, `classroom_id`, `source_id` e `version` após a resposta.
+`buildKnowledgeFilter` aceitará somente um objeto de acesso construído no backend. `searchKnowledge` gerará embedding, executará duas consultas Qdrant reais sobre os vetores nomeados `dense` e `sparse`, aplicará reciprocal rank fusion determinístico, limitará a 8 trechos e revalidará todos os metadados de escopo após a resposta. O sparse usa o algoritmo compartilhado `hashed-tf-v1` na ingestão e na consulta. A coleção passa ao schema 2 e ao nome padrão `educonnect_knowledge_v2`, sem recriação ou exclusão automática de coleções incompatíveis. Antes de expor qualquer citação, um repositório confiável injetado revalida a fonte e sua versão no backend.
 
 - [ ] **Step 4: Testar isolamento com adapter falso**
 

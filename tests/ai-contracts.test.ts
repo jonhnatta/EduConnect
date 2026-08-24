@@ -117,12 +117,12 @@ test("rejects unsupported safety decisions", () => {
   )
 })
 
-test("vector deletion contract requires source and teacher ownership", () => {
+test("vector deletion contract requires source, tenant and teacher ownership", () => {
   const store: VectorStore = {
     upsert: async () => undefined,
-    deleteBySource: async (_sourceId, _teacherId) => undefined,
+    deleteBySource: async (_sourceId, _tenantId, _teacherId) => undefined,
     search: async () => [],
   }
 
-  assert.equal(store.deleteBySource.length, 2)
+  assert.equal(store.deleteBySource.length, 3)
 })
