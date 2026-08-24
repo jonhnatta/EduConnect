@@ -377,24 +377,22 @@ Expected: FAIL por compose ausente.
 
 - [ ] **Step 3: Criar compose de IA**
 
-Usar Qdrant `v1.19.0` e as imagens oficiais Langfuse major 4 fixadas por digest. Langfuse v4 está GA para self-host desde 2026-08-17, e instalações novas devem começar em v4. O SDK JavaScript 5.4 ou superior é compatível, portanto a versão 5.10.1 adotada neste plano atende ao requisito. Esta é uma instalação nova, não um upgrade de v3, pois os containers nunca foram iniciados e não existem dados Langfuse. Usar ClickHouse, Postgres, Redis e MinIO exclusivos do Langfuse, todos com versão imutável ou digest. Reutilizar a rede interna do projeto, volumes nomeados e MinIO somente por credencial dedicada. Não publicar portas por padrão. Todos os sete serviços terão healthcheck, `no-new-privileges`, `mem_limit`, `cpus`, `pids_limit` e versões fixas. Os limites iniciais devem ser parametrizáveis e dimensionados novamente em produção conforme a carga observada.
+Usar Qdrant `v1.19.0` e as imagens oficiais Langfuse major 4 fixadas por digest. Langfuse v4 está GA para self-host desde 2026-08-17, e instalações novas devem começar em v4. O SDK JavaScript 5.4 ou superior é compatível, portanto a versão 5.10.1 adotada neste plano atende ao requisito. Esta é uma instalação nova, não um upgrade de v3, pois os containers nunca foram iniciados e não existem dados Langfuse. Usar ClickHouse, Postgres, Redis e MinIO exclusivos do Langfuse, todos com versão imutável ou digest. Reutilizar a rede interna do projeto, volumes nomeados e MinIO somente por credencial dedicada. Não publicar portas por padrão. Todos os oito serviços do overlay, incluindo o `ai-worker`, terão healthcheck, `no-new-privileges`, `mem_limit`, `cpus`, `pids_limit` e versões fixas. Os limites iniciais devem ser parametrizáveis e dimensionados novamente em produção conforme a carga observada.
 
-As variáveis mínimas serão `QDRANT_API_KEY`, `LANGFUSE_NEXTAUTH_SECRET`, `LANGFUSE_SALT`, `LANGFUSE_ENCRYPTION_KEY`, `LANGFUSE_DB_PASSWORD`, `LANGFUSE_CLICKHOUSE_PASSWORD`, `LANGFUSE_REDIS_PASSWORD`, `LANGFUSE_MINIO_ACCESS_KEY`, `LANGFUSE_MINIO_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY` e `LANGFUSE_SECRET_KEY`.
+As variáveis mínimas serão `OPENAI_API_KEY`, `QDRANT_API_KEY`, `LANGFUSE_NEXTAUTH_SECRET`, `LANGFUSE_SALT`, `LANGFUSE_ENCRYPTION_KEY`, `LANGFUSE_DB_PASSWORD`, `LANGFUSE_CLICKHOUSE_PASSWORD`, `LANGFUSE_REDIS_PASSWORD`, `LANGFUSE_MINIO_ACCESS_KEY`, `LANGFUSE_MINIO_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY` e `LANGFUSE_SECRET_KEY`.
 
-O overlay `docker-compose.ai.yml` é opt-in e mantém `${VAR:?}` tanto nos serviços quanto no bloco da aplicação. O compose base deve continuar validando sem segredos de IA. O compose combinado representa a ativação da infraestrutura e deve falhar no parsing enquanto qualquer segredo obrigatório estiver ausente. O bloco `app` recebe os endpoints internos, incluindo `LANGFUSE_WORKER_BASE_URL=http://langfuse-worker:3030`, mas não depende de Qdrant ou Langfuse via `depends_on`. Com a flag desligada, a aplicação inicia sem depender da saúde da IA. Com a flag ligada, o readiness fecha enquanto qualquer dependência estiver indisponível.
+O overlay `docker-compose.ai.yml` é opt-in e mantém `${VAR:?}` tanto nos serviços quanto no bloco da aplicação. O compose base deve continuar validando sem segredos de IA. O compose combinado representa a ativação da infraestrutura e deve falhar no parsing enquanto qualquer segredo obrigatório estiver ausente. O `ai-worker` pertence ao overlay e inicia sem profile adicional quando ele é incluído. O bloco `app` recebe os endpoints internos, incluindo `LANGFUSE_WORKER_BASE_URL=http://langfuse-worker:3030`, mas não depende de Qdrant ou Langfuse via `depends_on`. Com a flag desligada, a aplicação inicia sem depender da saúde da IA. Com a flag ligada, o readiness crítico exige Qdrant e heartbeat do `ai-worker`. Langfuse possui health reportável e fail-open, pois observabilidade não pode bloquear a aplicação.
 
 - [ ] **Step 4: Implementar health condicional**
 
 ```ts
 export async function checkAiDependenciesReady(env: NodeJS.ProcessEnv = process.env) {
   if (env.FEATURE_AI_COPILOT?.trim() !== "true") return
-  const config = readAiConfig(env)
-  const [qdrant, langfuse, worker] = await Promise.all([
-    fetch(`${env.QDRANT_URL}/healthz`, { headers: { "api-key": env.QDRANT_API_KEY! }, signal: AbortSignal.timeout(3000) }),
-    fetch(`${env.LANGFUSE_BASE_URL}/api/public/health?failIfDatabaseUnavailable=true`, { signal: AbortSignal.timeout(3000) }),
-    fetch(`${config.workerBaseUrl}/api/health`, { signal: AbortSignal.timeout(3000) }),
-  ])
-  if (!qdrant.ok || !langfuse.ok || !worker.ok) throw new Error("AI dependencies unavailable")
+  const qdrant = await fetch(`${env.QDRANT_URL}/healthz`, {
+    headers: { "api-key": env.QDRANT_API_KEY! },
+    signal: AbortSignal.timeout(3000),
+  })
+  if (!qdrant.ok) throw new Error("AI dependencies unavailable")
 }
 ```
 
@@ -542,7 +540,7 @@ O worker iniciará consumindo `ai.ingest`, `ai.embed`, `ai.delete` e `ai.reconci
 
 - [ ] **Step 5: Registrar migração e serviço**
 
-Adicionar `00570 ai_knowledge` ao migrador. Adicionar serviço `ai-worker` no Compose com as mesmas credenciais mínimas do runtime e sem portas publicadas.
+Adicionar `00570 ai_knowledge` ao migrador. Adicionar serviço `ai-worker` ao overlay `docker-compose.ai.yml`, sem profile adicional e sem portas publicadas. O Compose base permanece independente da infraestrutura de IA.
 
 - [ ] **Step 6: Testar**
 

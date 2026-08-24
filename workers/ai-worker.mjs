@@ -16,6 +16,7 @@ import {
   planReconciliation,
   selectPublicationPointIds,
   validateCollectionDimensions,
+  validateEmbeddingResponse,
   validateVectorMetadata,
   withTimedBootstrapLock,
 } from "./ai-ingestion-core.mjs"
@@ -137,7 +138,7 @@ async function idempotent(job, handler) {
 }
 
 function sourceLockKey(document) {
-  return `${document.teacher_id}:${document.source_type}:${document.source_id}`
+  return `${document.tenant_id}:${document.teacher_id}:${document.source_type}:${document.source_id}`
 }
 
 async function lockSource(client, document) {
@@ -299,9 +300,9 @@ async function ingest(job) {
     }
     await client.query(
       `update public.ai_documents set status = 'extracting', indexed_at = null,
-         deleted_at = null, error_code = null
-       where id = $1 and teacher_id = $2 and is_current`,
-      [document.id, document.teacher_id]
+       deleted_at = null, error_code = null
+       where id = $1 and teacher_id = $2 and tenant_id = $3 and is_current`,
+      [document.id, document.teacher_id, configuredTenantId]
     )
     await client.query("delete from public.ai_document_chunks where document_id = $1 and teacher_id = $2", [document.id, document.teacher_id])
     for (const chunk of chunks) {
@@ -312,7 +313,10 @@ async function ingest(job) {
         [document.id, document.teacher_id, chunk.index, chunk.content, chunk.contentHash]
       )
     }
-    await client.query("update public.ai_documents set status = 'embedding' where id = $1 and teacher_id = $2 and is_current", [document.id, document.teacher_id])
+    await client.query(
+      "update public.ai_documents set status = 'embedding' where id = $1 and teacher_id = $2 and tenant_id = $3 and is_current",
+      [document.id, document.teacher_id, configuredTenantId]
+    )
     await client.query(
       `insert into public.outbox_events
          (queue_name, event_type, schema_version, correlation_id, dedup_key,
@@ -531,16 +535,13 @@ async function embed(job) {
   )
   if (!chunksBefore.rowCount) throw new Error("missing_ai_chunks")
   if (initial.embedding_model !== configuredEmbeddingModel ||
-      (initial.embedding_dimensions && initial.embedding_dimensions !== configuredEmbeddingDimensions)) {
+      initial.embedding_dimensions !== configuredEmbeddingDimensions) {
     throw new Error("embedding_configuration_mismatch")
   }
   const { openai, qdrant, collection } = embeddingProviders()
   const response = await openai.embeddings.create({ model: initial.embedding_model, input: chunksBefore.rows.map((row) => row.content) })
-  const ordered = [...response.data].sort((left, right) => left.index - right.index)
-  const dimensions = ordered[0]?.embedding.length
-  if (ordered.length !== chunksBefore.rowCount || dimensions !== configuredEmbeddingDimensions || ordered.some((item) => item.embedding.length !== configuredEmbeddingDimensions || item.embedding.some((value) => !Number.isFinite(value)))) {
-    throw new Error("invalid_embedding_response")
-  }
+  const ordered = validateEmbeddingResponse(response, chunksBefore.rowCount, configuredEmbeddingDimensions)
+  const dimensions = configuredEmbeddingDimensions
 
   const client = await pool.connect()
   let publication = null
@@ -574,7 +575,7 @@ async function embed(job) {
       points: chunksNow.rows.map((chunk, index) => ({
         id: chunk.id,
         vector: {
-          [DENSE_VECTOR_NAME]: ordered[index].embedding,
+          [DENSE_VECTOR_NAME]: ordered[index],
           [SPARSE_VECTOR_NAME]: sparseVectorForText(chunk.content),
         },
         payload: {
@@ -608,9 +609,10 @@ async function embed(job) {
     })
     await client.query(
       `update public.ai_documents set status = 'indexed', indexed_at = timezone('utc'::text, now()),
-         embedding_dimensions = $3, error_code = null
-       where id = $1 and teacher_id = $2 and is_current and version = $4 and embedding_model = $5`,
-      [document.id, document.teacher_id, dimensions, document.version, document.embedding_model]
+         error_code = null
+       where id = $1 and teacher_id = $2 and is_current and version = $3 and embedding_model = $4
+         and embedding_dimensions = $5 and tenant_id = $6`,
+      [document.id, document.teacher_id, document.version, document.embedding_model, dimensions, configuredTenantId]
     )
     await client.query("commit")
     publication = null
@@ -648,8 +650,8 @@ async function deleteDocument(job) {
     await client.query(
       `update public.ai_documents set status = 'deleted', deleted_at = timezone('utc'::text, now()),
          error_code = null where id = $1 and teacher_id = $2 and is_current
-         and version = $3 and embedding_model = $4`,
-      [document.id, document.teacher_id, document.version, document.embedding_model]
+         and version = $3 and embedding_model = $4 and tenant_id = $5`,
+      [document.id, document.teacher_id, document.version, document.embedding_model, configuredTenantId]
     )
     await client.query("commit")
   } catch (error) {
@@ -665,12 +667,12 @@ async function markRevokedDocument(executor, document) {
     `update public.ai_documents
         set status = 'deleted', indexed_at = null,
             deleted_at = timezone('utc'::text, now()), error_code = null
-      where id = $1 and teacher_id = $2 and is_current and status = 'indexed'`,
-    [document.id, document.teacher_id]
+      where id = $1 and teacher_id = $2 and tenant_id = $3 and is_current and status = 'indexed'`,
+    [document.id, document.teacher_id, configuredTenantId]
   )
 }
 
-async function loadCurrentDocuments(teacherId) {
+async function loadCurrentDocuments(teacherId, tenantId) {
   const documents = []
   let cursor = null
   do {
@@ -678,11 +680,11 @@ async function loadCurrentDocuments(teacherId) {
       `select d.id, d.teacher_id, d.classroom_id, d.source_type, d.source_id,
               d.version, d.content_hash, d.embedding_model, d.embedding_dimensions
          from public.ai_documents d join public.profiles p on p.id = d.teacher_id
-        where d.teacher_id = $1 and d.is_current and d.status = 'indexed'
+        where d.teacher_id = $1 and d.tenant_id = $2 and d.is_current and d.status = 'indexed'
           and p.user_type = 'professor' and p.account_status = 'active' and p.deleted_at is null
-          and ($2::uuid is null or d.id > $2)
+          and ($3::uuid is null or d.id > $3)
         order by d.id limit 200`,
-      [teacherId, cursor]
+      [teacherId, tenantId, cursor]
     )
     const partition = await partitionAuthorizedDocuments(
       page.rows,
@@ -712,14 +714,14 @@ async function loadCurrentDocuments(teacherId) {
   return documents
 }
 
-async function currentDocumentBySource(client, teacherId, sourceType, sourceId) {
+async function currentDocumentBySource(client, tenantId, teacherId, sourceType, sourceId) {
   const result = await client.query(
     `select d.id, d.teacher_id, d.classroom_id, d.source_type, d.source_id,
-            d.version, d.embedding_model, d.embedding_dimensions
+            d.version, d.embedding_model, d.embedding_dimensions, d.tenant_id
        from public.ai_documents d
-      where d.teacher_id = $1 and d.source_type = $2 and d.source_id = $3
+      where d.tenant_id = $1 and d.teacher_id = $2 and d.source_type = $3 and d.source_id = $4
         and d.is_current and d.status = 'indexed'`,
-    [teacherId, sourceType, sourceId]
+    [tenantId, teacherId, sourceType, sourceId]
   )
   if (!result.rowCount) return null
   const document = result.rows[0]
@@ -730,14 +732,17 @@ async function currentDocumentBySource(client, teacherId, sourceType, sourceId) 
     await lockContentItemAssociation(client, document)
   } catch (error) {
     if (!(error instanceof Error) || !["unauthorized_ai_source", "unauthorized_ai_teacher", "unauthorized_ai_classroom"].includes(error.message)) throw error
-    await client.query("select id from public.ai_documents where id = $1 and teacher_id = $2 for update", [document.id, document.teacher_id])
+    await client.query(
+      "select id from public.ai_documents where id = $1 and teacher_id = $2 and tenant_id = $3 for update",
+      [document.id, document.teacher_id, tenantId]
+    )
     await markRevokedDocument(client, document)
     return null
   }
   const locked = await client.query(
-    `select id from public.ai_documents where id = $1 and teacher_id = $2
+    `select id from public.ai_documents where id = $1 and teacher_id = $2 and tenant_id = $3
       and is_current and status = 'indexed' for update`,
-    [document.id, document.teacher_id]
+    [document.id, document.teacher_id, tenantId]
   )
   if (!locked.rowCount) return null
   const chunks = await client.query(
@@ -764,7 +769,7 @@ async function deleteExtraPointIfStillExtra(qdrant, collection, point, expectedO
   const client = await pool.connect()
   try {
     await client.query("begin")
-    const current = await currentDocumentBySource(client, scope.teacherId, source.source_type, source.source_id)
+    const current = await currentDocumentBySource(client, scope.tenantId, scope.teacherId, source.source_type, source.source_id)
     const fresh = await qdrant.retrieve(collection, { ids: [point.id], with_payload: true, with_vector: false })
     if (fresh.length) {
       const refreshedPlan = planReconciliation(current ? [current] : [], fresh, scope)
@@ -835,7 +840,7 @@ async function enqueueMissingDocument(documentId, data) {
 
 async function reconcile(job) {
   const data = parseJob(job)
-  const documents = await loadCurrentDocuments(data.teacherId)
+  const documents = await loadCurrentDocuments(data.teacherId, data.tenantId)
   const { qdrant, collection } = qdrantProvider()
   const scope = { tenantId: configuredTenantId, teacherId: data.teacherId }
   const points = await collectQdrantPages(

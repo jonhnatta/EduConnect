@@ -4,6 +4,7 @@ type InstrumentationDependencies = {
   NodeSDK: new (options: { spanProcessors: unknown[] }) => { start(): void | Promise<void> }
   LangfuseSpanProcessor: new (options: Record<string, unknown>) => unknown
   sanitizeTelemetryValue(value: unknown): unknown
+  metadataOnlyTelemetryValue?: (value: unknown) => unknown
 }
 type DependencyLoader = () => Promise<InstrumentationDependencies>
 
@@ -42,12 +43,12 @@ export async function registerLangfuseInstrumentation(
   }
 
   const registration = (async () => {
-    const { NodeSDK, LangfuseSpanProcessor, sanitizeTelemetryValue } = await loader()
+    const { NodeSDK, LangfuseSpanProcessor, metadataOnlyTelemetryValue } = await loader()
     const processor = new LangfuseSpanProcessor({
       publicKey: env.LANGFUSE_PUBLIC_KEY!.trim(),
       secretKey: env.LANGFUSE_SECRET_KEY!.trim(),
       baseUrl: env.LANGFUSE_BASE_URL!.trim(),
-      mask: ({ data }: { data: unknown }) => sanitizeTelemetryValue(data),
+      mask: ({ data }: { data: unknown }) => metadataOnlyTelemetryValue?.(data) ?? { captured: false },
     })
     const sdk = new NodeSDK({ spanProcessors: [processor] })
     await sdk.start()
@@ -64,7 +65,7 @@ export async function registerLangfuseInstrumentation(
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs") return
   await registerLangfuseInstrumentation(process.env, async () => {
-    const [{ NodeSDK }, { LangfuseSpanProcessor }, { sanitizeTelemetryValue }] = await Promise.all([
+    const [{ NodeSDK }, { LangfuseSpanProcessor }, { sanitizeTelemetryValue, metadataOnlyTelemetryValue }] = await Promise.all([
       import("@opentelemetry/sdk-node"),
       import("@langfuse/otel"),
       import("./lib/ai/telemetry/langfuse.ts"),
@@ -73,6 +74,7 @@ export async function register(): Promise<void> {
       NodeSDK: NodeSDK as unknown as InstrumentationDependencies["NodeSDK"],
       LangfuseSpanProcessor,
       sanitizeTelemetryValue,
+      metadataOnlyTelemetryValue,
     }
   })
 }

@@ -338,6 +338,57 @@ test("Noop and Langfuse telemetry execute callbacks without exposing secrets", a
   assert.match(exported, /\[redacted\]|\[email-redacted\]/)
 })
 
+test("Langfuse telemetry exports metadata only by default", async () => {
+  const observations: unknown[] = []
+  const propagated: unknown[] = []
+  const telemetry = new LangfuseTelemetry({
+    propagateAttributes: (attributes, callback) => { propagated.push(attributes); return callback() },
+    startActiveObservation: (_name, callback) =>
+      callback({ update: (value: unknown) => observations.push(value) }),
+  })
+  const privateText = "A aluna Maria Silva precisa revisar a Revolução Francesa em detalhes."
+  const cpf = "123.456.789-09"
+  const result = await telemetry.trace({
+    name: "copilot.answer",
+    input: { teacherId, studentName: "Maria Silva", cpf, content: privateText },
+    metadata: { teacherId, category: "lesson_plan", studentName: "Maria Silva", cpf },
+  }, async () => ({ text: privateText, approved: true, tokens: 321 }))
+
+  assert.equal(result.text, privateText)
+  const exported = JSON.stringify({ observations, propagated })
+  assert.doesNotMatch(exported, /Maria Silva|123\.456\.789-09|Revolução Francesa/)
+  assert.match(exported, new RegExp(teacherId))
+  assert.match(exported, /lesson_plan/)
+  assert.match(exported, /"length":/)
+})
+
+test("full telemetry content requires explicit sampled opt-in and remains sanitized", async () => {
+  const exported: unknown[] = []
+  const dependencies = {
+    propagateAttributes: (_attributes: unknown, callback: () => unknown) => callback(),
+    startActiveObservation: (_name: string, callback: (observation: { update(value: unknown): void }) => unknown) =>
+      callback({ update: (value: unknown) => exported.push(value) }),
+  }
+  const notSampled = new LangfuseTelemetry(dependencies, {
+    captureContent: true,
+    sampleRate: 0.5,
+    random: () => 0.9,
+  })
+  await notSampled.trace({ name: "answer", input: { content: "texto privado" } }, async () => "saída privada")
+  assert.doesNotMatch(JSON.stringify(exported), /texto privado|saída privada/)
+
+  exported.length = 0
+  const sampled = new LangfuseTelemetry(dependencies, {
+    captureContent: true,
+    sampleRate: 1,
+    random: () => 0,
+  })
+  await sampled.trace({ name: "answer", input: { content: "conteúdo permitido", cpf: "123.456.789-09" } }, async () => ({ text: "resultado permitido", email: "aluna@example.com" }))
+  const trace = JSON.stringify(exported)
+  assert.match(trace, /conteúdo permitido|resultado permitido/)
+  assert.doesNotMatch(trace, /123\.456\.789-09|aluna@example\.com/)
+})
+
 test("Langfuse telemetry failures never replace or repeat the application callback", async () => {
   const telemetryFailure = new Error("telemetry failed")
   const scenarios = [
@@ -424,19 +475,25 @@ test("instrumentation gates Node runtime and valid credentials", async () => {
 
   let loads = 0
   let starts = 0
+  let processorOptions: Record<string, unknown> | undefined
   const registry = {}
   const load = async () => {
     loads += 1
     return {
       NodeSDK: class { start() { starts += 1 } },
-      LangfuseSpanProcessor: class {},
+      LangfuseSpanProcessor: class {
+        constructor(options: Record<string, unknown>) { processorOptions = options }
+      },
       sanitizeTelemetryValue: (value: unknown) => value,
+      metadataOnlyTelemetryValue: (value: unknown) => typeof value === "string" ? { length: value.length } : value,
     }
   }
   await registerLangfuseInstrumentation(validEnv, load, registry)
   await registerLangfuseInstrumentation(validEnv, load, registry)
   assert.equal(loads, 1)
   assert.equal(starts, 1)
+  const mask = processorOptions?.mask as (input: { data: unknown }) => unknown
+  assert.deepEqual(mask({ data: "conteúdo pedagógico privado" }), { length: 27 })
 })
 
 test("instrumentation setup failures fail open and clear registration for retry", async () => {

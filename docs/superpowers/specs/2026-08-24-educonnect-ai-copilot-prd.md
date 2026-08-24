@@ -506,6 +506,8 @@ copilot.request
 
 Langfuse não poderá bloquear uma resposta. Eventos serão enviados de forma assíncrona. Em caso de indisponibilidade, o sistema registrará metadados operacionais locais e tentará reenviar depois.
 
+Por padrão, traces exportarão somente metadados permitidos, como identificadores técnicos, categorias, decisões, booleanos, números e comprimentos. Texto livre de entrada ou saída, nomes, CPF, dados de alunos e conteúdo pedagógico não será exportado em texto puro. A captura de conteúdo completo exigirá opt-in explícito, taxa de amostragem controlada e sanitização de PII, com padrão desligado. A indisponibilidade do Langfuse será reportável para alertas, mas não fará o readiness retornar 503.
+
 ### 15.5 Prompts
 
 - Prompts terão versões imutáveis.

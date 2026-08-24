@@ -22,21 +22,32 @@ alter table public.ai_documents
   add column if not exists embedding_dimensions integer
     check (embedding_dimensions is null or embedding_dimensions > 0);
 
+drop trigger if exists enforce_ai_document_immutable_identity on public.ai_documents;
+
 update public.ai_documents document
 set is_current = document.id = (
   select current_document.id
   from public.ai_documents current_document
-  where current_document.teacher_id = document.teacher_id
+  where current_document.tenant_id = document.tenant_id
+    and current_document.teacher_id = document.teacher_id
     and current_document.source_type = document.source_type
     and current_document.source_id = document.source_id
   order by current_document.version desc, current_document.created_at desc, current_document.id desc
   limit 1
 );
 
-alter table public.ai_documents alter column is_current set default true;
+update public.ai_documents
+set embedding_dimensions = 1536
+where embedding_dimensions is null;
 
+alter table public.ai_documents
+  alter column is_current set default true,
+  alter column embedding_dimensions set default 1536,
+  alter column embedding_dimensions set not null;
+
+drop index if exists public.uq_ai_documents_current_source;
 create unique index if not exists uq_ai_documents_current_source
-  on public.ai_documents (teacher_id, source_type, source_id)
+  on public.ai_documents (tenant_id, teacher_id, source_type, source_id)
   where is_current;
 
 create or replace function public.activate_ai_document_version()
@@ -48,11 +59,12 @@ declare
   current_version integer;
 begin
   perform pg_advisory_xact_lock(
-    hashtextextended(new.teacher_id::text || ':' || new.source_type || ':' || new.source_id, 0)
+    hashtextextended(new.tenant_id || ':' || new.teacher_id::text || ':' || new.source_type || ':' || new.source_id, 0)
   );
   select max(version) into current_version
   from public.ai_documents
-  where teacher_id = new.teacher_id
+  where tenant_id = new.tenant_id
+    and teacher_id = new.teacher_id
     and source_type = new.source_type
     and source_id = new.source_id;
   if current_version is not null and new.version <= current_version then
@@ -61,7 +73,8 @@ begin
   end if;
   update public.ai_documents
      set is_current = false
-   where teacher_id = new.teacher_id
+   where tenant_id = new.tenant_id
+     and teacher_id = new.teacher_id
      and source_type = new.source_type
      and source_id = new.source_id
      and is_current;
@@ -74,6 +87,38 @@ drop trigger if exists activate_ai_document_version on public.ai_documents;
 create trigger activate_ai_document_version
   before insert on public.ai_documents
   for each row execute function public.activate_ai_document_version();
+
+create or replace function public.enforce_ai_document_immutable_identity()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if new.id is distinct from old.id
+    or new.tenant_id is distinct from old.tenant_id
+    or new.teacher_id is distinct from old.teacher_id
+    or new.classroom_id is distinct from old.classroom_id
+    or new.source_type is distinct from old.source_type
+    or new.source_id is distinct from old.source_id
+    or new.version is distinct from old.version
+    or new.content_hash is distinct from old.content_hash
+    or new.embedding_model is distinct from old.embedding_model
+    or new.embedding_dimensions is distinct from old.embedding_dimensions then
+    raise exception 'AI document identity and version fields are immutable'
+      using errcode = '23514';
+  end if;
+  if old.is_current = false and new.is_current = true then
+    raise exception 'AI document current state cannot be reactivated'
+      using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists enforce_ai_document_immutable_identity on public.ai_documents;
+create trigger enforce_ai_document_immutable_identity
+  before update on public.ai_documents
+  for each row execute function public.enforce_ai_document_immutable_identity();
 
 create table if not exists public.ai_document_chunks (
   id uuid primary key default gen_random_uuid(),

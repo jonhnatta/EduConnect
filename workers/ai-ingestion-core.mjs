@@ -242,3 +242,23 @@ export function planReconciliation(documents, points, scope) {
   for (const [pointId, expected] of expectedByPoint) if (!matched.has(pointId)) missing.add(expected.document.id)
   return { missingDocumentIds: [...missing].sort(), extraPointIds: [...new Set(extraPointIds)] }
 }
+
+export function validateEmbeddingResponse(response, expectedCount, expectedDimensions) {
+  if (!response || !Array.isArray(response.data) || response.data.length !== expectedCount ||
+      !Number.isInteger(expectedCount) || expectedCount <= 0 ||
+      !Number.isInteger(expectedDimensions) || expectedDimensions <= 0) {
+    throw new Error("invalid_embedding_response")
+  }
+  const ordered = Array(expectedCount)
+  for (const item of response.data) {
+    if (!item || !Number.isInteger(item.index) || item.index < 0 || item.index >= expectedCount ||
+        ordered[item.index] !== undefined || !Array.isArray(item.embedding) ||
+        item.embedding.length !== expectedDimensions ||
+        item.embedding.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+      throw new Error("invalid_embedding_response")
+    }
+    ordered[item.index] = [...item.embedding]
+  }
+  if (ordered.some((embedding) => embedding === undefined)) throw new Error("invalid_embedding_response")
+  return ordered
+}

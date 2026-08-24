@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 
 const expectedServices = [
+  "ai-worker",
   "qdrant",
   "langfuse",
   "langfuse-worker",
@@ -93,6 +94,20 @@ test("AI compose requires dedicated secrets and wires the app overlay", () => {
   assert.match(compose, /falha sem todos os segredos obrigatorios/i)
 })
 
+test("AI worker is activated by the opt-in overlay without a profile", () => {
+  const base = readFileSync(new URL("../docker-compose.yml", import.meta.url), "utf8")
+  const overlay = readFileSync(new URL("../docker-compose.ai.yml", import.meta.url), "utf8")
+
+  assert.doesNotMatch(base, /^  ai-worker:/m)
+  const worker = serviceBlock(overlay, "ai-worker")
+  assert.doesNotMatch(worker, /profiles:/)
+  assert.match(worker, /command:\s*\["node", "workers\/ai-worker\.mjs"\]/)
+  assert.match(worker, /qdrant:\s*\n\s+condition: service_healthy/)
+  assert.match(worker, /redis-queue:\s*\n\s+condition: service_healthy/)
+  assert.match(worker, /healthcheck:/)
+  assert.doesNotMatch(worker, /ports:/)
+})
+
 test("disabled AI readiness performs no dependency requests", async () => {
   const { checkAiDependenciesReady } = await import("../lib/ai/health.ts")
   let calls = 0
@@ -114,7 +129,7 @@ test("readiness requires the AI worker heartbeat only when Copilot is enabled", 
   assert.match(route, /service_name = any\(\$1::text\[\]\)/)
 })
 
-test("enabled AI readiness checks normalized endpoints with isolated credentials", async () => {
+test("enabled AI readiness checks only critical Qdrant with isolated credentials", async () => {
   const { checkAiDependenciesReady } = await import("../lib/ai/health.ts")
   const calls: Array<{ url: string; init?: RequestInit }> = []
   const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
@@ -133,22 +148,35 @@ test("enabled AI readiness checks normalized endpoints with isolated credentials
     LANGFUSE_SECRET_KEY: "sk-test",
   }, fetcher)
 
-  assert.equal(calls.length, 3)
+  assert.equal(calls.length, 1)
   assert.deepEqual(calls.map(({ url }) => url), [
     "http://qdrant:6333/healthz",
-    "http://langfuse:3000/api/public/health?failIfDatabaseUnavailable=true",
-    "http://langfuse-worker:3030/api/health",
   ])
   assert.equal(new Headers(calls[0].init?.headers).get("api-key"), "qdrant-secret")
-  assert.equal(new Headers(calls[1].init?.headers).has("api-key"), false)
-  assert.equal(new Headers(calls[2].init?.headers).has("api-key"), false)
-  for (const call of calls.slice(1)) {
-    const serializedInit = JSON.stringify(call.init)
-    for (const secret of ["openai-secret", "qdrant-secret", "pk-test", "sk-test"]) {
-      assert.equal(serializedInit.includes(secret), false)
-    }
-  }
   assert.ok(calls.every(({ init }) => init?.signal instanceof AbortSignal))
+})
+
+test("Langfuse health is reportable but never blocks readiness", async () => {
+  const { checkAiDependenciesReady, checkAiObservabilityHealth } = await import("../lib/ai/health.ts")
+  const env = {
+    FEATURE_AI_COPILOT: "true",
+    OPENAI_API_KEY: "openai-secret",
+    QDRANT_URL: "http://qdrant:6333",
+    QDRANT_API_KEY: "qdrant-secret",
+    LANGFUSE_BASE_URL: "http://langfuse:3000",
+    LANGFUSE_WORKER_BASE_URL: "http://langfuse-worker:3030",
+    LANGFUSE_PUBLIC_KEY: "pk-test",
+    LANGFUSE_SECRET_KEY: "sk-test",
+  }
+  const fetcher = async (input: string | URL | Request) => new Response(null, {
+    status: String(input).includes("qdrant") ? 200 : 503,
+  })
+
+  await assert.doesNotReject(checkAiDependenciesReady(env, fetcher))
+  assert.deepEqual(await checkAiObservabilityHealth(env, fetcher), {
+    langfuse: false,
+    langfuseWorker: false,
+  })
 })
 
 test("AI readiness sanitizes non-ok dependency responses", async () => {
@@ -163,9 +191,7 @@ test("AI readiness sanitizes non-ok dependency responses", async () => {
     LANGFUSE_PUBLIC_KEY: "pk-test",
     LANGFUSE_SECRET_KEY: "sk-test",
   }
-  const fetcher = async (input: string | URL | Request) => new Response("sensitive body", {
-    status: String(input).includes("worker") ? 503 : 200,
-  })
+  const fetcher = async () => new Response("sensitive body", { status: 503 })
 
   await assert.rejects(checkAiDependenciesReady(env, fetcher), (error: Error) => {
     assert.equal(error.message, "AI dependencies unavailable")

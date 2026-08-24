@@ -16,6 +16,7 @@ import {
   partitionAuthorizedDocuments,
   planReconciliation,
   selectPublicationPointIds,
+  validateEmbeddingResponse,
   validateCollectionDimensions,
   validateVectorMetadata,
   withTimedBootstrapLock,
@@ -266,6 +267,12 @@ test("AI knowledge migration is registered and enforces tenant-owned version int
   assert.match(sql, /create or replace function public\.activate_ai_document_version/)
   assert.match(sql, /pg_advisory_xact_lock/)
   assert.match(sql, /set is_current = false/)
+  assert.match(sql, /create or replace function public\.enforce_ai_document_immutable_identity/)
+  for (const column of ["id", "tenant_id", "teacher_id", "classroom_id", "source_type", "source_id", "version", "content_hash", "embedding_model", "embedding_dimensions"]) {
+    assert.match(sql, new RegExp(`new\\.${column} is distinct from old\\.${column}`), `${column} must be immutable`)
+  }
+  assert.match(sql, /old\.is_current = false and new\.is_current = true/)
+  assert.match(sql, /create trigger enforce_ai_document_immutable_identity/)
   assert.match(sql, /add column if not exists lease_owner uuid/)
   assert.doesNotMatch(sql, /create table if not exists public\.ai_documents/)
 })
@@ -345,7 +352,7 @@ test("dedicated AI worker is tenant-safe and only consumes implemented queues", 
   assert.match(worker, /schema_version:\s*configuredVectorSchemaVersion/)
   assert.match(worker, /active:\s*false/)
   assert.match(worker, /tenant_id:\s*"__system__"/)
-  assert.match(worker, /embedding\.length !== configuredEmbeddingDimensions/)
+  assert.match(worker, /validateEmbeddingResponse\(response, chunksBefore\.rowCount, configuredEmbeddingDimensions\)/)
   assert.match(worker, /loadAuthorizedSource\(document, client, true\)/)
   assert.match(worker, /for update of (?:ci|m|a)/i)
   assert.match(worker, /function qdrantProvider/)
@@ -372,6 +379,15 @@ test("dedicated AI worker is tenant-safe and only consumes implemented queues", 
   assert.match(worker, /pg_advisory_unlock/)
   assert.match(worker, /finally[\s\S]*release/i)
 
+  const documentStatements = [...worker.matchAll(/(?:`([^`]*public\.ai_documents[^`]*)`|"([^"]*public\.ai_documents[^"]*)")/g)]
+    .map((match) => (match[1] ?? match[2]).replace(/\s+/g, " "))
+  assert.ok(documentStatements.length >= 9)
+  for (const statement of documentStatements) {
+    assert.match(statement, /tenant_id/i, `missing tenant filter: ${statement}`)
+  }
+  assert.match(worker, /loadCurrentDocuments\(data\.teacherId, data\.tenantId\)/)
+  assert.match(worker, /currentDocumentBySource\(client, scope\.tenantId, scope\.teacherId/)
+
   const authorizationStart = worker.indexOf("async function lockAuthorizedDocument")
   const authorizationEnd = worker.indexOf("async function documentForDeletion", authorizationStart)
   const authorizationBody = worker.slice(authorizationStart, authorizationEnd)
@@ -381,6 +397,23 @@ test("dedicated AI worker is tenant-safe and only consumes implemented queues", 
   assert.ok(authorizationBody.indexOf("loadAuthorizedSource") < authorizationBody.indexOf("lockContentItemAssociation"))
   assert.ok(authorizationBody.indexOf("lockContentItemAssociation") < authorizationBody.indexOf("documentForJob"))
   assert.match(authorizationBody, /stale_ai_document_scope/)
+})
+
+test("embedding response validation rejects ambiguous or malformed indexes", () => {
+  assert.deepEqual(validateEmbeddingResponse({
+    data: [{ index: 1, embedding: [3, 4] }, { index: 0, embedding: [1, 2] }],
+  }, 2, 2), [[1, 2], [3, 4]])
+
+  for (const data of [
+    [{ index: 0, embedding: [1, 2] }, { index: 0, embedding: [3, 4] }],
+    [{ index: 0, embedding: [1, 2] }, { index: 2, embedding: [3, 4] }],
+    [{ index: 0.5, embedding: [1, 2] }, { index: 1, embedding: [3, 4] }],
+    [{ index: 0, embedding: [1, 2] }],
+    [{ index: 0, embedding: [1, Number.NaN] }, { index: 1, embedding: [3, 4] }],
+    [{ index: 0, embedding: [1] }, { index: 1, embedding: [3, 4] }],
+  ]) {
+    assert.throws(() => validateEmbeddingResponse({ data }, 2, 2), /invalid_embedding_response/)
+  }
 })
 
 test("reconciliation paginates and classifies missing, extra and orphan points", async () => {
@@ -489,14 +522,17 @@ test("an older document job becomes a no-op after a newer version is current", (
   assert.equal(documentJobMatchesCurrent({ documentVersion: 2, embeddingModel: "text-embedding-3-small" }, { ...current, is_current: false }), false)
 })
 
-test("AI worker remains opt-in and private in Compose", () => {
-  const compose = readFileSync(new URL("../docker-compose.yml", import.meta.url), "utf8")
+test("AI worker remains opt-in through the private AI overlay", () => {
+  const base = readFileSync(new URL("../docker-compose.yml", import.meta.url), "utf8")
+  const compose = readFileSync(new URL("../docker-compose.ai.yml", import.meta.url), "utf8")
+  assert.doesNotMatch(base, /^  ai-worker:/m)
   const start = compose.indexOf("  ai-worker:")
   assert.notEqual(start, -1)
-  const nextService = compose.indexOf("\n  dispatcher:", start)
+  const nextService = compose.indexOf("\n  qdrant:", start)
   const service = compose.slice(start, nextService)
 
-  assert.match(service, /profiles:\s*\[ai\]/)
+  assert.doesNotMatch(service, /profiles:/)
+  assert.match(service, /healthcheck:/)
   assert.match(service, /command:\s*\["node", "workers\/ai-worker\.mjs"\]/)
   assert.match(service, /DATABASE_URL:/)
   assert.match(service, /REDIS_QUEUE_URL:/)
@@ -508,6 +544,6 @@ test("AI worker remains opt-in and private in Compose", () => {
   assert.match(service, /pids_limit:/)
   assert.doesNotMatch(service, /ports:/)
   const appStart = compose.indexOf("  app:")
-  const appEnd = compose.indexOf("\n  worker:", appStart)
+  const appEnd = compose.indexOf("\n  ai-worker:", appStart)
   assert.doesNotMatch(compose.slice(appStart, appEnd), /ai-worker/)
 })

@@ -6,10 +6,14 @@ const MAX_ITEMS = 50
 const MAX_STRING_LENGTH = 8_000
 const SENSITIVE_KEY = /(password|secret|token|authorization|cookie|apikey|answerkey|gabarito|headers?)/i
 const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi
+const CPF = /\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g
+const PII_KEY = /(cpf|studentname|alun[oa]|fullname|nomecompleto)/i
+const SAFE_TEXT_KEY = /^(?:tenantId|teacherId|classroomId|documentId|sourceId|runId|traceId|correlationId|eventId|category|decision|reasonCode|policyVersion|status|model|provider|toolName)$/
+const SAFE_TEXT_VALUE = /^[a-zA-Z0-9_.:@/-]{1,200}$/
 
 function isSensitiveKey(key: string): boolean {
   const normalized = key.replace(/[^a-z0-9]/gi, "")
-  return normalized.toLowerCase() === "auth" || SENSITIVE_KEY.test(normalized)
+  return normalized.toLowerCase() === "auth" || SENSITIVE_KEY.test(normalized) || PII_KEY.test(normalized)
 }
 
 export type TelemetryOperation = {
@@ -36,7 +40,9 @@ export function sanitizeTelemetryValue(value: unknown): unknown {
 
   function sanitize(current: unknown, depth: number): unknown {
     if (typeof current === "string") {
-      return current.slice(0, MAX_STRING_LENGTH).replace(EMAIL, "[email-redacted]")
+      return current.slice(0, MAX_STRING_LENGTH)
+        .replace(EMAIL, "[email-redacted]")
+        .replace(CPF, "[cpf-redacted]")
     }
     if (current === null || typeof current === "boolean") return current
     if (typeof current === "number") return Number.isFinite(current) ? current : "[non-finite]"
@@ -90,13 +96,62 @@ type LangfuseDependencies = {
   flush?: () => Promise<void>
 }
 
+export type TelemetryContentPolicy = {
+  captureContent?: boolean
+  sampleRate?: number
+  random?: () => number
+}
+
+export function metadataOnlyTelemetryValue(value: unknown): unknown {
+  const visited = new WeakSet<object>()
+  function transform(current: unknown, key: string | undefined, depth: number): unknown {
+    if (typeof current === "string") {
+      if (key && SAFE_TEXT_KEY.test(key) && SAFE_TEXT_VALUE.test(current)) return current
+      return { length: current.length }
+    }
+    if (current === null || typeof current === "boolean") return current
+    if (typeof current === "number") return Number.isFinite(current) ? current : "[non-finite]"
+    if (typeof current !== "object") return "[unsupported]"
+    if (isUnsupported(current)) return current instanceof Error ? "[error-redacted]" : "[unsupported]"
+    if (depth >= MAX_DEPTH) return "[max-depth]"
+    if (visited.has(current)) return "[circular]"
+    visited.add(current)
+    if (Array.isArray(current)) return { itemCount: current.length }
+
+    const result: Record<string, unknown> = {}
+    let entries: [string, unknown][]
+    try {
+      entries = Object.entries(current).slice(0, MAX_ITEMS)
+    } catch {
+      return "[unavailable]"
+    }
+    for (const [nestedKey, nested] of entries) {
+      if (isSensitiveKey(nestedKey)) {
+        result[nestedKey] = REDACTED
+      } else {
+        try {
+          result[nestedKey] = transform(nested, nestedKey, depth + 1)
+        } catch {
+          result[nestedKey] = "[unavailable]"
+        }
+      }
+    }
+    return result
+  }
+  return transform(value, undefined, 0)
+}
+
 function propagatedMetadata(operation: TelemetryOperation): Record<string, unknown> {
-  const sanitized = sanitizeTelemetryValue(operation.metadata) as Record<string, unknown> | undefined
+  const sanitized = metadataOnlyTelemetryValue(operation.metadata) as Record<string, unknown> | undefined
   const metadata: Record<string, string> = {}
   for (const [key, value] of Object.entries(sanitized ?? {})) {
     metadata[key] = (typeof value === "string" ? value : JSON.stringify(value)).slice(0, 200)
   }
-  return { traceName: operation.name.slice(0, 200), metadata }
+  return { traceName: safeOperationName(operation.name), metadata }
+}
+
+function safeOperationName(name: string): string {
+  return /^[a-z][a-z0-9_.-]{0,199}$/.test(name) ? name : "ai.operation"
 }
 
 export class NoopTelemetry implements Telemetry {
@@ -113,12 +168,21 @@ export class NoopTelemetry implements Telemetry {
 
 export class LangfuseTelemetry implements Telemetry {
   private readonly dependencies: LangfuseDependencies
+  private readonly policy: Required<TelemetryContentPolicy>
 
-  constructor(dependencies?: LangfuseDependencies) {
+  constructor(dependencies?: LangfuseDependencies, policy: TelemetryContentPolicy = {}) {
     this.dependencies = dependencies ?? {
       propagateAttributes: (attributes, callback) => propagateAttributes(attributes, callback),
       startActiveObservation: (name, callback, options) =>
         startActiveObservation(name, callback, options),
+    }
+    const sampleRate = Number.isFinite(policy.sampleRate) && policy.sampleRate! >= 0 && policy.sampleRate! <= 1
+      ? policy.sampleRate!
+      : 0
+    this.policy = {
+      captureContent: policy.captureContent === true,
+      sampleRate,
+      random: policy.random ?? Math.random,
     }
   }
 
@@ -143,6 +207,10 @@ export class LangfuseTelemetry implements Telemetry {
     callback: () => T | Promise<T>,
     asType: "span" | "generation"
   ): Promise<T> {
+    const captureContent = this.policy.captureContent && this.policy.random() < this.policy.sampleRate
+    const exportValue = (value: unknown) => captureContent
+      ? sanitizeTelemetryValue(value)
+      : metadataOnlyTelemetryValue(value)
     let callbackPromise: Promise<T> | undefined
     const runCallbackOnce = () => {
       callbackPromise ??= Promise.resolve().then(callback)
@@ -153,16 +221,16 @@ export class LangfuseTelemetry implements Telemetry {
       const attributes = propagatedMetadata(operation)
       await this.dependencies.propagateAttributes(attributes, () =>
         this.dependencies.startActiveObservation(
-          operation.name,
+          safeOperationName(operation.name),
           async (observation) => {
             try {
-              observation.update({ input: sanitizeTelemetryValue(operation.input) })
+              observation.update({ input: exportValue(operation.input) })
             } catch {
               // Telemetry must remain outside the application callback's critical path.
             }
             const result = await runCallbackOnce()
             try {
-              observation.update({ output: sanitizeTelemetryValue(result) })
+              observation.update({ output: exportValue(result) })
             } catch {
               // Preserve the application result when telemetry export fails.
             }
