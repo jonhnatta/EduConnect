@@ -143,18 +143,38 @@ export class LangfuseTelemetry implements Telemetry {
     callback: () => T | Promise<T>,
     asType: "span" | "generation"
   ): Promise<T> {
-    const attributes = propagatedMetadata(operation)
-    return await this.dependencies.propagateAttributes(attributes, () =>
-      this.dependencies.startActiveObservation(
-        operation.name,
-        async (observation) => {
-          observation.update({ input: sanitizeTelemetryValue(operation.input) })
-          const result = await callback()
-          observation.update({ output: sanitizeTelemetryValue(result) })
-          return result
-        },
-        { asType }
+    let callbackPromise: Promise<T> | undefined
+    const runCallbackOnce = () => {
+      callbackPromise ??= Promise.resolve().then(callback)
+      return callbackPromise
+    }
+
+    try {
+      const attributes = propagatedMetadata(operation)
+      await this.dependencies.propagateAttributes(attributes, () =>
+        this.dependencies.startActiveObservation(
+          operation.name,
+          async (observation) => {
+            try {
+              observation.update({ input: sanitizeTelemetryValue(operation.input) })
+            } catch {
+              // Telemetry must remain outside the application callback's critical path.
+            }
+            const result = await runCallbackOnce()
+            try {
+              observation.update({ output: sanitizeTelemetryValue(result) })
+            } catch {
+              // Preserve the application result when telemetry export fails.
+            }
+            return result
+          },
+          { asType }
+        )
       )
-    ) as T
+    } catch {
+      // The callback is executed below exactly once, regardless of telemetry failures.
+    }
+
+    return await runCallbackOnce()
   }
 }

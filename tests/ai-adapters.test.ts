@@ -327,6 +327,78 @@ test("Noop and Langfuse telemetry execute callbacks without exposing secrets", a
   assert.match(exported, /\[redacted\]|\[email-redacted\]/)
 })
 
+test("Langfuse telemetry failures never replace or repeat the application callback", async () => {
+  const telemetryFailure = new Error("telemetry failed")
+  const scenarios = [
+    {
+      name: "propagation",
+      dependencies: {
+        propagateAttributes: () => { throw telemetryFailure },
+        startActiveObservation: () => { throw new Error("unreachable") },
+      },
+    },
+    {
+      name: "observation start",
+      dependencies: {
+        propagateAttributes: (_attributes: unknown, callback: () => unknown) => callback(),
+        startActiveObservation: () => { throw telemetryFailure },
+      },
+    },
+    {
+      name: "observation update",
+      dependencies: {
+        propagateAttributes: (_attributes: unknown, callback: () => unknown) => callback(),
+        startActiveObservation: (_name: string, callback: (observation: { update(): void }) => unknown) =>
+          callback({ update: () => { throw telemetryFailure } }),
+      },
+    },
+    {
+      name: "duplicate instrumentation callback",
+      dependencies: {
+        propagateAttributes: (_attributes: unknown, callback: () => unknown) => {
+          callback()
+          return callback()
+        },
+        startActiveObservation: (_name: string, callback: (observation: { update(): void }) => unknown) =>
+          callback({ update: () => undefined }),
+      },
+    },
+  ]
+
+  for (const scenario of scenarios) {
+    let callbackCalls = 0
+    const telemetry = new LangfuseTelemetry(scenario.dependencies)
+    const result = await telemetry.trace({ name: scenario.name }, async () => {
+      callbackCalls += 1
+      return "application-result"
+    })
+    assert.equal(result, "application-result", scenario.name)
+    assert.equal(callbackCalls, 1, scenario.name)
+  }
+
+  const applicationError = new Error("application failed")
+  const replacementError = new Error("replacement telemetry error")
+  let errorCallbackCalls = 0
+  const telemetry = new LangfuseTelemetry({
+    propagateAttributes: async (_attributes, callback) => {
+      try {
+        await callback()
+      } catch {
+        throw replacementError
+      }
+    },
+    startActiveObservation: (_name, callback) => callback({ update: () => undefined }),
+  })
+  await assert.rejects(
+    telemetry.wrap({ name: "preserve-error" }, async () => {
+      errorCallbackCalls += 1
+      throw applicationError
+    }),
+    (error) => error === applicationError
+  )
+  assert.equal(errorCallbackCalls, 1)
+})
+
 test("instrumentation gates Node runtime and valid credentials", async () => {
   const validEnv = {
     NEXT_RUNTIME: "nodejs",
@@ -354,6 +426,75 @@ test("instrumentation gates Node runtime and valid credentials", async () => {
   await registerLangfuseInstrumentation(validEnv, load, registry)
   assert.equal(loads, 1)
   assert.equal(starts, 1)
+})
+
+test("instrumentation setup failures fail open and clear registration for retry", async () => {
+  const validEnv = {
+    NEXT_RUNTIME: "nodejs",
+    LANGFUSE_PUBLIC_KEY: "pk-test",
+    LANGFUSE_SECRET_KEY: "sk-test",
+    LANGFUSE_BASE_URL: "https://langfuse.example.com",
+  }
+
+  for (const failingStage of ["import", "processor", "sdk", "start"] as const) {
+    let attempts = 0
+    let starts = 0
+    const registry = {}
+    const loader = async () => {
+      attempts += 1
+      if (attempts === 1 && failingStage === "import") throw new Error("import failed")
+      const shouldFail = attempts === 1
+      return {
+        LangfuseSpanProcessor: class {
+          constructor() {
+            if (shouldFail && failingStage === "processor") throw new Error("processor failed")
+          }
+        },
+        NodeSDK: class {
+          constructor() {
+            if (shouldFail && failingStage === "sdk") throw new Error("sdk failed")
+          }
+          start() {
+            if (shouldFail && failingStage === "start") throw new Error("start failed")
+            starts += 1
+          }
+        },
+        sanitizeTelemetryValue: (value: unknown) => value,
+      }
+    }
+
+    await assert.doesNotReject(
+      registerLangfuseInstrumentation(validEnv, loader, registry),
+      failingStage
+    )
+    await assert.doesNotReject(
+      registerLangfuseInstrumentation(validEnv, loader, registry),
+      `${failingStage} retry`
+    )
+    assert.equal(attempts, 2, failingStage)
+    assert.equal(starts, 1, failingStage)
+  }
+})
+
+test("concurrent instrumentation callers also fail open", async () => {
+  const validEnv = {
+    NEXT_RUNTIME: "nodejs",
+    LANGFUSE_PUBLIC_KEY: "pk-test",
+    LANGFUSE_SECRET_KEY: "sk-test",
+    LANGFUSE_BASE_URL: "https://langfuse.example.com",
+  }
+  let releaseImport: (() => void) | undefined
+  const importGate = new Promise<void>((resolve) => { releaseImport = resolve })
+  const registry = {}
+  const loader = async () => {
+    await importGate
+    throw new Error("concurrent import failed")
+  }
+
+  const first = registerLangfuseInstrumentation(validEnv, loader, registry)
+  const second = registerLangfuseInstrumentation(validEnv, loader, registry)
+  releaseImport?.()
+  await assert.doesNotReject(Promise.all([first, second]))
 })
 
 test("Next register has a statically eliminable Edge gate before Node imports", () => {

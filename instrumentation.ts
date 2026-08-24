@@ -33,7 +33,11 @@ export async function registerLangfuseInstrumentation(
 ): Promise<void> {
   if (!shouldRegisterLangfuse(env)) return
   if (registry[registrationKey]) {
-    await registry[registrationKey]
+    try {
+      await registry[registrationKey]
+    } catch {
+      // Another concurrent registration owns cleanup and retry eligibility.
+    }
     return
   }
 
@@ -51,9 +55,9 @@ export async function registerLangfuseInstrumentation(
   registry[registrationKey] = registration
   try {
     await registration
-  } catch (error) {
+  } catch {
     delete registry[registrationKey]
-    throw error
+    return
   }
 }
 
