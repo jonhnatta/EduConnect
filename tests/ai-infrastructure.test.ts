@@ -54,8 +54,9 @@ test("AI compose keeps every dependency private, persistent and hardened", () =>
   }
 
   assert.match(compose, /docker\.io\/qdrant\/qdrant:v1\.19\.0@sha256:[a-f0-9]{64}/)
-  assert.match(compose, /docker\.io\/langfuse\/langfuse:3@sha256:[a-f0-9]{64}/)
-  assert.match(compose, /docker\.io\/langfuse\/langfuse-worker:3@sha256:[a-f0-9]{64}/)
+  assert.match(compose, /docker\.io\/langfuse\/langfuse:4@sha256:[a-f0-9]{64}/)
+  assert.match(compose, /docker\.io\/langfuse\/langfuse-worker:4@sha256:[a-f0-9]{64}/)
+  assert.doesNotMatch(compose, /docker\.io\/langfuse\/langfuse(?:-worker)?:3(?:@|\s|$)/)
   assert.match(compose, /QDRANT__SERVICE__API_KEY: \$\{QDRANT_API_KEY:\?[^}]+\}/)
   assert.match(serviceBlock(compose, "langfuse"), /api\/public\/health\?failIfDatabaseUnavailable=true/)
   assert.match(serviceBlock(compose, "langfuse-worker"), /127\.0\.0\.1:3030\/api\/health/)

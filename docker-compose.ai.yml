@@ -74,7 +74,7 @@ services:
     networks: [backend]
 
   langfuse:
-    image: docker.io/langfuse/langfuse:3@sha256:91794d5f42ccd09ed624ff101ff49a8486b3fbedeef7e48c763d19525bc33c03
+    image: docker.io/langfuse/langfuse:4@sha256:26b4dc06819dd15761822f6a79eb37bf34bac18a414692fcdde3593964e3dd4e
     restart: unless-stopped
     depends_on: &langfuse-dependencies
       langfuse-postgres:
@@ -107,7 +107,7 @@ services:
     networks: [backend]
 
   langfuse-worker:
-    image: docker.io/langfuse/langfuse-worker:3@sha256:9917beee1cb2b66e698f5daf23ae0bc6af375233c0395a1a5c80eaa7535fe905
+    image: docker.io/langfuse/langfuse-worker:4@sha256:38cb37b87a6dd2aa1f09ae4496653bccdb33664a49b3dec37b52f3e32de166d2
     restart: unless-stopped
     depends_on: *langfuse-dependencies
     environment:
