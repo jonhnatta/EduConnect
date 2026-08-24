@@ -16,6 +16,8 @@ alter table public.job_executions
 
 alter table public.ai_documents
   add column if not exists is_current boolean not null default false,
+  add column if not exists tenant_id text not null default 'educonnect'
+    check (char_length(btrim(tenant_id)) between 1 and 100),
   add column if not exists embedding_model text not null default 'text-embedding-3-small',
   add column if not exists embedding_dimensions integer
     check (embedding_dimensions is null or embedding_dimensions > 0);

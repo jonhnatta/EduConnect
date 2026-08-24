@@ -8,12 +8,14 @@ import {
   chunkNormalizedDocument,
   collectQdrantPages,
   compensatePublicationFailure,
+  collectionCanAdoptMetadata,
   documentJobMatchesCurrent,
   hashContent,
   normalizeDocumentText,
   parseAiQueuePayload as parseAiQueuePayloadCore,
   partitionAuthorizedDocuments,
   planReconciliation,
+  selectPublicationPointIds,
   validateCollectionDimensions,
   validateVectorMetadata,
 } from "../workers/ai-ingestion-core.mjs"
@@ -97,6 +99,12 @@ test("Qdrant metadata sentinel rejects another model or schema at the same dimen
   assert.throws(() => validateVectorMetadata({ ...expected, schema_version: 2 }, expected), /qdrant_collection_incompatible/)
 })
 
+test("a collection without metadata can only be adopted while proven empty", () => {
+  assert.equal(collectionCanAdoptMetadata([], 0), true)
+  assert.equal(collectionCanAdoptMetadata([], 1), false)
+  assert.equal(collectionCanAdoptMetadata([{ id: "sentinel" }], 1), false)
+})
+
 test("a timed-out or lost transaction compensates the exact attempted point ids", async () => {
   const removed: string[][] = []
   const pointIds = ["point-a", "point-b"]
@@ -108,6 +116,21 @@ test("a timed-out or lost transaction compensates the exact attempted point ids"
     /transaction_lost_after_31s/
   )
   assert.deepEqual(removed, [pointIds])
+})
+
+test("publication attempts fence compensation from a newer retry", () => {
+  const oldAttempt = "c95c9e8c-1746-4ad6-86ff-45f8b57dfbbc"
+  const newAttempt = "29f4b032-8d7b-4c06-90df-e1c023bda6b4"
+  const common = {
+    tenant_id: "educonnect", teacher_id: teacherId, document_id: documentId, version: 2,
+  }
+  const points = [
+    { id: "overwritten-by-retry", payload: { ...common, publication_attempt_id: newAttempt } },
+    { id: "still-owned-by-old-attempt", payload: { ...common, publication_attempt_id: oldAttempt } },
+  ]
+  assert.deepEqual(selectPublicationPointIds(points, {
+    tenantId: "educonnect", teacherId, documentId, version: 2, publicationAttemptId: oldAttempt,
+  }), ["still-owned-by-old-attempt"])
 })
 
 test("AI queue contracts parse the strict dispatcher envelope", () => {
@@ -187,6 +210,7 @@ test("AI knowledge migration is registered and enforces tenant-owned version int
   assert.match(sql, /is_current boolean not null/)
   assert.match(sql, /embedding_model text not null/)
   assert.match(sql, /embedding_dimensions integer/)
+  assert.match(sql, /tenant_id text not null default 'educonnect'/)
   assert.match(sql, /create unique index if not exists uq_ai_documents_current_source[^;]*where is_current/)
   assert.match(sql, /create or replace function public\.activate_ai_document_version/)
   assert.match(sql, /pg_advisory_xact_lock/)
@@ -278,7 +302,23 @@ test("dedicated AI worker is tenant-safe and only consumes implemented queues", 
   assert.match(worker, /from public\.profiles[\s\S]*for update/i)
   assert.match(worker, /from public\.classrooms[\s\S]*for update/i)
   assert.match(worker, /from public\.content_item_classrooms[\s\S]*for update/i)
-  assert.match(worker, /has_id:\s*pointIds/)
+  assert.match(worker, /has_id:\s*ownedPointIds/)
+  assert.match(worker, /async function documentForDeletion/)
+  assert.match(worker, /d\.tenant_id = \$5/i)
+  assert.match(deleteBody, /documentForDeletion/)
+  assert.doesNotMatch(deleteBody, /lockAuthorizationRows/)
+  assert.match(embedBody, /publication_attempt_id:\s*publicationAttemptId/)
+  assert.match(worker, /publication_attempt_id["']?,\s*match:/)
+  assert.match(worker, /await lockSource\(client, document\)[\s\S]*compensateVectorPublication/)
+  assert.match(worker, /qdrant\.count\(collection, \{ exact: true \}\)/)
+  assert.match(worker, /collectionCanAdoptMetadata/)
+
+  const authorizationStart = worker.indexOf("async function lockAuthorizedDocument")
+  const authorizationEnd = worker.indexOf("async function documentForDeletion", authorizationStart)
+  const authorizationBody = worker.slice(authorizationStart, authorizationEnd)
+  assert.ok(authorizationBody.indexOf("loadAuthorizedSource") < authorizationBody.indexOf("lockContentItemAssociation"))
+  assert.ok(authorizationBody.indexOf("lockContentItemAssociation") < authorizationBody.indexOf("lockRemainingAuthorizers"))
+  assert.ok(authorizationBody.indexOf("lockRemainingAuthorizers") < authorizationBody.indexOf("documentForJob"))
 })
 
 test("reconciliation paginates and classifies missing, extra and orphan points", async () => {

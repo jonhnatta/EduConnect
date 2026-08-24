@@ -64,6 +64,21 @@ export function validateVectorMetadata(actual, expected) {
   }
 }
 
+export function collectionCanAdoptMetadata(metadataPoints, exactPointCount) {
+  return Array.isArray(metadataPoints) && metadataPoints.length === 0 && exactPointCount === 0
+}
+
+export function selectPublicationPointIds(points, expected) {
+  if (!Array.isArray(points)) throw new Error("invalid_publication_points")
+  return points.filter((point) => {
+    const payload = point?.payload
+    return payload && typeof payload === "object" &&
+      payload.tenant_id === expected.tenantId && payload.teacher_id === expected.teacherId &&
+      payload.document_id === expected.documentId && payload.version === expected.version &&
+      payload.publication_attempt_id === expected.publicationAttemptId
+  }).map((point) => point.id)
+}
+
 export async function compensatePublicationFailure(error, compensate) {
   await compensate()
   throw error

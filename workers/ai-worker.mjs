@@ -5,6 +5,7 @@ import pg from "pg"
 import { QdrantClient } from "@qdrant/js-client-rest"
 import {
   chunkNormalizedDocument,
+  collectionCanAdoptMetadata,
   collectQdrantPages,
   compensatePublicationFailure,
   documentJobMatchesCurrent,
@@ -13,6 +14,7 @@ import {
   parseAiQueuePayload,
   partitionAuthorizedDocuments,
   planReconciliation,
+  selectPublicationPointIds,
   validateCollectionDimensions,
   validateVectorMetadata,
 } from "./ai-ingestion-core.mjs"
@@ -134,7 +136,17 @@ async function lockSource(client, document) {
   await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [sourceLockKey(document)])
 }
 
-async function lockAuthorizationRows(client, document) {
+async function lockContentItemAssociation(client, document) {
+  if (document.source_type !== "content_item" || !document.classroom_id) return
+  const association = await client.query(
+    `select content_item_id from public.content_item_classrooms
+      where content_item_id = $1 and classroom_id = $2 for update`,
+    [document.source_id, document.classroom_id]
+  )
+  if (association.rowCount !== 1) throw new Error("unauthorized_ai_source")
+}
+
+async function lockRemainingAuthorizers(client, document) {
   const profile = await client.query(
     `select id from public.profiles where id = $1 and user_type = 'professor'
        and account_status = 'active' and deleted_at is null for update`,
@@ -148,62 +160,78 @@ async function lockAuthorizationRows(client, document) {
     )
     if (classroom.rowCount !== 1) throw new Error("unauthorized_ai_classroom")
   }
-  if (document.source_type === "content_item" && document.classroom_id) {
-    const association = await client.query(
-      `select content_item_id from public.content_item_classrooms
-        where content_item_id = $1 and classroom_id = $2 for update`,
-      [document.source_id, document.classroom_id]
-    )
-    if (association.rowCount !== 1) throw new Error("unauthorized_ai_source")
-  }
 }
 
 async function documentForJob(executor, data, forUpdate = false) {
   const result = await executor.query(
     `select d.id, d.teacher_id, d.classroom_id, d.source_type, d.source_id,
             d.version, d.content_hash, d.status, d.is_current,
-            d.embedding_model, d.embedding_dimensions
+            d.embedding_model, d.embedding_dimensions, d.tenant_id
        from public.ai_documents d
        join public.profiles p on p.id = d.teacher_id
        left join public.classrooms c on c.id = d.classroom_id
       where d.id = $1 and d.teacher_id = $2 and d.version = $3
         and d.embedding_model = $4
+        and d.tenant_id = $5
         and p.user_type = 'professor' and p.account_status = 'active'
         and p.deleted_at is null
         and (d.classroom_id is null or c.professor_id = d.teacher_id)
       ${forUpdate ? "for update of d" : ""}`,
-    [data.documentId, data.teacherId, data.documentVersion, data.embeddingModel]
+    [data.documentId, data.teacherId, data.documentVersion, data.embeddingModel, data.tenantId]
   )
   if (result.rowCount !== 1) throw new Error("unauthorized_ai_document")
   return result.rows[0]
 }
 
-async function currentDocumentUnderLock(client, data, initial) {
+async function lockAuthorizedDocument(client, data, initial) {
   await lockSource(client, initial)
+  const source = await loadAuthorizedSource(initial, client, true)
+  await lockContentItemAssociation(client, initial)
+  await lockRemainingAuthorizers(client, initial)
   const document = await documentForJob(client, data, true)
-  return documentJobMatchesCurrent(data, document) ? document : null
+  return documentJobMatchesCurrent(data, document) ? { document, source } : { document: null, source: null }
+}
+
+async function documentForDeletion(executor, data, forUpdate = false) {
+  const result = await executor.query(
+    `select d.id, d.teacher_id, d.classroom_id, d.source_type, d.source_id,
+            d.version, d.content_hash, d.status, d.is_current,
+            d.embedding_model, d.embedding_dimensions, d.tenant_id
+       from public.ai_documents d
+      where d.id = $1 and d.teacher_id = $2 and d.version = $3
+        and d.embedding_model = $4 and d.tenant_id = $5
+      ${forUpdate ? "for update of d" : ""}`,
+    [data.documentId, data.teacherId, data.documentVersion, data.embeddingModel, data.tenantId]
+  )
+  if (result.rowCount !== 1) throw new Error("unauthorized_ai_document")
+  const document = result.rows[0]
+  assertSourcePayload(data, document)
+  return document
 }
 
 async function loadAuthorizedSource(document, executor = pool, forUpdate = false) {
   if (document.source_type === "content_item") {
+    const associationClause = forUpdate ? "and ($3::uuid is null or $3::uuid is not null)" : `and ($3::uuid is null or exists (
+            select 1 from public.content_item_classrooms cic
+             where cic.content_item_id = ci.id and cic.classroom_id = $3
+          ))`
     const result = await executor.query(
       `select ci.title, ci.body_html as body, ci.visibility, ci.updated_at
          from public.content_items ci
         where ci.id = $1 and ci.author_id = $2 and ci.status = 'published'
-          and ($3::uuid is null or exists (
-            select 1 from public.content_item_classrooms cic
-             where cic.content_item_id = ci.id and cic.classroom_id = $3
-          )) ${forUpdate ? "for update of ci" : ""}`,
+          ${associationClause} ${forUpdate ? "for update of ci" : ""}`,
       [document.source_id, document.teacher_id, document.classroom_id]
     )
     if (result.rowCount !== 1) throw new Error("unauthorized_ai_source")
     return result.rows[0]
   }
   if (document.source_type === "classroom_material") {
+    const ownerJoin = forUpdate ? "" : "join public.classrooms c on c.id = m.classroom_id"
+    const ownerClause = forUpdate ? "and $2::uuid is not null" : "and c.professor_id = $2"
     const result = await executor.query(
       `select m.title, m.description as body, 'classrooms'::text as visibility, m.updated_at
-         from public.classroom_materials m join public.classrooms c on c.id = m.classroom_id
-        where m.id = $1 and c.professor_id = $2 and m.status = 'publicado'
+         from public.classroom_materials m ${ownerJoin}
+        where m.id = $1 ${ownerClause} and m.status = 'publicado'
           and m.classroom_id = $3 ${forUpdate ? "for update of m" : ""}`,
       [document.source_id, document.teacher_id, document.classroom_id]
     )
@@ -211,10 +239,12 @@ async function loadAuthorizedSource(document, executor = pool, forUpdate = false
     return result.rows[0]
   }
   if (document.source_type === "classroom_activity") {
+    const ownerJoin = forUpdate ? "" : "join public.classrooms c on c.id = a.classroom_id"
+    const ownerClause = forUpdate ? "and $2::uuid is not null" : "and c.professor_id = $2"
     const result = await executor.query(
       `select a.title, a.description as body, 'classrooms'::text as visibility, a.updated_at
-         from public.classroom_activities a join public.classrooms c on c.id = a.classroom_id
-        where a.id = $1 and c.professor_id = $2 and a.status in ('aberta', 'encerrada')
+         from public.classroom_activities a ${ownerJoin}
+        where a.id = $1 ${ownerClause} and a.status in ('aberta', 'encerrada')
           and a.classroom_id = $3 ${forUpdate ? "for update of a" : ""}`,
       [document.source_id, document.teacher_id, document.classroom_id]
     )
@@ -241,14 +271,14 @@ async function ingest(job) {
     await client.query("begin")
     await client.query("set local idle_in_transaction_session_timeout = '3 minutes'")
     await client.query("set local statement_timeout = '2 minutes'")
-    const document = await currentDocumentUnderLock(client, data, initial)
+    const locked = await lockAuthorizedDocument(client, data, initial)
+    const document = locked.document
     if (!document) {
       await client.query("commit")
       return
     }
     assertSourcePayload(data, document)
-    await lockAuthorizationRows(client, document)
-    const source = await loadAuthorizedSource(document, client, true)
+    const source = locked.source
     const text = normalizeDocumentText(`${source.title}\n${source.body ?? ""}`)
     if (!text) throw new Error("empty_ai_source")
     const chunks = chunkNormalizedDocument(text, { maxChars: 1_500, overlapChars: 200 })
@@ -324,8 +354,6 @@ function qdrantConflict(error) {
 async function bootstrapQdrant() {
   const { qdrant, collection } = qdrantProvider()
   let details
-  let createdHere = false
-  let creationRace = false
   for (let attempt = 0; attempt < 8; attempt += 1) {
     try {
       await qdrant.getCollections()
@@ -337,10 +365,8 @@ async function bootstrapQdrant() {
           await qdrant.createCollection(collection, {
             vectors: { size: configuredEmbeddingDimensions, distance: "Cosine" },
           })
-          createdHere = true
         } catch (createError) {
           if (!qdrantConflict(createError)) throw createError
-          creationRace = true
         }
         details = await qdrant.getCollection(collection)
       }
@@ -352,7 +378,9 @@ async function bootstrapQdrant() {
         distance: "Cosine",
       }
       let metadataPoints = await qdrant.retrieve(collection, { ids: [VECTOR_METADATA_POINT_ID], with_payload: true, with_vector: false })
-      if (!metadataPoints.length && createdHere) {
+      if (!metadataPoints.length) {
+        const exactCount = await qdrant.count(collection, { exact: true })
+        if (!collectionCanAdoptMetadata(metadataPoints, exactCount.count)) throw new Error("qdrant_collection_incompatible")
         const sentinelVector = Array(configuredEmbeddingDimensions).fill(0)
         sentinelVector[0] = 1
         await qdrant.upsert(collection, { wait: true, ordering: "strong", points: [{
@@ -361,10 +389,11 @@ async function bootstrapQdrant() {
           payload: { tenant_id: "__system__", active: false, kind: "vector_metadata", ...expectedMetadata },
         }] })
         metadataPoints = await qdrant.retrieve(collection, { ids: [VECTOR_METADATA_POINT_ID], with_payload: true, with_vector: false })
-      }
-      for (let wait = 0; !metadataPoints.length && creationRace && wait < 8; wait += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 250))
-        metadataPoints = await qdrant.retrieve(collection, { ids: [VECTOR_METADATA_POINT_ID], with_payload: true, with_vector: false })
+        const postAdoptionCount = await qdrant.count(collection, { exact: true })
+        if (postAdoptionCount.count !== 1) {
+          await qdrant.delete(collection, { wait: true, ordering: "strong", points: [VECTOR_METADATA_POINT_ID] })
+          throw new Error("qdrant_collection_incompatible")
+        }
       }
       if (!metadataPoints.length) throw new Error("qdrant_collection_incompatible")
       validateVectorMetadata(metadataPoints[0].payload, expectedMetadata)
@@ -374,6 +403,7 @@ async function bootstrapQdrant() {
         { field_name: "classroom_id", field_schema: "keyword" },
         { field_name: "source_type", field_schema: "keyword" },
         { field_name: "source_id", field_schema: "keyword" },
+        { field_name: "publication_attempt_id", field_schema: "keyword" },
         { field_name: "active", field_schema: "bool" },
       ]
       for (const index of indexes) {
@@ -401,19 +431,42 @@ function sourceFilter(document) {
   ] }
 }
 
-async function compensateVectorPublication(qdrant, collection, document, pointIds) {
+async function compensateVectorPublication(qdrant, collection, document, pointIds, publicationAttemptId) {
   if (!pointIds.length) return
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    const client = await pool.connect()
     try {
+      await client.query("begin")
+      await client.query("set local idle_in_transaction_session_timeout = '2 minutes'")
+      await lockSource(client, document)
+      const candidates = await qdrant.retrieve(collection, { ids: pointIds, with_payload: true, with_vector: false })
+      const ownedPointIds = selectPublicationPointIds(candidates, {
+        tenantId: configuredTenantId,
+        teacherId: document.teacher_id,
+        documentId: document.id,
+        version: document.version,
+        publicationAttemptId,
+      })
+      if (!ownedPointIds.length) {
+        await client.query("commit")
+        return
+      }
       await qdrant.delete(collection, { wait: true, ordering: "strong", filter: { must: [
         { key: "tenant_id", match: { value: configuredTenantId } },
         { key: "teacher_id", match: { value: document.teacher_id } },
-        { has_id: pointIds },
+        { key: "document_id", match: { value: document.id } },
+        { key: "version", match: { value: document.version } },
+        { key: "publication_attempt_id", match: { value: publicationAttemptId } },
+        { has_id: ownedPointIds },
       ] } })
+      await client.query("commit")
       return
     } catch {
+      await client.query("rollback").catch(() => {})
       if (attempt === 2) throw new Error("vector_compensation_failed")
       await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)))
+    } finally {
+      client.release()
     }
   }
 }
@@ -447,13 +500,13 @@ async function embed(job) {
     await client.query("begin")
     await client.query("set local idle_in_transaction_session_timeout = '3 minutes'")
     await client.query("set local statement_timeout = '2 minutes'")
-    const document = await currentDocumentUnderLock(client, data, initial)
+    const locked = await lockAuthorizedDocument(client, data, initial)
+    const document = locked.document
     if (!document) {
       await client.query("commit")
       return
     }
-    await lockAuthorizationRows(client, document)
-    const currentSource = await loadAuthorizedSource(document, client, true)
+    const currentSource = locked.source
     const currentText = normalizeDocumentText(`${currentSource.title}\n${currentSource.body ?? ""}`)
     if (hashContent(currentText) !== document.content_hash) throw new Error("stale_embedding_source")
     const chunksNow = await client.query(
@@ -463,7 +516,8 @@ async function embed(job) {
     )
     if (JSON.stringify(chunksNow.rows) !== JSON.stringify(chunksBefore.rows)) throw new Error("stale_embedding_input")
     const pointIds = chunksNow.rows.map((chunk) => chunk.id)
-    publication = { document, pointIds }
+    const publicationAttemptId = randomUUID()
+    publication = { document, pointIds, publicationAttemptId }
     const indexedAt = new Date().toISOString()
     await qdrant.delete(collection, { wait: true, ordering: "strong", filter: sourceFilter(document) })
     await qdrant.upsert(collection, {
@@ -487,6 +541,7 @@ async function embed(job) {
           version: document.version,
           embedding_model: document.embedding_model,
           embedding_dimensions: dimensions,
+          publication_attempt_id: publicationAttemptId,
           indexed_at: indexedAt,
           active: true,
           kind: "internal",
@@ -510,7 +565,9 @@ async function embed(job) {
     await client.query("rollback").catch(() => {})
     if (publication) {
       await compensatePublicationFailure(error, () =>
-        compensateVectorPublication(qdrant, collection, publication.document, publication.pointIds)
+        compensateVectorPublication(
+          qdrant, collection, publication.document, publication.pointIds, publication.publicationAttemptId
+        )
       )
     }
     throw error
@@ -521,21 +578,19 @@ async function embed(job) {
 
 async function deleteDocument(job) {
   const data = parseJob(job)
-  const initial = await documentForJob(pool, data)
-  assertSourcePayload(data, initial)
+  const initial = await documentForDeletion(pool, data)
   if (!initial.is_current) return
   const { qdrant, collection } = qdrantProvider()
   const client = await pool.connect()
   try {
     await client.query("begin")
     await client.query("set local idle_in_transaction_session_timeout = '3 minutes'")
-    const document = await currentDocumentUnderLock(client, data, initial)
-    if (!document) {
+    await lockSource(client, initial)
+    const document = await documentForDeletion(client, data, true)
+    if (!documentJobMatchesCurrent(data, document)) {
       await client.query("commit")
       return
     }
-    assertSourcePayload(data, document)
-    await lockAuthorizationRows(client, document)
     await qdrant.delete(collection, { wait: true, ordering: "strong", filter: sourceFilter(document) })
     await client.query(
       `update public.ai_documents set status = 'deleted', deleted_at = timezone('utc'::text, now()),
@@ -608,24 +663,29 @@ async function currentDocumentBySource(client, teacherId, sourceType, sourceId) 
   const result = await client.query(
     `select d.id, d.teacher_id, d.classroom_id, d.source_type, d.source_id,
             d.version, d.embedding_model, d.embedding_dimensions
-       from public.ai_documents d join public.profiles p on p.id = d.teacher_id
+       from public.ai_documents d
       where d.teacher_id = $1 and d.source_type = $2 and d.source_id = $3
-        and d.is_current and d.status = 'indexed'
-        and p.user_type = 'professor' and p.account_status = 'active'
-        and p.deleted_at is null
-      for update of d`,
+        and d.is_current and d.status = 'indexed'`,
     [teacherId, sourceType, sourceId]
   )
   if (!result.rowCount) return null
   const document = result.rows[0]
   try {
-    await lockAuthorizationRows(client, document)
     await loadAuthorizedSource(document, client, true)
+    await lockContentItemAssociation(client, document)
+    await lockRemainingAuthorizers(client, document)
   } catch (error) {
-    if (!(error instanceof Error) || error.message !== "unauthorized_ai_source") throw error
+    if (!(error instanceof Error) || !["unauthorized_ai_source", "unauthorized_ai_teacher", "unauthorized_ai_classroom"].includes(error.message)) throw error
+    await client.query("select id from public.ai_documents where id = $1 and teacher_id = $2 for update", [document.id, document.teacher_id])
     await markRevokedDocument(client, document)
     return null
   }
+  const locked = await client.query(
+    `select id from public.ai_documents where id = $1 and teacher_id = $2
+      and is_current and status = 'indexed' for update`,
+    [document.id, document.teacher_id]
+  )
+  if (!locked.rowCount) return null
   const chunks = await client.query(
     `select id, chunk_index, content_hash from public.ai_document_chunks
       where document_id = $1 and teacher_id = $2 order by chunk_index for update`,
@@ -682,12 +742,13 @@ async function enqueueMissingDocument(documentId, data) {
   const client = await pool.connect()
   try {
     await client.query("begin")
-    const document = await currentDocumentUnderLock(client, {
+    const locked = await lockAuthorizedDocument(client, {
       ...data,
       documentId,
       documentVersion: initial.version,
       embeddingModel: initial.embedding_model,
     }, initial)
+    const document = locked.document
     if (document) {
       await client.query(
         `insert into public.outbox_events
