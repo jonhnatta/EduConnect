@@ -7,6 +7,11 @@ const MAX_STRING_LENGTH = 8_000
 const SENSITIVE_KEY = /(password|secret|token|authorization|cookie|apikey|answerkey|gabarito|headers?)/i
 const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi
 const CPF = /\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g
+const CNPJ = /\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g
+const PHONE = /(?<!\d)(?:\+?55\s*)?(?:\(?\d{2}\)?\s*)?(?:9\s*)?\d{4}[-\s]?\d{4}(?!\d)/g
+const JWT = /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g
+const RAW_API_SECRET = /\b(?:sk|pk)-(?:proj-)?[A-Za-z0-9_-]{6,}\b/gi
+const CONTEXTUAL_NAME = /\b(alun[oa]|student|nome)\s*(?::|=)?\s+([A-ZÀ-ÖØ-Þ][\p{L}'’-]+(?:\s+[A-ZÀ-ÖØ-Þ][\p{L}'’-]+){1,4})/gu
 const PII_KEY = /(cpf|studentname|alun[oa]|fullname|nomecompleto)/i
 const SAFE_TEXT_KEY = /^(?:tenantId|teacherId|classroomId|documentId|sourceId|runId|traceId|correlationId|eventId|category|decision|reasonCode|policyVersion|status|model|provider|toolName)$/
 const SAFE_TEXT_VALUE = /^[a-zA-Z0-9_.:@/-]{1,200}$/
@@ -14,6 +19,23 @@ const SAFE_TEXT_VALUE = /^[a-zA-Z0-9_.:@/-]{1,200}$/
 function isSensitiveKey(key: string): boolean {
   const normalized = key.replace(/[^a-z0-9]/gi, "")
   return normalized.toLowerCase() === "auth" || SENSITIVE_KEY.test(normalized) || PII_KEY.test(normalized)
+}
+
+function sanitizeTelemetryText(value: string): string {
+  return value
+    .replace(/["']?\bauthorization\b["']?\s*[:=]\s*["']?(?:bearer|basic)\s+[^\s,;"'}]+["']?/gi, "Authorization: [authorization-redacted]")
+    .replace(/\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "[authorization-redacted]")
+    .replace(/["']?\b(?:set-cookie|cookie)\b["']?\s*:\s*["']?[^\r\n"'}]+["']?/gi, "Cookie: [cookie-redacted]")
+    .replace(JWT, "[token-redacted]")
+    .replace(RAW_API_SECRET, "[secret-redacted]")
+    .replace(/["']?\b(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|session(?:id)?|token)\b["']?\s*(?::|=|\bis\b|\bé\b)\s*["']?[^\s,;"'}]+["']?/gi, "[secret-redacted]")
+    .replace(/\b(?:senha|password|passphrase)\b[^\r\n]{0,80}?\s(?:é|is)\s+["']?[^\s,;"']+/gi, "[secret-redacted]")
+    .replace(/["']?\b(?:senha|password|passphrase)\b["']?\s*[:=]\s*["']?[^\s,;"'}]+["']?/gi, "[secret-redacted]")
+    .replace(CONTEXTUAL_NAME, "$1 [name-redacted]")
+    .replace(EMAIL, "[email-redacted]")
+    .replace(CNPJ, "[cnpj-redacted]")
+    .replace(CPF, "[cpf-redacted]")
+    .replace(PHONE, "[phone-redacted]")
 }
 
 export type TelemetryOperation = {
@@ -40,9 +62,7 @@ export function sanitizeTelemetryValue(value: unknown): unknown {
 
   function sanitize(current: unknown, depth: number): unknown {
     if (typeof current === "string") {
-      return current.slice(0, MAX_STRING_LENGTH)
-        .replace(EMAIL, "[email-redacted]")
-        .replace(CPF, "[cpf-redacted]")
+      return sanitizeTelemetryText(current.slice(0, MAX_STRING_LENGTH))
     }
     if (current === null || typeof current === "boolean") return current
     if (typeof current === "number") return Number.isFinite(current) ? current : "[non-finite]"

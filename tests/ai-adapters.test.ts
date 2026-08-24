@@ -389,6 +389,43 @@ test("full telemetry content requires explicit sampled opt-in and remains saniti
   assert.doesNotMatch(trace, /123\.456\.789-09|aluna@example\.com/)
 })
 
+test("sampled telemetry redacts secrets and contextual PII from free text", async () => {
+  const exported: unknown[] = []
+  const telemetry = new LangfuseTelemetry({
+    propagateAttributes: (_attributes, callback) => callback(),
+    startActiveObservation: (_name, callback) =>
+      callback({ update: (value: unknown) => exported.push(value) }),
+  }, { captureContent: true, sampleRate: 1, random: () => 0 })
+  const safeLesson = "A fotossíntese converte energia luminosa em energia química."
+  const sensitive = [
+    "Authorization: Bearer sk-proj-segredo",
+    "A senha do aluno João Silva é segredo123",
+    "Cookie: session=valor-sensivel",
+    "nome: Maria Oliveira, CPF 123.456.789-09, CNPJ 12.345.678/0001-90",
+    "email maria@example.com telefone +55 (11) 98765-4321",
+    "token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.assinatura-secreta",
+    "api_key=api-super-secret password=senha-super-secreta Set-Cookie: sid=abc123",
+    '{"authorization":"Bearer bearer-json-secret","password":"json-password-secret","cookie":"session=json-cookie-secret"}',
+  ].join("\n")
+
+  await telemetry.trace({ name: "copilot.answer", input: `${safeLesson}\n${sensitive}` }, async () => ({
+    text: `${safeLesson}\n${sensitive}`,
+  }))
+
+  const trace = JSON.stringify(exported)
+  assert.match(trace, /fotossíntese converte energia luminosa/)
+  for (const plaintext of [
+    "sk-proj-segredo", "segredo123", "João Silva", "valor-sensivel",
+    "Maria Oliveira", "123.456.789-09", "12.345.678/0001-90",
+    "maria@example.com", "98765-4321", "eyJhbGciOiJIUzI1NiJ9",
+    "api-super-secret", "senha-super-secreta", "sid=abc123",
+    "bearer-json-secret", "json-password-secret", "json-cookie-secret",
+  ]) {
+    assert.equal(trace.includes(plaintext), false, plaintext)
+  }
+  assert.match(trace, /\[authorization-redacted\]|\[secret-redacted\]|\[name-redacted\]/)
+})
+
 test("Langfuse telemetry failures never replace or repeat the application callback", async () => {
   const telemetryFailure = new Error("telemetry failed")
   const scenarios = [
