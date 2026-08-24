@@ -56,6 +56,19 @@ export function validateCollectionDimensions(collection, expectedDimensions) {
   }
 }
 
+export function validateVectorMetadata(actual, expected) {
+  if (!actual || actual.embedding_model !== expected.embedding_model ||
+      actual.schema_version !== expected.schema_version || actual.dimensions !== expected.dimensions ||
+      String(actual.distance).toLowerCase() !== String(expected.distance).toLowerCase()) {
+    throw new Error("qdrant_collection_incompatible")
+  }
+}
+
+export async function compensatePublicationFailure(error, compensate) {
+  await compensate()
+  throw error
+}
+
 const HTML_ENTITIES = { amp: "&", apos: "'", gt: ">", lt: "<", nbsp: " ", quot: '"' }
 function decodeHtmlEntities(value) {
   return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, code) => {

@@ -6,6 +6,7 @@ import { QdrantClient } from "@qdrant/js-client-rest"
 import {
   chunkNormalizedDocument,
   collectQdrantPages,
+  compensatePublicationFailure,
   documentJobMatchesCurrent,
   hashContent,
   normalizeDocumentText,
@@ -13,6 +14,7 @@ import {
   partitionAuthorizedDocuments,
   planReconciliation,
   validateCollectionDimensions,
+  validateVectorMetadata,
 } from "./ai-ingestion-core.mjs"
 import { log, logError, redisConnection } from "./runtime.mjs"
 
@@ -22,10 +24,13 @@ const namespace = process.env.REDIS_NAMESPACE
 const configuredTenantId = process.env.AI_TENANT_ID || "educonnect"
 const configuredEmbeddingModel = process.env.OPENAI_EMBEDDING_MODEL?.trim() || "text-embedding-3-small"
 const configuredEmbeddingDimensions = Number(process.env.AI_EMBEDDING_DIMENSIONS || "1536")
+const configuredVectorSchemaVersion = Number(process.env.AI_VECTOR_SCHEMA_VERSION || "1")
+const VECTOR_METADATA_POINT_ID = "00000000-0000-4000-8000-000000000001"
 if (!databaseUrl) throw new Error("Missing env var: DATABASE_URL")
 if (!redisUrl) throw new Error("Missing env var: REDIS_QUEUE_URL")
 if (!namespace) throw new Error("Missing env var: REDIS_NAMESPACE")
 if (!Number.isInteger(configuredEmbeddingDimensions) || configuredEmbeddingDimensions <= 0) throw new Error("invalid_embedding_dimensions")
+if (!Number.isInteger(configuredVectorSchemaVersion) || configuredVectorSchemaVersion <= 0) throw new Error("invalid_vector_schema_version")
 
 const pool = new pg.Pool({
   connectionString: databaseUrl,
@@ -129,6 +134,30 @@ async function lockSource(client, document) {
   await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [sourceLockKey(document)])
 }
 
+async function lockAuthorizationRows(client, document) {
+  const profile = await client.query(
+    `select id from public.profiles where id = $1 and user_type = 'professor'
+       and account_status = 'active' and deleted_at is null for update`,
+    [document.teacher_id]
+  )
+  if (profile.rowCount !== 1) throw new Error("unauthorized_ai_teacher")
+  if (document.classroom_id) {
+    const classroom = await client.query(
+      `select id from public.classrooms where id = $1 and professor_id = $2 for update`,
+      [document.classroom_id, document.teacher_id]
+    )
+    if (classroom.rowCount !== 1) throw new Error("unauthorized_ai_classroom")
+  }
+  if (document.source_type === "content_item" && document.classroom_id) {
+    const association = await client.query(
+      `select content_item_id from public.content_item_classrooms
+        where content_item_id = $1 and classroom_id = $2 for update`,
+      [document.source_id, document.classroom_id]
+    )
+    if (association.rowCount !== 1) throw new Error("unauthorized_ai_source")
+  }
+}
+
 async function documentForJob(executor, data, forUpdate = false) {
   const result = await executor.query(
     `select d.id, d.teacher_id, d.classroom_id, d.source_type, d.source_id,
@@ -210,12 +239,15 @@ async function ingest(job) {
   const client = await pool.connect()
   try {
     await client.query("begin")
+    await client.query("set local idle_in_transaction_session_timeout = '3 minutes'")
+    await client.query("set local statement_timeout = '2 minutes'")
     const document = await currentDocumentUnderLock(client, data, initial)
     if (!document) {
       await client.query("commit")
       return
     }
     assertSourcePayload(data, document)
+    await lockAuthorizationRows(client, document)
     const source = await loadAuthorizedSource(document, client, true)
     const text = normalizeDocumentText(`${source.title}\n${source.body ?? ""}`)
     if (!text) throw new Error("empty_ai_source")
@@ -292,6 +324,8 @@ function qdrantConflict(error) {
 async function bootstrapQdrant() {
   const { qdrant, collection } = qdrantProvider()
   let details
+  let createdHere = false
+  let creationRace = false
   for (let attempt = 0; attempt < 8; attempt += 1) {
     try {
       await qdrant.getCollections()
@@ -303,12 +337,37 @@ async function bootstrapQdrant() {
           await qdrant.createCollection(collection, {
             vectors: { size: configuredEmbeddingDimensions, distance: "Cosine" },
           })
+          createdHere = true
         } catch (createError) {
           if (!qdrantConflict(createError)) throw createError
+          creationRace = true
         }
         details = await qdrant.getCollection(collection)
       }
       validateCollectionDimensions(details, configuredEmbeddingDimensions)
+      const expectedMetadata = {
+        embedding_model: configuredEmbeddingModel,
+        schema_version: configuredVectorSchemaVersion,
+        dimensions: configuredEmbeddingDimensions,
+        distance: "Cosine",
+      }
+      let metadataPoints = await qdrant.retrieve(collection, { ids: [VECTOR_METADATA_POINT_ID], with_payload: true, with_vector: false })
+      if (!metadataPoints.length && createdHere) {
+        const sentinelVector = Array(configuredEmbeddingDimensions).fill(0)
+        sentinelVector[0] = 1
+        await qdrant.upsert(collection, { wait: true, ordering: "strong", points: [{
+          id: VECTOR_METADATA_POINT_ID,
+          vector: sentinelVector,
+          payload: { tenant_id: "__system__", active: false, kind: "vector_metadata", ...expectedMetadata },
+        }] })
+        metadataPoints = await qdrant.retrieve(collection, { ids: [VECTOR_METADATA_POINT_ID], with_payload: true, with_vector: false })
+      }
+      for (let wait = 0; !metadataPoints.length && creationRace && wait < 8; wait += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 250))
+        metadataPoints = await qdrant.retrieve(collection, { ids: [VECTOR_METADATA_POINT_ID], with_payload: true, with_vector: false })
+      }
+      if (!metadataPoints.length) throw new Error("qdrant_collection_incompatible")
+      validateVectorMetadata(metadataPoints[0].payload, expectedMetadata)
       const indexes = [
         { field_name: "tenant_id", field_schema: "keyword" },
         { field_name: "teacher_id", field_schema: "keyword" },
@@ -342,6 +401,23 @@ function sourceFilter(document) {
   ] }
 }
 
+async function compensateVectorPublication(qdrant, collection, document, pointIds) {
+  if (!pointIds.length) return
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await qdrant.delete(collection, { wait: true, ordering: "strong", filter: { must: [
+        { key: "tenant_id", match: { value: configuredTenantId } },
+        { key: "teacher_id", match: { value: document.teacher_id } },
+        { has_id: pointIds },
+      ] } })
+      return
+    } catch {
+      if (attempt === 2) throw new Error("vector_compensation_failed")
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)))
+    }
+  }
+}
+
 async function embed(job) {
   const data = parseJob(job)
   const initial = await documentForJob(pool, data)
@@ -366,13 +442,17 @@ async function embed(job) {
   }
 
   const client = await pool.connect()
+  let publication = null
   try {
     await client.query("begin")
+    await client.query("set local idle_in_transaction_session_timeout = '3 minutes'")
+    await client.query("set local statement_timeout = '2 minutes'")
     const document = await currentDocumentUnderLock(client, data, initial)
     if (!document) {
       await client.query("commit")
       return
     }
+    await lockAuthorizationRows(client, document)
     const currentSource = await loadAuthorizedSource(document, client, true)
     const currentText = normalizeDocumentText(`${currentSource.title}\n${currentSource.body ?? ""}`)
     if (hashContent(currentText) !== document.content_hash) throw new Error("stale_embedding_source")
@@ -382,10 +462,13 @@ async function embed(job) {
       [document.id, document.teacher_id]
     )
     if (JSON.stringify(chunksNow.rows) !== JSON.stringify(chunksBefore.rows)) throw new Error("stale_embedding_input")
+    const pointIds = chunksNow.rows.map((chunk) => chunk.id)
+    publication = { document, pointIds }
     const indexedAt = new Date().toISOString()
-    await qdrant.delete(collection, { wait: true, filter: sourceFilter(document) })
+    await qdrant.delete(collection, { wait: true, ordering: "strong", filter: sourceFilter(document) })
     await qdrant.upsert(collection, {
       wait: true,
+      ordering: "strong",
       points: chunksNow.rows.map((chunk, index) => ({
         id: chunk.id,
         vector: ordered[index].embedding,
@@ -422,8 +505,14 @@ async function embed(job) {
       [document.id, document.teacher_id, dimensions, document.version, document.embedding_model]
     )
     await client.query("commit")
+    publication = null
   } catch (error) {
     await client.query("rollback").catch(() => {})
+    if (publication) {
+      await compensatePublicationFailure(error, () =>
+        compensateVectorPublication(qdrant, collection, publication.document, publication.pointIds)
+      )
+    }
     throw error
   } finally {
     client.release()
@@ -439,13 +528,15 @@ async function deleteDocument(job) {
   const client = await pool.connect()
   try {
     await client.query("begin")
+    await client.query("set local idle_in_transaction_session_timeout = '3 minutes'")
     const document = await currentDocumentUnderLock(client, data, initial)
     if (!document) {
       await client.query("commit")
       return
     }
     assertSourcePayload(data, document)
-    await qdrant.delete(collection, { wait: true, filter: sourceFilter(document) })
+    await lockAuthorizationRows(client, document)
+    await qdrant.delete(collection, { wait: true, ordering: "strong", filter: sourceFilter(document) })
     await client.query(
       `update public.ai_documents set status = 'deleted', deleted_at = timezone('utc'::text, now()),
          error_code = null where id = $1 and teacher_id = $2 and is_current
@@ -528,6 +619,7 @@ async function currentDocumentBySource(client, teacherId, sourceType, sourceId) 
   if (!result.rowCount) return null
   const document = result.rows[0]
   try {
+    await lockAuthorizationRows(client, document)
     await loadAuthorizedSource(document, client, true)
   } catch (error) {
     if (!(error instanceof Error) || error.message !== "unauthorized_ai_source") throw error

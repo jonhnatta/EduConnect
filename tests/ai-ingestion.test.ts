@@ -7,6 +7,7 @@ import {
   chunkDocument as chunkDocumentCore,
   chunkNormalizedDocument,
   collectQdrantPages,
+  compensatePublicationFailure,
   documentJobMatchesCurrent,
   hashContent,
   normalizeDocumentText,
@@ -14,6 +15,7 @@ import {
   partitionAuthorizedDocuments,
   planReconciliation,
   validateCollectionDimensions,
+  validateVectorMetadata,
 } from "../workers/ai-ingestion-core.mjs"
 import { QUEUE_NAMES } from "../lib/queue/contracts.ts"
 
@@ -86,6 +88,26 @@ test("Qdrant collection bootstrap validates configured vector dimensions", () =>
   assert.doesNotThrow(() => validateCollectionDimensions({ config: { params: { vectors: { size: 1536, distance: "Cosine" } } } }, 1536))
   assert.throws(() => validateCollectionDimensions({ config: { params: { vectors: { size: 3072, distance: "Cosine" } } } }, 1536), /qdrant_collection_incompatible/)
   assert.throws(() => validateCollectionDimensions({ config: { params: { vectors: { size: 1536, distance: "Dot" } } } }, 1536), /qdrant_collection_incompatible/)
+})
+
+test("Qdrant metadata sentinel rejects another model or schema at the same dimension", () => {
+  const expected = { embedding_model: "text-embedding-3-small", schema_version: 1, dimensions: 1536, distance: "Cosine" }
+  assert.doesNotThrow(() => validateVectorMetadata(expected, expected))
+  assert.throws(() => validateVectorMetadata({ ...expected, embedding_model: "local-e5" }, expected), /qdrant_collection_incompatible/)
+  assert.throws(() => validateVectorMetadata({ ...expected, schema_version: 2 }, expected), /qdrant_collection_incompatible/)
+})
+
+test("a timed-out or lost transaction compensates the exact attempted point ids", async () => {
+  const removed: string[][] = []
+  const pointIds = ["point-a", "point-b"]
+  await assert.rejects(
+    compensatePublicationFailure(new Error("transaction_lost_after_31s"), () => {
+      removed.push(pointIds)
+      return Promise.resolve()
+    }),
+    /transaction_lost_after_31s/
+  )
+  assert.deepEqual(removed, [pointIds])
 })
 
 test("AI queue contracts parse the strict dispatcher envelope", () => {
@@ -220,6 +242,9 @@ test("dedicated AI worker is tenant-safe and only consumes implemented queues", 
   assert.ok(embedBody.indexOf("openai.embeddings.create") < embedBody.indexOf('client.query("begin")'))
   assert.ok(embedBody.indexOf("loadAuthorizedSource(document, client, true)") < embedBody.indexOf("qdrant.delete"))
   assert.ok(embedBody.indexOf("qdrant.upsert") < embedBody.lastIndexOf('client.query("commit")'))
+  assert.match(embedBody, /set local idle_in_transaction_session_timeout = '3 minutes'/i)
+  assert.match(embedBody, /ordering:\s*"strong"/)
+  assert.match(embedBody, /compensateVectorPublication/)
 
   const reconcileStart = worker.indexOf("async function reconcile")
   const optionsStart = worker.indexOf("const workerOptions", reconcileStart)
@@ -236,6 +261,10 @@ test("dedicated AI worker is tenant-safe and only consumes implemented queues", 
     assert.match(worker, new RegExp(`field_name: ["']${field}["']`))
   }
   assert.match(worker, /getCollection\(/)
+  assert.match(worker, /VECTOR_METADATA_POINT_ID/)
+  assert.match(worker, /schema_version:\s*configuredVectorSchemaVersion/)
+  assert.match(worker, /active:\s*false/)
+  assert.match(worker, /tenant_id:\s*"__system__"/)
   assert.match(worker, /embedding\.length !== configuredEmbeddingDimensions/)
   assert.match(worker, /loadAuthorizedSource\(document, client, true\)/)
   assert.match(worker, /for update of (?:ci|m|a)/i)
@@ -246,6 +275,10 @@ test("dedicated AI worker is tenant-safe and only consumes implemented queues", 
   assert.doesNotMatch(reconcileBody, /embeddingProviders\(/)
   assert.match(worker, /status <> 'completed'[\s\S]*locked_until < timezone/)
   assert.match(worker, /set locked_until =[\s\S]*where job_key = \$1 and lease_owner = \$2 and status = 'processing'/)
+  assert.match(worker, /from public\.profiles[\s\S]*for update/i)
+  assert.match(worker, /from public\.classrooms[\s\S]*for update/i)
+  assert.match(worker, /from public\.content_item_classrooms[\s\S]*for update/i)
+  assert.match(worker, /has_id:\s*pointIds/)
 })
 
 test("reconciliation paginates and classifies missing, extra and orphan points", async () => {
