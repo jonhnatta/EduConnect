@@ -82,7 +82,22 @@ test("production config rejects remote HTTP and mismatched origins", () => {
     AUTH_URL: "http://localhost:3000",
     NEXT_PUBLIC_APP_URL: "http://localhost:3000",
     ALLOW_INSECURE_LOCAL_ORIGIN: "true",
+    FEATURE_AI_COPILOT: "false",
   }), [])
+  assert.deepEqual(productionConfigErrors({
+    ...common,
+    AUTH_URL: "http://localhost:3000",
+    NEXT_PUBLIC_APP_URL: "http://localhost:3000",
+    ALLOW_INSECURE_LOCAL_ORIGIN: "true",
+    FEATURE_AI_COPILOT: "true",
+  }), [
+    "OPENAI_API_KEY is required",
+    "QDRANT_URL is required",
+    "QDRANT_API_KEY is required",
+    "LANGFUSE_BASE_URL is required",
+    "LANGFUSE_PUBLIC_KEY is required",
+    "LANGFUSE_SECRET_KEY is required",
+  ])
 })
 
 test("blob serving paths are validated as a complete strict pathname", () => {

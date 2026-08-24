@@ -1,3 +1,5 @@
+import { aiConfigErrors } from "../ai/config.ts"
+
 const REQUIRED = [
   "AUTH_SECRET",
   "AUTH_URL",
@@ -82,6 +84,8 @@ export function productionConfigErrors(env: Environment): string[] {
       errors.push(`${name} must be a valid address`)
     }
   }
+
+  errors.push(...aiConfigErrors(env))
 
   return errors
 }
