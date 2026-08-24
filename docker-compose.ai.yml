@@ -1,0 +1,216 @@
+x-langfuse-environment: &langfuse-environment
+  HOSTNAME: 0.0.0.0
+  NEXTAUTH_URL: http://langfuse:3000
+  NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?LANGFUSE_NEXTAUTH_SECRET must be set}
+  DATABASE_URL: postgresql://langfuse:${LANGFUSE_DB_PASSWORD:?LANGFUSE_DB_PASSWORD must be set}@langfuse-postgres:5432/langfuse
+  SALT: ${LANGFUSE_SALT:?LANGFUSE_SALT must be set}
+  ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?LANGFUSE_ENCRYPTION_KEY must be set}
+  TELEMETRY_ENABLED: "false"
+  LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+  CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+  CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+  CLICKHOUSE_USER: langfuse
+  CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:?LANGFUSE_CLICKHOUSE_PASSWORD must be set}
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  REDIS_HOST: langfuse-redis
+  REDIS_PORT: "6379"
+  REDIS_AUTH: ${LANGFUSE_REDIS_PASSWORD:?LANGFUSE_REDIS_PASSWORD must be set}
+  REDIS_TLS_ENABLED: "false"
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_ACCESS_KEY:?LANGFUSE_MINIO_ACCESS_KEY must be set}
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_SECRET_KEY:?LANGFUSE_MINIO_SECRET_KEY must be set}
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: us-east-1
+  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_ACCESS_KEY:?LANGFUSE_MINIO_ACCESS_KEY must be set}
+  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_SECRET_KEY:?LANGFUSE_MINIO_SECRET_KEY must be set}
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+
+services:
+  app:
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      langfuse:
+        condition: service_healthy
+    environment:
+      FEATURE_AI_COPILOT: ${FEATURE_AI_COPILOT:-false}
+      FEATURE_AI_WEB_SEARCH: ${FEATURE_AI_WEB_SEARCH:-false}
+      FEATURE_AI_INTERNAL_RAG: ${FEATURE_AI_INTERNAL_RAG:-false}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_COPILOT_MODEL: ${OPENAI_COPILOT_MODEL:-gpt-5-mini}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set}
+      LANGFUSE_BASE_URL: http://langfuse:3000
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?LANGFUSE_PUBLIC_KEY must be set}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?LANGFUSE_SECRET_KEY must be set}
+      AI_DAILY_REQUEST_LIMIT: ${AI_DAILY_REQUEST_LIMIT:-20}
+      AI_MONTHLY_TOKEN_LIMIT: ${AI_MONTHLY_TOKEN_LIMIT:-1000000}
+
+  qdrant:
+    image: docker.io/qdrant/qdrant:v1.19.0@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set}
+    volumes:
+      - qdrantdata:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+
+  langfuse:
+    image: docker.io/langfuse/langfuse:3@sha256:91794d5f42ccd09ed624ff101ff49a8486b3fbedeef7e48c763d19525bc33c03
+    restart: unless-stopped
+    depends_on: &langfuse-dependencies
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+    environment:
+      <<: *langfuse-environment
+      LANGFUSE_INIT_ORG_ID: educonnect
+      LANGFUSE_INIT_ORG_NAME: EduConnect
+      LANGFUSE_INIT_PROJECT_ID: educonnect-copilot
+      LANGFUSE_INIT_PROJECT_NAME: EduConnect Copilot
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?LANGFUSE_PUBLIC_KEY must be set}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?LANGFUSE_SECRET_KEY must be set}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/public/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:3@sha256:9917beee1cb2b66e698f5daf23ae0bc6af375233c0395a1a5c80eaa7535fe905
+    restart: unless-stopped
+    depends_on: *langfuse-dependencies
+    environment:
+      <<: *langfuse-environment
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3030/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+
+  langfuse-postgres:
+    image: docker.io/postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:?LANGFUSE_DB_PASSWORD must be set}
+      POSTGRES_DB: langfuse
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - langfuse-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+
+  langfuse-clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:25.12@sha256:8a790dd3468db22b1d4e7b18a176f378ff5ff6053b9c48dd4ea1fa71a24c5ba6
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:?LANGFUSE_CLICKHOUSE_PASSWORD must be set}
+      TZ: UTC
+    volumes:
+      - langfuse-clickhouse-data:/var/lib/clickhouse
+      - langfuse-clickhouse-logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+
+  langfuse-redis:
+    image: docker.io/redis:7.4.7-alpine@sha256:02f2cc4882f8bf87c79a220ac958f58c700bdec0dfb9b9ea61b62fb0e8f1bfcf
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory-policy
+      - noeviction
+      - --requirepass
+      - ${LANGFUSE_REDIS_PASSWORD:?LANGFUSE_REDIS_PASSWORD must be set}
+    environment:
+      REDISCLI_AUTH: ${LANGFUSE_REDIS_PASSWORD:?LANGFUSE_REDIS_PASSWORD must be set}
+    volumes:
+      - langfuse-redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+
+  langfuse-minio:
+    image: docker.io/minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mkdir -p /data/langfuse
+        exec minio server --address ":9000" --console-address ":9001" /data
+    environment:
+      MINIO_ROOT_USER: ${LANGFUSE_MINIO_ACCESS_KEY:?LANGFUSE_MINIO_ACCESS_KEY must be set}
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_SECRET_KEY:?LANGFUSE_MINIO_SECRET_KEY must be set}
+    volumes:
+      - langfuse-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+
+volumes:
+  qdrantdata:
+  langfuse-postgres-data:
+  langfuse-clickhouse-data:
+  langfuse-clickhouse-logs:
+  langfuse-redis-data:
+  langfuse-minio-data:

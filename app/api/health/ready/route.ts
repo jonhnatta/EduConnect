@@ -4,6 +4,7 @@ import { checkStorageReady } from "@/lib/blob"
 import { pingClamav } from "@/lib/security/clamav"
 import { pingRedis } from "@/lib/redis/health"
 import { assertProductionConfig } from "@/lib/config/production"
+import { checkAiDependenciesReady } from "@/lib/ai/health"
 
 export const dynamic = "force-dynamic"
 
@@ -21,7 +22,7 @@ export async function GET() {
     }>(
       `select to_regclass('public.users')::text as users,
               to_regclass('public.schema_migrations')::text as migrations,
-              exists (select 1 from public.schema_migrations where version = '00550') as current,
+              exists (select 1 from public.schema_migrations where version = '00560') as current,
               (
                 select count(*) = 2
                   from public.service_heartbeats
@@ -38,6 +39,7 @@ export async function GET() {
       pingClamav(),
       pingRedis(process.env.REDIS_QUEUE_URL!),
       pingRedis(process.env.REDIS_CACHE_URL!),
+      checkAiDependenciesReady(),
     ])
 
     return NextResponse.json(

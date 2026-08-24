@@ -10,6 +10,8 @@ next.user-config.*
 # Environment variables
 .env*.local
 .env
+.env.ai
+.env.ai.local
 client_secret_*.json
 
 # Google OAuth credentials

@@ -346,6 +346,10 @@ git commit -m "feat(ai): enforce beta access and atomic quotas"
 - Modify: `app/api/health/ready/route.ts`
 - Create: `lib/ai/health.ts`
 - Create: `tests/ai-infrastructure.test.ts`
+- Modify: `tests/production-security.test.ts`
+- Modify: `.env.docker.example`
+- Modify: `.env.production.example`
+- Modify: `docs/superpowers/plans/2026-08-24-ai-foundation-knowledge.md`
 
 - [ ] **Step 1: Escrever teste de fronteira operacional**
 
@@ -373,9 +377,9 @@ Expected: FAIL por compose ausente.
 
 - [ ] **Step 3: Criar compose de IA**
 
-Usar Qdrant `v1.19.0`, Langfuse server v4 e worker v4, ClickHouse e Postgres exclusivos do Langfuse. Reutilizar a rede interna do projeto, volumes nomeados e MinIO somente por credencial dedicada. Não publicar portas por padrão. Todos os serviços terão healthcheck e versões fixas.
+Usar Qdrant `v1.19.0` e as imagens oficiais Langfuse major 3 fixadas por digest, conforme o compose self-hosted atual. A documentação v4 não é uma tag de imagem. Usar ClickHouse, Postgres, Redis e MinIO exclusivos do Langfuse, todos com versão imutável ou digest. Reutilizar a rede interna do projeto, volumes nomeados e MinIO somente por credencial dedicada. Não publicar portas por padrão. Todos os serviços terão healthcheck, `no-new-privileges` e versões fixas.
 
-As variáveis mínimas serão `QDRANT_API_KEY`, `LANGFUSE_NEXTAUTH_SECRET`, `LANGFUSE_SALT`, `LANGFUSE_ENCRYPTION_KEY`, `LANGFUSE_DB_PASSWORD` e `LANGFUSE_CLICKHOUSE_PASSWORD`.
+As variáveis mínimas serão `QDRANT_API_KEY`, `LANGFUSE_NEXTAUTH_SECRET`, `LANGFUSE_SALT`, `LANGFUSE_ENCRYPTION_KEY`, `LANGFUSE_DB_PASSWORD`, `LANGFUSE_CLICKHOUSE_PASSWORD`, `LANGFUSE_REDIS_PASSWORD`, `LANGFUSE_MINIO_ACCESS_KEY`, `LANGFUSE_MINIO_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY` e `LANGFUSE_SECRET_KEY`.
 
 - [ ] **Step 4: Implementar health condicional**
 
@@ -402,7 +406,7 @@ Expected: PASS e código 0.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add docker-compose.ai.yml .gitignore app/api/health/ready/route.ts lib/ai/health.ts tests/ai-infrastructure.test.ts
+git add docker-compose.ai.yml .gitignore app/api/health/ready/route.ts lib/ai/health.ts tests/ai-infrastructure.test.ts tests/production-security.test.ts .env.docker.example .env.production.example docs/superpowers/plans/2026-08-24-ai-foundation-knowledge.md
 git commit -m "feat(ai): add private Qdrant and Langfuse services"
 ```
 
