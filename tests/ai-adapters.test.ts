@@ -362,7 +362,7 @@ test("Langfuse telemetry exports metadata only by default", async () => {
   assert.match(exported, /"length":/)
 })
 
-test("full telemetry content requires explicit sampled opt-in and remains sanitized", async () => {
+test("sampled opt-in never exports arbitrary free text", async () => {
   const exported: unknown[] = []
   const dependencies = {
     propagateAttributes: (_attributes: unknown, callback: () => unknown) => callback(),
@@ -385,11 +385,11 @@ test("full telemetry content requires explicit sampled opt-in and remains saniti
   })
   await sampled.trace({ name: "answer", input: { content: "conteúdo permitido", cpf: "123.456.789-09" } }, async () => ({ text: "resultado permitido", email: "aluna@example.com" }))
   const trace = JSON.stringify(exported)
-  assert.match(trace, /conteúdo permitido|resultado permitido/)
-  assert.doesNotMatch(trace, /123\.456\.789-09|aluna@example\.com/)
+  assert.doesNotMatch(trace, /conteúdo permitido|resultado permitido|123\.456\.789-09|aluna@example\.com/)
+  assert.match(trace, /"length":/)
 })
 
-test("sampled telemetry redacts secrets and contextual PII from free text", async () => {
+test("sampled telemetry never exports secrets, contextual PII or pedagogical free text", async () => {
   const exported: unknown[] = []
   const telemetry = new LangfuseTelemetry({
     propagateAttributes: (_attributes, callback) => callback(),
@@ -413,7 +413,7 @@ test("sampled telemetry redacts secrets and contextual PII from free text", asyn
   }))
 
   const trace = JSON.stringify(exported)
-  assert.match(trace, /fotossíntese converte energia luminosa/)
+  assert.doesNotMatch(trace, /fotossíntese converte energia luminosa/)
   for (const plaintext of [
     "sk-proj-segredo", "segredo123", "João Silva", "valor-sensivel",
     "Maria Oliveira", "123.456.789-09", "12.345.678/0001-90",
@@ -423,7 +423,7 @@ test("sampled telemetry redacts secrets and contextual PII from free text", asyn
   ]) {
     assert.equal(trace.includes(plaintext), false, plaintext)
   }
-  assert.match(trace, /\[authorization-redacted\]|\[secret-redacted\]|\[name-redacted\]/)
+  assert.match(trace, /"length":/)
 })
 
 test("Langfuse telemetry failures never replace or repeat the application callback", async () => {

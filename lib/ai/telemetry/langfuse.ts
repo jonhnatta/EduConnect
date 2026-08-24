@@ -227,10 +227,12 @@ export class LangfuseTelemetry implements Telemetry {
     callback: () => T | Promise<T>,
     asType: "span" | "generation"
   ): Promise<T> {
-    const captureContent = this.policy.captureContent && this.policy.random() < this.policy.sampleRate
-    const exportValue = (value: unknown) => captureContent
-      ? sanitizeTelemetryValue(value)
-      : metadataOnlyTelemetryValue(value)
+    // Arbitrary free text is never exportable. Regex-based redaction cannot prove
+    // that unstructured educational content is free from credentials or student PII.
+    // The policy fields remain accepted for configuration compatibility, but a future
+    // content-capture feature must use an explicitly classified, reviewed payload type.
+    void (this.policy.captureContent && this.policy.random() < this.policy.sampleRate)
+    const exportValue = metadataOnlyTelemetryValue
     let callbackPromise: Promise<T> | undefined
     const runCallbackOnce = () => {
       callbackPromise ??= Promise.resolve().then(callback)
