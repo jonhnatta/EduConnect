@@ -72,7 +72,7 @@ export interface LLMProvider {
 }
 
 export interface EmbeddingProvider {
-  embed(texts: readonly string[]): Promise<readonly number[][]>
+  embed(texts: readonly string[], signal?: AbortSignal): Promise<readonly number[][]>
 }
 
 export interface VectorStore {
@@ -83,7 +83,7 @@ export interface VectorStore {
       payload: Record<string, unknown>
     }[]
   ): Promise<void>
-  deleteBySource(sourceId: string): Promise<void>
+  deleteBySource(sourceId: string, teacherId: string): Promise<void>
   search(input: {
     vector: readonly number[]
     teacherId: string

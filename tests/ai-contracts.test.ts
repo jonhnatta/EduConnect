@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { copilotResponseSchema } from "../lib/ai/contracts.ts"
+import { copilotResponseSchema, type VectorStore } from "../lib/ai/contracts.ts"
 
 const validResponse = {
   text: "A aprendizagem baseada em projetos pode aumentar o engajamento.",
@@ -115,4 +115,14 @@ test("rejects unsupported safety decisions", () => {
     }).success,
     false
   )
+})
+
+test("vector deletion contract requires source and teacher ownership", () => {
+  const store: VectorStore = {
+    upsert: async () => undefined,
+    deleteBySource: async (_sourceId, _teacherId) => undefined,
+    search: async () => [],
+  }
+
+  assert.equal(store.deleteBySource.length, 2)
 })

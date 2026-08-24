@@ -431,14 +431,21 @@ git commit -m "feat(ai): add private Qdrant and Langfuse services"
 ```ts
 import test from "node:test"
 import assert from "node:assert/strict"
-import { OpenAiProvider } from "../lib/ai/providers/openai.ts"
+import { OpenAiProvider, OpenAiEmbeddingProvider } from "../lib/ai/providers/openai.ts"
 import { NoopTelemetry } from "../lib/ai/telemetry/langfuse.ts"
 
-test("OpenAI adapter maps usage without leaking SDK types", async () => {
-  const client = { responses: { create: async () => ({ output_text: "ok", usage: { input_tokens: 4, output_tokens: 2 }, output: [] }) } }
+test("OpenAI adapter validates structured output and maps real usage", async () => {
+  const client = { responses: { create: async () => ({
+    output_text: JSON.stringify({
+      text: "Resposta fundamentada.",
+      citations: [{ kind: "internal", id: "c1", title: "Fonte", url: "/materiais/1", retrievedAt: "2026-08-24T12:00:00.000Z", excerpt: "Trecho de suporte." }],
+      safety: { decision: "approved", policyVersion: "2026-08-24", reasonCode: null },
+    }),
+    usage: { input_tokens: 4, output_tokens: 2 },
+  }) } }
   const provider = new OpenAiProvider(client as never, "test-model")
   const result = await provider.generate({ system: "system", user: "user" })
-  assert.equal(result.text, "ok")
+  assert.equal(result.text, "Resposta fundamentada.")
   assert.deepEqual(result.usage, { inputTokens: 4, outputTokens: 2 })
 })
 
@@ -455,9 +462,15 @@ Expected: FAIL por módulos ausentes.
 
 - [ ] **Step 3: Implementar adapters**
 
-OpenAI usará `client.responses.create`, timeout de 30 segundos e saídas estruturadas. Qdrant encapsulará `@qdrant/js-client-rest` e sempre exigirá `teacherId`. Langfuse usará SDK v5, `propagateAttributes` e `startActiveObservation`, com input e output sanitizados.
+OpenAI usará `client.responses.create` com `instructions`, `input`, `store: false` e Structured Outputs estrito em `text.format`. O formato gerado pelo modelo conterá somente texto, citações e safety. O adapter fará parse de `output_text`, validará o JSON com Zod e acrescentará o usage real de `response.usage`. Resposta vazia, JSON malformado, usage ausente ou inválido falharão de forma fechada sem incluir o output bruto no erro. Ferramentas serão copiadas somente após validação estrutural.
 
-`instrumentation.ts` deverá registrar `LangfuseSpanProcessor` apenas no runtime Node e somente quando as chaves existirem.
+As chamadas OpenAI usarão timeout de 30 segundos, `maxRetries: 0` e o `AbortSignal` recebido. `OpenAiEmbeddingProvider` chamará `embeddings.create`, preservará a ordem pelo index e validará completude, finitude e dimensão uniforme dos vetores sem expor tipos do SDK nos contratos.
+
+Qdrant encapsulará um cliente estreito de `@qdrant/js-client-rest`. Upsert exigirá payload completo com `teacher_id`, `source_id`, `active` e os metadados de Citation antes de chamar o cliente. Search sempre filtrará `teacher_id`, `active: true` e `classroom_id` quando informado, e revalidará o escopo depois da resposta. `deleteBySource(sourceId, teacherId)` usará os dois campos no filtro para impedir exclusão entre tenants.
+
+Langfuse usará SDK v5, `propagateAttributes` e `startActiveObservation`, com input e output sanitizados recursivamente. Chaves sensíveis, emails, headers, erros, AbortSignal, ciclos, profundidade e tamanho serão tratados antes da exportação.
+
+`instrumentation.ts` deverá importar OpenTelemetry e Langfuse dinamicamente, registrar `LangfuseSpanProcessor` apenas no runtime Node e somente quando URL e chaves forem válidas. O registro será deduplicado via `globalThis` para suportar hot reload, e o processor receberá o mesmo sanitizador como `mask`.
 
 - [ ] **Step 4: Executar testes**
 
