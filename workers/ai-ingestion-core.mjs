@@ -68,6 +68,22 @@ export function collectionCanAdoptMetadata(metadataPoints, exactPointCount) {
   return Array.isArray(metadataPoints) && metadataPoints.length === 0 && exactPointCount === 0
 }
 
+export async function withTimedBootstrapLock(options, operation) {
+  const deadline = Date.now() + options.timeoutMs
+  let acquired = false
+  try {
+    while (!acquired) {
+      acquired = await options.tryAcquire()
+      if (acquired) break
+      if (Date.now() >= deadline) throw new Error("qdrant_bootstrap_lock_timeout")
+      await (options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))))(options.retryMs)
+    }
+    return await operation()
+  } finally {
+    if (acquired) await options.release()
+  }
+}
+
 export function selectPublicationPointIds(points, expected) {
   if (!Array.isArray(points)) throw new Error("invalid_publication_points")
   return points.filter((point) => {

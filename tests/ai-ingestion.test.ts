@@ -18,6 +18,7 @@ import {
   selectPublicationPointIds,
   validateCollectionDimensions,
   validateVectorMetadata,
+  withTimedBootstrapLock,
 } from "../workers/ai-ingestion-core.mjs"
 import { QUEUE_NAMES } from "../lib/queue/contracts.ts"
 
@@ -103,6 +104,31 @@ test("a collection without metadata can only be adopted while proven empty", () 
   assert.equal(collectionCanAdoptMetadata([], 0), true)
   assert.equal(collectionCanAdoptMetadata([], 1), false)
   assert.equal(collectionCanAdoptMetadata([{ id: "sentinel" }], 1), false)
+})
+
+test("collection bootstrap serializes competing models and rejects the second space", async () => {
+  let locked = false
+  let metadata: Record<string, unknown> | null = null
+  const acquire = async () => {
+    if (locked) return false
+    locked = true
+    return true
+  }
+  const release = async () => { locked = false }
+  const run = (embeddingModel: string) => withTimedBootstrapLock({
+    tryAcquire: acquire,
+    release,
+    timeoutMs: 1_000,
+    retryMs: 1,
+  }, async () => {
+    const expected = { embedding_model: embeddingModel, schema_version: 1, dimensions: 1536, distance: "Cosine" }
+    if (metadata) validateVectorMetadata(metadata, expected)
+    else metadata = expected
+  })
+
+  const results = await Promise.allSettled([run("model-a"), run("model-b")])
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1)
+  assert.equal(results.filter((result) => result.status === "rejected").length, 1)
 })
 
 test("a timed-out or lost transaction compensates the exact attempted point ids", async () => {
@@ -312,13 +338,19 @@ test("dedicated AI worker is tenant-safe and only consumes implemented queues", 
   assert.match(worker, /await lockSource\(client, document\)[\s\S]*compensateVectorPublication/)
   assert.match(worker, /qdrant\.count\(collection, \{ exact: true \}\)/)
   assert.match(worker, /collectionCanAdoptMetadata/)
+  assert.match(worker, /pg_try_advisory_lock/)
+  assert.match(worker, /pg_advisory_unlock/)
+  assert.match(worker, /finally[\s\S]*release/i)
 
   const authorizationStart = worker.indexOf("async function lockAuthorizedDocument")
   const authorizationEnd = worker.indexOf("async function documentForDeletion", authorizationStart)
   const authorizationBody = worker.slice(authorizationStart, authorizationEnd)
+  assert.ok(authorizationBody.indexOf("lockParentAuthorizers") < authorizationBody.indexOf("lockSource"))
+  assert.ok(authorizationBody.indexOf("lockSource") < authorizationBody.indexOf("loadAuthorizedSource"))
+  assert.ok(authorizationBody.indexOf("lockParentAuthorizers") < authorizationBody.indexOf("loadAuthorizedSource"))
   assert.ok(authorizationBody.indexOf("loadAuthorizedSource") < authorizationBody.indexOf("lockContentItemAssociation"))
-  assert.ok(authorizationBody.indexOf("lockContentItemAssociation") < authorizationBody.indexOf("lockRemainingAuthorizers"))
-  assert.ok(authorizationBody.indexOf("lockRemainingAuthorizers") < authorizationBody.indexOf("documentForJob"))
+  assert.ok(authorizationBody.indexOf("lockContentItemAssociation") < authorizationBody.indexOf("documentForJob"))
+  assert.match(authorizationBody, /stale_ai_document_scope/)
 })
 
 test("reconciliation paginates and classifies missing, extra and orphan points", async () => {

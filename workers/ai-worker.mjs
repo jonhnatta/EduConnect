@@ -17,6 +17,7 @@ import {
   selectPublicationPointIds,
   validateCollectionDimensions,
   validateVectorMetadata,
+  withTimedBootstrapLock,
 } from "./ai-ingestion-core.mjs"
 import { log, logError, redisConnection } from "./runtime.mjs"
 
@@ -146,7 +147,7 @@ async function lockContentItemAssociation(client, document) {
   if (association.rowCount !== 1) throw new Error("unauthorized_ai_source")
 }
 
-async function lockRemainingAuthorizers(client, document) {
+async function lockParentAuthorizers(client, document) {
   const profile = await client.query(
     `select id from public.profiles where id = $1 and user_type = 'professor'
        and account_status = 'active' and deleted_at is null for update`,
@@ -184,11 +185,15 @@ async function documentForJob(executor, data, forUpdate = false) {
 }
 
 async function lockAuthorizedDocument(client, data, initial) {
+  await lockParentAuthorizers(client, initial)
   await lockSource(client, initial)
   const source = await loadAuthorizedSource(initial, client, true)
   await lockContentItemAssociation(client, initial)
-  await lockRemainingAuthorizers(client, initial)
   const document = await documentForJob(client, data, true)
+  if (document.teacher_id !== initial.teacher_id || document.classroom_id !== initial.classroom_id ||
+      document.source_type !== initial.source_type || document.source_id !== initial.source_id) {
+    throw new Error("stale_ai_document_scope")
+  }
   return documentJobMatchesCurrent(data, document) ? { document, source } : { document: null, source: null }
 }
 
@@ -351,8 +356,7 @@ function qdrantConflict(error) {
   return error && typeof error === "object" && (error.status === 409 || /already exists/i.test(String(error.message)))
 }
 
-async function bootstrapQdrant() {
-  const { qdrant, collection } = qdrantProvider()
+async function bootstrapQdrantUnderLock(qdrant, collection) {
   let details
   for (let attempt = 0; attempt < 8; attempt += 1) {
     try {
@@ -370,7 +374,6 @@ async function bootstrapQdrant() {
         }
         details = await qdrant.getCollection(collection)
       }
-      validateCollectionDimensions(details, configuredEmbeddingDimensions)
       const expectedMetadata = {
         embedding_model: configuredEmbeddingModel,
         schema_version: configuredVectorSchemaVersion,
@@ -378,8 +381,9 @@ async function bootstrapQdrant() {
         distance: "Cosine",
       }
       let metadataPoints = await qdrant.retrieve(collection, { ids: [VECTOR_METADATA_POINT_ID], with_payload: true, with_vector: false })
+      const exactCount = await qdrant.count(collection, { exact: true })
+      validateCollectionDimensions(details, configuredEmbeddingDimensions)
       if (!metadataPoints.length) {
-        const exactCount = await qdrant.count(collection, { exact: true })
         if (!collectionCanAdoptMetadata(metadataPoints, exactCount.count)) throw new Error("qdrant_collection_incompatible")
         const sentinelVector = Array(configuredEmbeddingDimensions).fill(0)
         sentinelVector[0] = 1
@@ -419,6 +423,38 @@ async function bootstrapQdrant() {
       if (attempt === 7) throw new Error("qdrant_bootstrap_failed")
       await new Promise((resolve) => setTimeout(resolve, Math.min(5_000, 250 * (2 ** attempt))))
     }
+  }
+}
+
+async function bootstrapQdrant() {
+  const { qdrant, collection } = qdrantProvider()
+  const client = await pool.connect()
+  const lockName = `educonnect:qdrant-bootstrap:${collection}`
+  let lockAcquired = false
+  let lockReleased = false
+  try {
+    await withTimedBootstrapLock({
+      timeoutMs: 30_000,
+      retryMs: 250,
+      tryAcquire: async () => {
+        const result = await client.query(
+          "select pg_try_advisory_lock(hashtextextended($1, 0)) as acquired",
+          [lockName]
+        )
+        lockAcquired = result.rows[0]?.acquired === true
+        return lockAcquired
+      },
+      release: async () => {
+        const result = await client.query(
+          "select pg_advisory_unlock(hashtextextended($1, 0)) as released",
+          [lockName]
+        )
+        lockReleased = result.rows[0]?.released === true
+        if (!lockReleased) throw new Error("qdrant_bootstrap_unlock_failed")
+      },
+    }, () => bootstrapQdrantUnderLock(qdrant, collection))
+  } finally {
+    client.release(lockAcquired && !lockReleased)
   }
 }
 
@@ -671,9 +707,10 @@ async function currentDocumentBySource(client, teacherId, sourceType, sourceId) 
   if (!result.rowCount) return null
   const document = result.rows[0]
   try {
+    await lockParentAuthorizers(client, document)
+    await lockSource(client, document)
     await loadAuthorizedSource(document, client, true)
     await lockContentItemAssociation(client, document)
-    await lockRemainingAuthorizers(client, document)
   } catch (error) {
     if (!(error instanceof Error) || !["unauthorized_ai_source", "unauthorized_ai_teacher", "unauthorized_ai_classroom"].includes(error.message)) throw error
     await client.query("select id from public.ai_documents where id = $1 and teacher_id = $2 for update", [document.id, document.teacher_id])
@@ -710,7 +747,6 @@ async function deleteExtraPointIfStillExtra(qdrant, collection, point, expectedO
   const client = await pool.connect()
   try {
     await client.query("begin")
-    await lockSource(client, source)
     const current = await currentDocumentBySource(client, scope.teacherId, source.source_type, source.source_id)
     const fresh = await qdrant.retrieve(collection, { ids: [point.id], with_payload: true, with_vector: false })
     if (fresh.length) {
