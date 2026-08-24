@@ -37,24 +37,19 @@ As duas chaves AES devem ser Base64 que decodifica exatamente para 32 bytes. `AU
 Valide antes de criar containers:
 
 ```bash
-docker compose --profile production --profile operations config --quiet
-```
-
-Se o Copilot for habilitado, use o mesmo `.env` e inclua o overlay na validacao e no deploy:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.ai.yml \
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml \
   --profile production --profile operations config --quiet
-docker compose -f docker-compose.yml -f docker-compose.ai.yml \
-  --profile production up -d --build
 ```
 
 ## 3. Primeiro deploy
 
 ```bash
-docker compose --profile production up -d --build
-docker compose ps
-docker compose logs --no-color migrate minio-init dispatcher worker scheduler app caddy
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml \
+  --profile production up -d --build
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml \
+  --profile production ps
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml \
+  --profile production logs --no-color migrate minio-init dispatcher worker ai-worker scheduler app qdrant caddy
 curl --fail https://app.seu-dominio.com/api/health/live
 curl --fail https://app.seu-dominio.com/api/health/ready
 ```

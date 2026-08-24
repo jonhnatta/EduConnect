@@ -38,7 +38,7 @@ transacao. O dispatcher publica os eventos no BullMQ. O worker registra cada exe
 - Docker Engine com Compose v2 para executar a stack completa; ou
 - Node.js 24, npm, PostgreSQL, Redis e storage S3 compativel para execucao sem Docker.
 
-## Executar com Docker
+## Executar na VPS com Docker Compose
 
 1. Crie o arquivo de ambiente:
 
@@ -46,38 +46,35 @@ transacao. O dispatcher publica os eventos no BullMQ. O worker registra cada exe
 cp .env.example .env
 ```
 
-2. Troque todos os valores `CHANGE_ME_*` e o placeholder hexadecimal do Langfuse. Siga os
+2. Troque todos os valores `CHANGE_ME_*` e o placeholder hexadecimal do Langfuse. Na VPS,
+ajuste `APP_DOMAIN`, `AUTH_URL` e `NEXT_PUBLIC_APP_URL` para o dominio HTTPS real. Siga os
 comentarios de geracao do proprio arquivo. As senhas usadas em URLs devem conter somente
 caracteres URL-safe.
 
-3. Valide e suba a stack base:
+3. Valide a configuracao completa, incluindo a infraestrutura de IA:
 
 ```bash
-docker compose config --quiet
-docker compose up -d --build
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml --profile production config --quiet
 ```
 
-O overlay de IA e opt-in, mas usa o mesmo `.env`. Depois de provisionar as credenciais de
-OpenAI, Qdrant e Langfuse, valide e inicie com:
+4. Suba a stack:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.ai.yml config --quiet
-docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d --build
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml --profile production up -d --build
 ```
 
-4. Verifique os servicos:
+5. Verifique os servicos:
 
 ```bash
-docker compose ps
-docker compose logs migrate minio-init dispatcher worker app
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml --profile production ps
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml --profile production logs migrate minio-init dispatcher worker ai-worker app qdrant caddy
 curl --fail http://localhost:3000/api/health/live
 curl --fail http://localhost:3000/api/health/ready
 ```
 
-A aplicacao fica em `http://localhost:3000`. Use sempre esse origin no navegador: o
-callback OAuth e o cookie PKCE precisam usar o mesmo host (nao misture `localhost` com
-`127.0.0.1`). PostgreSQL, Redis e MinIO permanecem apenas na rede interna do Compose.
-Somente a porta HTTP da aplicacao e publicada no host.
+A aplicacao fica disponivel pelo dominio configurado no Caddy. PostgreSQL, Redis, MinIO,
+Qdrant e Langfuse permanecem apenas na rede interna do Compose. O callback OAuth e o cookie
+PKCE precisam usar exatamente a mesma origem HTTPS configurada em `AUTH_URL`.
 
 Servicos:
 
@@ -89,14 +86,10 @@ Servicos:
 - `minio-init`: cria bucket, usuario e policy minima;
 - `dispatcher`: entrega a outbox ao BullMQ;
 - `worker`: processa jobs de notificacao;
+- `ai-worker`: processa ingestao, embeddings, exclusao e reconciliacao do conhecimento;
+- `qdrant` e `langfuse`: infraestrutura privada do Copilot;
 - `scheduler`: agenda o purge de contas apos a retencao;
 - `app`: servidor Next.js sem privilegios.
-
-O perfil de producao adiciona o Caddy:
-
-```bash
-docker compose --profile production up -d --build
-```
 
 O perfil `operations` executa os jobs one-shot de backup de Postgres, MinIO e Restic. Consulte
 `docs/RUNBOOK_PRODUCAO_DOCKER.md` antes de usa-lo.
@@ -104,7 +97,7 @@ O perfil `operations` executa os jobs one-shot de backup de Postgres, MinIO e Re
 Para parar sem apagar dados:
 
 ```bash
-docker compose down
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml down
 ```
 
 Nao use `docker compose down -v` em ambientes com dados importantes, pois esse comando
