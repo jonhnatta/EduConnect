@@ -41,6 +41,7 @@ const MIGRATIONS = [
   ["00530", "feed_keyset_pagination", "scripts/049_feed_keyset_pagination.sql", "concurrent-indexes"],
   ["00540", "legal_consent_versions", "scripts/050_legal_consent_versions.sql"],
   ["00550", "trust_safety_reports", "scripts/051_trust_safety_reports.sql"],
+  ["00560", "ai_foundation", "scripts/052_ai_foundation.sql"],
 ]
 
 const databaseUrl = process.env.DATABASE_MIGRATION_URL ?? process.env.DATABASE_URL
