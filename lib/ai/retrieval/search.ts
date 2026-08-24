@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { QdrantClient } from "@qdrant/js-client-rest"
+import { QdrantClient, type QdrantClientParams } from "@qdrant/js-client-rest"
 import { citationSchema, type Citation, type EmbeddingProvider } from "../contracts.ts"
 import { buildKnowledgeFilter, type TrustedKnowledgeAccess } from "./authorize.ts"
 import {
@@ -32,14 +32,54 @@ export type HybridVectorClient = Readonly<{
   ): Promise<QueryBatchResponse>
 }>
 
+type QdrantLowLevelClient = Readonly<{
+  api(): Pick<ReturnType<QdrantClient["api"]>, "queryBatchPoints">
+}>
+
+type QdrantClientFactory = (config: QdrantClientParams) => QdrantLowLevelClient
+
 export function qdrantHybridClient(
-  client: Pick<QdrantClient, "queryBatch">
+  config: Readonly<{ url: string; apiKey: string; maxConnections?: number }>,
+  createClient: QdrantClientFactory = (options) => new QdrantClient(options)
 ): HybridVectorClient {
+  let url: URL
+  try {
+    url = new URL(config.url)
+  } catch {
+    throw new Error("invalid_qdrant_config")
+  }
+  if (!["http:", "https:"].includes(url.protocol) || !url.hostname || !config.apiKey.trim() ||
+      (config.maxConnections !== undefined &&
+        (!Number.isInteger(config.maxConnections) || config.maxConnections <= 0))) {
+    throw new Error("invalid_qdrant_config")
+  }
+  const client = createClient({
+    url: url.toString(),
+    apiKey: config.apiKey.trim(),
+    maxConnections: config.maxConnections,
+    // The SDK timeout middleware replaces RequestInit.signal. NaN disables that
+    // middleware so the retrieval deadline signal reaches the underlying fetch.
+    timeout: Number.NaN,
+    checkCompatibility: false,
+  })
   return {
-    queryBatch: async (collection, request) => await client.queryBatch(
-      collection,
-      request as Parameters<QdrantClient["queryBatch"]>[1]
-    ),
+    queryBatch: async (collection, request, options) => {
+      try {
+        const response = await client.api().queryBatchPoints(
+          {
+            collection_name: collection,
+            ...request,
+          } as Parameters<ReturnType<QdrantClient["api"]>["queryBatchPoints"]>[0],
+          { signal: options?.signal }
+        )
+        const result = response.data?.result
+        if (!response.ok || !Array.isArray(result)) throw new Error("invalid_qdrant_response")
+        return result
+      } catch {
+        if (options?.signal?.aborted) throw abortError()
+        throw new Error("qdrant_retrieval_failed")
+      }
+    },
   }
 }
 
@@ -70,6 +110,7 @@ export type KnowledgeSearchConfig = Readonly<{
   embeddingDimensions: number
   vectorSchemaVersion: number
   timeoutSeconds?: number
+  deadlineMs?: number
 }>
 
 const payloadSchema = z.object({
@@ -113,12 +154,32 @@ async function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<
   })
 }
 
+function retrievalCancellation(external: AbortSignal | undefined, deadlineMs: number): {
+  signal: AbortSignal
+  cleanup(): void
+} {
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  if (external?.aborted) abort()
+  else external?.addEventListener("abort", abort, { once: true })
+  const timeout = setTimeout(abort, deadlineMs)
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeout)
+      external?.removeEventListener("abort", abort)
+    },
+  }
+}
+
 function requireConfig(config: KnowledgeSearchConfig): void {
   if (!config.collection.trim() || !config.embeddingModel.trim() ||
       !Number.isInteger(config.embeddingDimensions) || config.embeddingDimensions <= 0 ||
       config.vectorSchemaVersion !== REQUIRED_VECTOR_SCHEMA_VERSION ||
       (config.timeoutSeconds !== undefined &&
-        (!Number.isInteger(config.timeoutSeconds) || config.timeoutSeconds <= 0 || config.timeoutSeconds > 300))) {
+        (!Number.isInteger(config.timeoutSeconds) || config.timeoutSeconds <= 0 || config.timeoutSeconds > 300)) ||
+      (config.deadlineMs !== undefined &&
+        (!Number.isInteger(config.deadlineMs) || config.deadlineMs <= 0 || config.deadlineMs > 120_000))) {
     throw new Error("invalid_retrieval_config")
   }
 }
@@ -211,7 +272,7 @@ export function reciprocalRankFusion(
     .map(({ id, score }) => ({ id, score }))
 }
 
-export async function searchKnowledge(
+async function searchKnowledgeWithSignal(
   input: Readonly<{
     access: TrustedKnowledgeAccess
     query: string
@@ -226,7 +287,6 @@ export async function searchKnowledge(
     config: KnowledgeSearchConfig
   }>
 ): Promise<readonly Citation[]> {
-  requireConfig(dependencies.config)
   const query = typeof input.query === "string" ? input.query.trim() : ""
   if (!query || query.length > MAX_QUERY_CHARS) throw new Error("invalid_retrieval_query")
   const limit = Math.min(input.limit ?? MAX_RESULTS, MAX_RESULTS)
@@ -239,7 +299,10 @@ export async function searchKnowledge(
   }
   throwIfAborted(input.signal)
 
-  const embeddings = await dependencies.embeddingProvider.embed([query], input.signal)
+  const embeddings = await withAbort(
+    dependencies.embeddingProvider.embed([query], input.signal),
+    input.signal
+  )
   throwIfAborted(input.signal)
   const dense = embeddings[0]
   if (embeddings.length !== 1 || !Array.isArray(dense) || dense.length !== dependencies.config.embeddingDimensions ||
@@ -284,10 +347,43 @@ export async function searchKnowledge(
     throwIfAborted(input.signal)
     const candidate = parsedById.get(rank.id)
     if (!candidate) continue
-    const trusted = await dependencies.sourceRepository.authorize(candidate.source, access, input.signal)
+    const trusted = await withAbort(
+      dependencies.sourceRepository.authorize(candidate.source, access, input.signal),
+      input.signal
+    )
     throwIfAborted(input.signal)
     if (!trusted || sourceDecision(candidate.source, trusted) === "stale") continue
     citations.push(candidate.citation)
   }
   return citations
+}
+
+export async function searchKnowledge(
+  input: Readonly<{
+    access: TrustedKnowledgeAccess
+    query: string
+    classroomId?: string
+    limit?: number
+    signal?: AbortSignal
+  }>,
+  dependencies: Readonly<{
+    embeddingProvider: EmbeddingProvider
+    vectorClient: HybridVectorClient
+    sourceRepository: KnowledgeSourceRepository
+    config: KnowledgeSearchConfig
+  }>
+): Promise<readonly Citation[]> {
+  requireConfig(dependencies.config)
+  const cancellation = retrievalCancellation(
+    input.signal,
+    dependencies.config.deadlineMs ?? 10_000
+  )
+  try {
+    return await searchKnowledgeWithSignal(
+      { ...input, signal: cancellation.signal },
+      dependencies
+    )
+  } finally {
+    cancellation.cleanup()
+  }
 }

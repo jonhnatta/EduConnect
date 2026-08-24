@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import type { QdrantClient } from "@qdrant/js-client-rest"
+import type { QdrantClient, QdrantClientParams } from "@qdrant/js-client-rest"
 import { buildKnowledgeFilter } from "../lib/ai/retrieval/authorize.ts"
 import {
   reciprocalRankFusion,
@@ -128,7 +128,11 @@ test("hybrid retrieval sends real named dense and sparse queries with one mandat
 
   assert.equal(result.length, 1)
   assert.equal(result[0].id, "chunk-1")
-  assert.deepEqual(deps.calls.embed[0], [["ângulos do triângulo"], signal])
+  const [embeddedTexts, propagatedSignal] = deps.calls.embed[0] as unknown as [readonly string[], AbortSignal]
+  assert.deepEqual(embeddedTexts, ["ângulos do triângulo"])
+  assert.ok(propagatedSignal instanceof AbortSignal)
+  assert.notEqual(propagatedSignal, signal)
+  assert.equal(propagatedSignal.aborted, false)
   const [collection, request, options] = deps.calls.query[0] as [string, Record<string, unknown>, Record<string, unknown>]
   assert.equal(collection, config.collection)
   assert.equal((request as { timeout: number }).timeout, 12)
@@ -140,20 +144,55 @@ test("hybrid retrieval sends real named dense and sparse queries with one mandat
   assert.deepEqual(searches[1].filter, searches[0].filter)
   assert.equal(searches[0].with_payload, true)
   assert.equal(searches[1].with_payload, true)
-  assert.deepEqual(options, { signal })
+  assert.deepEqual(options, { signal: propagatedSignal })
 })
 
 test("Qdrant SDK adapter forwards the batch shape supported by client 1.19", async () => {
   const calls: unknown[][] = []
-  const client = qdrantHybridClient({
-    queryBatch: async (...args: Parameters<QdrantClient["queryBatch"]>) => {
-      calls.push(args)
-      return [{ points: [] }, { points: [] }]
-    },
-  })
+  let clientConfig: QdrantClientParams | undefined
+  const client = qdrantHybridClient(
+    { url: "http://qdrant:6333", apiKey: "test-key" },
+    (options) => {
+      clientConfig = options
+      return {
+        api: () => ({
+          queryBatchPoints: async (...args: unknown[]) => {
+            calls.push(args)
+            return { ok: true, status: 200, data: { result: [{ points: [] }, { points: [] }] } }
+          },
+        }),
+      } as unknown as Pick<QdrantClient, "api">
+    }
+  )
+  assert.equal(Number.isNaN(clientConfig?.timeout), true)
+  assert.equal(clientConfig?.checkCompatibility, false)
+  const signal = AbortSignal.timeout(5_000)
   const request = { timeout: 10, searches: [] }
-  assert.deepEqual(await client.queryBatch("knowledge", request), [{ points: [] }, { points: [] }])
-  assert.deepEqual(calls, [["knowledge", request]])
+  assert.deepEqual(await client.queryBatch("knowledge", request, { signal }), [{ points: [] }, { points: [] }])
+  assert.deepEqual(calls, [[{
+    collection_name: "knowledge",
+    timeout: 10,
+    searches: [],
+  }, { signal }]])
+})
+
+test("Qdrant SDK adapter sanitizes transport errors", async () => {
+  const client = qdrantHybridClient(
+    { url: "http://qdrant:6333", apiKey: "test-key" },
+    () => ({
+      api: () => ({
+        queryBatchPoints: async () => {
+          throw new Error("https://qdrant.internal secret-api-key")
+        },
+      }),
+    }) as unknown as Pick<QdrantClient, "api">
+  )
+  await assert.rejects(client.queryBatch("knowledge", { searches: [] }), (error) => {
+    assert.ok(error instanceof Error)
+    assert.equal(error.message, "qdrant_retrieval_failed")
+    assert.doesNotMatch(error.message, /qdrant\.internal|secret-api-key/)
+    return true
+  })
 })
 
 test("RRF deduplicates each list, ignores unusable points and is stable", () => {
@@ -298,4 +337,46 @@ test("an in-flight Qdrant request is interrupted for the caller", async () => {
   assert.equal(queryStarted, true)
   controller.abort()
   await assert.rejects(result, (error) => error instanceof Error && error.name === "AbortError")
+})
+
+test("retrieval enforces and cleans up a local deadline without a caller signal", async () => {
+  const deps = dependencies()
+  let observedSignal: AbortSignal | undefined
+  await assert.rejects(searchKnowledge({ access, query: "deadline" }, {
+    ...deps.value,
+    config: { ...config, deadlineMs: 10 },
+    vectorClient: {
+      queryBatch: async (_collection, _request, options) => {
+        observedSignal = options?.signal
+        return await new Promise<QueryBatchResponse>((_resolve, reject) => {
+          observedSignal?.addEventListener(
+            "abort",
+            () => reject(new Error("raw transport timeout")),
+            { once: true }
+          )
+        })
+      },
+    },
+  }), (error) => {
+    assert.ok(error instanceof Error)
+    assert.equal(error.name, "AbortError")
+    assert.equal(error.message, "retrieval_aborted")
+    assert.doesNotMatch(error.message, /raw transport timeout/)
+    return true
+  })
+  assert.equal(observedSignal?.aborted, true)
+
+  let successfulSignal: AbortSignal | undefined
+  await searchKnowledge({ access, query: "rápido" }, {
+    ...deps.value,
+    config: { ...config, deadlineMs: 10 },
+    vectorClient: {
+      queryBatch: async (_collection, _request, options) => {
+        successfulSignal = options?.signal
+        return [{ points: [] }, { points: [] }]
+      },
+    },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(successfulSignal?.aborted, false)
 })
