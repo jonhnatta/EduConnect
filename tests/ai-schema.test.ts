@@ -63,6 +63,24 @@ test("AI states, counters and draft confirmation invariants are constrained", ()
   assert.match(sql, /ai_documents \([^;]*version integer not null check \(version > 0\)[^;]*status text not null default 'pending' check \(status in \('pending', 'extracting', 'embedding', 'indexed', 'failed', 'deleting', 'deleted'\)\)/)
 })
 
+test("AI beta access uses the monthly token quota contract", () => {
+  const sql = normalized(migrationSource())
+  const betaAccess = sql.match(/create table if not exists public\.ai_beta_access \(([^;]+)\);/)?.[1]
+
+  assert.ok(betaAccess, "ai_beta_access definition must exist")
+  assert.match(betaAccess, /monthly_token_limit bigint check \(monthly_token_limit is null or monthly_token_limit > 0\)/)
+  assert.doesNotMatch(betaAccess, /daily_token_limit/)
+})
+
+test("AI runs store fractional estimated cost", () => {
+  const sql = normalized(migrationSource())
+  const runs = sql.match(/create table if not exists public\.ai_runs \(([^;]+)\);/)?.[1]
+
+  assert.ok(runs, "ai_runs definition must exist")
+  assert.match(runs, /estimated_cost numeric\(18,8\) not null default 0 check \(estimated_cost >= 0\)/)
+  assert.doesNotMatch(runs, /estimated_cost_micros/)
+})
+
 test("AI usage ledger has the exact planned counters and daily uniqueness", () => {
   const sql = normalized(migrationSource())
   const usage = sql.match(/create table if not exists public\.ai_usage_daily \(([^;]+)\);/)?.[1]
