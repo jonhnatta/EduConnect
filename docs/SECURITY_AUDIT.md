@@ -26,7 +26,7 @@ Infra nova: `scripts/039_rate_limits.sql` + `lib/security/rate-limit.ts`.
 
 ## 🔴 OPERACIONAL — runbook de go-live
 
-> Ferramentas já preparadas: `scripts/040_runtime_role.sql` (B1) e `.env.production.example` (B2/H3/M4).
+> Ferramentas já preparadas: `scripts/040_runtime_role.sql` (B1) e `.env.example` (B2/H3/M4).
 > Os passos abaixo **exigem acesso de produção / aos provedores** e só podem ser concluídos por você.
 
 - **B1 — App roda como SUPERUSER do Postgres.** Observação importante: o `app_user` é o *superuser de bootstrap* e **não pode** ser rebaixado (`024` não se aplica). Use o **`scripts/040_runtime_role.sql`** (já criado e validado localmente): cria o papel `app_runtime` `NOSUPERUSER` com os grants necessários (mantém `BYPASSRLS` para o app seguir funcionando, mas remove o raio de RCE). Depois aponte `DATABASE_URL` de produção para `app_runtime`. Migrations continuam rodando com o superuser.
@@ -36,7 +36,9 @@ Infra nova: `scripts/039_rate_limits.sql` + `lib/security/rate-limit.ts`.
 - **H3 (deploy) — TLS:** definir `DATABASE_SSL_CA` (PEM do provedor) em produção. O código já valida o certificado por padrão; **não** usar `DATABASE_SSL_INSECURE=true`.
 - **M4 — `AUTH_URL=https://...`** em produção (cookie de sessão ganha flag `Secure`).
 
-Template pronto com tudo isso: **`.env.production.example`**.
+O modelo canônico para desenvolvimento local e VPS é **`.env.example`**. Copie para `.env`,
+ajuste domínio, URLs e dimensionamento para a VPS e gere todos os segredos exclusivos antes
+do deploy.
 
 ## 🟡 Follow-ups recomendados (pós-MVP)
 

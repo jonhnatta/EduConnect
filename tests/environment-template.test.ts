@@ -150,7 +150,6 @@ const protectedValues = [
   "LANGFUSE_SECRET_KEY",
   "LANGFUSE_NEXTAUTH_SECRET",
   "LANGFUSE_SALT",
-  "LANGFUSE_ENCRYPTION_KEY",
   "LANGFUSE_DB_PASSWORD",
   "LANGFUSE_CLICKHOUSE_PASSWORD",
   "LANGFUSE_REDIS_PASSWORD",
@@ -176,6 +175,18 @@ test("uses one canonical versioned environment template", () => {
   assert.equal(existsSync(templateUrl), true, ".env.example must exist")
   assert.equal(existsSync(new URL(".env.docker.example", repositoryRoot)), false)
   assert.equal(existsSync(new URL(".env.production.example", repositoryRoot)), false)
+})
+
+test("documentation uses only the canonical environment workflow", () => {
+  for (const documentationFile of [
+    "README.md",
+    "docs/RUNBOOK_PRODUCAO_DOCKER.md",
+    "docs/SECURITY_AUDIT.md",
+  ]) {
+    const source = readFileSync(new URL(documentationFile, repositoryRoot), "utf8")
+    assert.doesNotMatch(source, /\.env\.(?:docker|production)\.example|\.env\.ai\.local/)
+    assert.match(source, /\.env\.example/, `${documentationFile} must point to .env.example`)
+  }
 })
 
 test("keeps the thirteen specified sections complete and ordered", () => {
@@ -224,8 +235,10 @@ test("contains local-safe defaults without real credentials", () => {
 
   for (const key of protectedValues) {
     const value = values.get(key)
-    assert.notEqual(value, undefined, `missing protected value: ${key}`)
-    assert.ok(value === "" || /^CHANGE_ME_[A-Z0-9_]+$/.test(value), `${key} must be empty or use CHANGE_ME_*`)
+    assert.ok(
+      value !== undefined && (value === "" || /^CHANGE_ME_[A-Z0-9_]+$/.test(value)),
+      `${key} must be present, empty or use CHANGE_ME_*`,
+    )
   }
 
   for (const key of [
@@ -241,5 +254,6 @@ test("contains local-safe defaults without real credentials", () => {
   }
 
   assert.match(source, /LANGFUSE_ENCRYPTION_KEY.*(?:64 hexadecimal|64 caracteres hexadecimais)/i)
-  assert.equal(values.get("LANGFUSE_ENCRYPTION_KEY"), "CHANGE_ME_64_HEX_CHARACTERS")
+  assert.match(values.get("LANGFUSE_ENCRYPTION_KEY") ?? "", /^[0-9a-f]{64}$/)
+  assert.match(source, /substitua.*openssl rand -hex 32/i)
 })

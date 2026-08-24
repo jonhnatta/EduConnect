@@ -43,16 +43,26 @@ transacao. O dispatcher publica os eventos no BullMQ. O worker registra cada exe
 1. Crie o arquivo de ambiente:
 
 ```bash
-cp .env.docker.example .env
+cp .env.example .env
 ```
 
-2. Troque todos os valores `change-*` e `troque-*`. As senhas usadas em URLs devem ser
-formadas por letras, numeros, hifen ou sublinhado.
+2. Troque todos os valores `CHANGE_ME_*` e o placeholder hexadecimal do Langfuse. Siga os
+comentarios de geracao do proprio arquivo. As senhas usadas em URLs devem conter somente
+caracteres URL-safe.
 
-3. Suba a stack:
+3. Valide e suba a stack base:
 
 ```bash
+docker compose config --quiet
 docker compose up -d --build
+```
+
+O overlay de IA e opt-in, mas usa o mesmo `.env`. Depois de provisionar as credenciais de
+OpenAI, Qdrant e Langfuse, valide e inicie com:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ai.yml config --quiet
+docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d --build
 ```
 
 4. Verifique os servicos:

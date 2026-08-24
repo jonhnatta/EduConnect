@@ -15,25 +15,38 @@ mas nao entrega alta disponibilidade dos dados em um unico host.
 ## 2. Configuracao
 
 ```bash
-cp .env.production.example .env
+cp .env.example .env
 chmod 600 .env
 ```
 
-Substitua todos os valores entre `<...>`. Gere segredos diferentes:
+Este e o mesmo modelo usado localmente. Na VPS, altere `APP_DOMAIN`, `AUTH_URL` e
+`NEXT_PUBLIC_APP_URL` para o dominio HTTPS real, substitua todos os valores `CHANGE_ME_*` e
+gere segredos diferentes:
 
 ```bash
 openssl rand -base64 48
 openssl rand -base64 32
+openssl rand -hex 32
 ```
 
 As duas chaves AES devem ser Base64 que decodifica exatamente para 32 bytes. `AUTH_URL` e
 `NEXT_PUBLIC_APP_URL` devem apontar para a mesma origem HTTPS. Mantenha
-`PROFESSOR_VERIFICATION_PROVIDER=none`.
+`PROFESSOR_VERIFICATION_PROVIDER=none`. Substitua tambem o placeholder hexadecimal de
+`LANGFUSE_ENCRYPTION_KEY` pelo resultado exclusivo de `openssl rand -hex 32`.
 
 Valide antes de criar containers:
 
 ```bash
 docker compose --profile production --profile operations config --quiet
+```
+
+Se o Copilot for habilitado, use o mesmo `.env` e inclua o overlay na validacao e no deploy:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ai.yml \
+  --profile production --profile operations config --quiet
+docker compose -f docker-compose.yml -f docker-compose.ai.yml \
+  --profile production up -d --build
 ```
 
 ## 3. Primeiro deploy
