@@ -1,8 +1,15 @@
 import assert from "node:assert/strict"
 import { existsSync, readFileSync } from "node:fs"
 import test from "node:test"
-import { AI_QUEUE_NAMES } from "../lib/ai/ingestion/events.ts"
+import { AI_QUEUE_NAMES, parseAiQueuePayload } from "../lib/ai/ingestion/events.ts"
 import { chunkDocument } from "../lib/ai/ingestion/chunk.ts"
+import {
+  chunkDocument as chunkDocumentCore,
+  collectQdrantPages,
+  documentJobMatchesCurrent,
+  parseAiQueuePayload as parseAiQueuePayloadCore,
+  planReconciliation,
+} from "../workers/ai-ingestion-core.mjs"
 import { QUEUE_NAMES } from "../lib/queue/contracts.ts"
 
 const teacherId = "b1f5cfd8-9bba-4ff8-8775-78901d802de8"
@@ -53,7 +60,15 @@ test("chunker validates options and omits empty chunks", () => {
   assert.doesNotThrow(() => chunkDocument("valor &#999999999; final", { maxChars: 100, overlapChars: 10 }))
 })
 
-test("AI queue contracts expose exactly the planned queues and reject invalid payloads", async () => {
+test("API and worker share one sanitizing chunk implementation", () => {
+  assert.equal(chunkDocument, chunkDocumentCore)
+  const dangerous = '<svg><g/onload=alert(1)//></svg><p>Seguro</p><script>roubar()</script><img src=x onerror=roubar()>'
+  const chunks = chunkDocument(dangerous, { maxChars: 80, overlapChars: 10 })
+  assert.ok(chunks.length > 0)
+  assert.equal(chunks.some((chunk) => /roubar|onload|onerror|script|svg|img/i.test(chunk.content)), false)
+})
+
+test("AI queue contracts parse the strict dispatcher envelope", () => {
   const planned = [
     "ai.generate",
     "ai.ingest",
@@ -66,15 +81,23 @@ test("AI queue contracts expose exactly the planned queues and reject invalid pa
   assert.deepEqual(AI_QUEUE_NAMES, planned)
   assert.deepEqual(QUEUE_NAMES.filter((name) => name.startsWith("ai.")), planned)
 
-  const { parseAiQueuePayload } = await import("../lib/ai/ingestion/events.ts")
-  const common = { tenantId: "educonnect", teacherId }
+  assert.equal(parseAiQueuePayload, parseAiQueuePayloadCore)
+  const meta = {
+    eventId: "95b7e265-a789-4d09-9094-5e74383713c0",
+    schemaVersion: 1,
+    correlationId: "fd230a9f-f04e-4ceb-acf2-e047407690dd",
+    aggregateType: "ai_document",
+    aggregateId: documentId,
+    aggregateVersion: "2",
+  }
+  const common = { tenantId: "educonnect", teacherId, meta }
   const valid = {
     "ai.generate": { ...common, requestId: documentId, conversationId: classroomId, messageId: sourceId },
-    "ai.ingest": { ...common, documentId, sourceType: "content_item", sourceId },
-    "ai.embed": { ...common, documentId },
+    "ai.ingest": { ...common, documentId, documentVersion: 2, embeddingModel: "text-embedding-3-small", sourceType: "content_item", sourceId },
+    "ai.embed": { ...common, documentId, documentVersion: 2, embeddingModel: "text-embedding-3-small" },
     "ai.web-research": { ...common, requestId: documentId, query: "BNCC matemática" },
     "ai.evaluate": { ...common, runId: documentId },
-    "ai.delete": { ...common, documentId, sourceId },
+    "ai.delete": { ...common, documentId, documentVersion: 2, embeddingModel: "text-embedding-3-small", sourceId },
     "ai.reconcile": { ...common },
   } as const
 
@@ -86,6 +109,10 @@ test("AI queue contracts expose exactly the planned queues and reject invalid pa
     )
     assert.throws(
       () => parseAiQueuePayload(queueName, { ...valid[queueName], tenantId: "" }),
+      /invalid_ai_queue_payload/
+    )
+    assert.throws(
+      () => parseAiQueuePayload(queueName, { ...valid[queueName], meta: { ...meta, eventId: "bad" } }),
       /invalid_ai_queue_payload/
     )
   }
@@ -115,6 +142,13 @@ test("AI knowledge migration is registered and enforces tenant-owned version int
   assert.match(sql, /create trigger handle_ai_document_chunks_updated_at/)
   assert.match(sql, /create trigger handle_ai_ingestion_jobs_updated_at/)
   assert.match(sql, /create unique index if not exists uq_ai_ingestion_jobs_identity[^;]*coalesce\(document_id, '00000000-0000-0000-0000-000000000000'::uuid\)/)
+  assert.match(sql, /is_current boolean not null/)
+  assert.match(sql, /embedding_model text not null/)
+  assert.match(sql, /embedding_dimensions integer/)
+  assert.match(sql, /create unique index if not exists uq_ai_documents_current_source[^;]*where is_current/)
+  assert.match(sql, /create or replace function public\.activate_ai_document_version/)
+  assert.match(sql, /pg_advisory_xact_lock/)
+  assert.match(sql, /set is_current = false/)
   assert.doesNotMatch(sql, /create table if not exists public\.ai_documents/)
 })
 
@@ -133,32 +167,110 @@ test("dedicated AI worker is tenant-safe and only consumes implemented queues", 
   assert.match(worker, /p\.user_type = 'professor'/i)
   assert.match(worker, /p\.account_status = 'active'/i)
   assert.match(worker, /d\.teacher_id = \$2/i)
-  assert.match(worker, /requireUuid\(data\.meta\?\.eventId, "invalid_ai_event_metadata"\)/)
-  assert.match(worker, /requireUuid\(data\.meta\?\.correlationId, "invalid_ai_event_metadata"\)/)
+  assert.match(worker, /parseAiQueuePayload\(job\.queueName, job\.data\)/)
   assert.match(worker, /teacher_id["']?,\s*match:\s*\{\s*value:\s*document\.teacher_id/i)
   assert.match(worker, /source_id["']?,\s*match:\s*\{\s*value:\s*document\.source_id/i)
+  assert.match(worker, /tenant_id["']?,\s*match:\s*\{\s*value:\s*configuredTenantId/i)
   assert.match(worker, /content_hash/i)
   assert.match(worker, /throw new Error\("unsupported_ai_source_type"\)/)
-  assert.match(worker, /function preferredChunkEnd/)
-  assert.match(worker, /\[\.!\?\]/)
-  assert.match(worker, /set status = 'extracting', indexed_at = null, deleted_at = null, error_code = null/i)
+  assert.match(worker, /chunkDocument\(text, \{ maxChars: 1_500, overlapChars: 200 \}\)/)
+  assert.doesNotMatch(worker, /function (?:preferredChunkEnd|chunksFor|normalizedText|payloadFor)/)
+  assert.match(worker, /set status = 'extracting', indexed_at = null,\s*deleted_at = null, error_code = null/i)
   assert.match(worker, /id:\s*chunk\.id/)
-  assert.match(worker, /`ai-embed:\$\{document\.id\}:\$\{document\.version\}:\$\{document\.content_hash\}:\$\{job\.data\.meta\?\.eventId\}`/)
-  assert.match(worker, /`ai-reconcile:\$\{document\.id\}:\$\{document\.version\}:\$\{document\.content_hash\}:\$\{job\.data\.meta\?\.eventId\}`/)
+  assert.match(worker, /embedding_model:\s*document\.embedding_model/)
+  assert.match(worker, /embedding_dimensions:\s*dimensions/)
+  assert.match(worker, /pg_advisory_xact_lock/)
+  assert.match(worker, /for update/i)
+  assert.match(worker, /is_current/i)
+  assert.doesNotMatch(worker, /limit 500/i)
+  assert.match(worker, /`ai-embed:\$\{document\.id\}:\$\{document\.version\}:\$\{data\.meta\.eventId\}`/)
+  assert.match(worker, /`ai-reconcile:\$\{document\.id\}:\$\{document\.version\}:\$\{data\.meta\.eventId\}`/)
 
   const embedStart = worker.indexOf("async function embed")
   const deleteStart = worker.indexOf("async function deleteDocument")
   const embedBody = worker.slice(embedStart, deleteStart)
   assert.ok(embedBody.indexOf("qdrant.delete") < embedBody.indexOf("qdrant.upsert"))
-  assert.match(embedBody, /tenant_id["']?,\s*match:\s*\{\s*value:\s*configuredTenantId/i)
-  assert.match(embedBody, /teacher_id["']?,\s*match:\s*\{\s*value:\s*document\.teacher_id/i)
-  assert.match(embedBody, /source_id["']?,\s*match:\s*\{\s*value:\s*document\.source_id/i)
+  assert.match(embedBody, /sourceFilter\(document\)/)
 
   const reconcileStart = worker.indexOf("async function reconcile")
   const optionsStart = worker.indexOf("const workerOptions", reconcileStart)
   const reconcileBody = worker.slice(reconcileStart, optionsStart)
   assert.match(reconcileBody, /tenant_id["']?,\s*match:\s*\{\s*value:\s*configuredTenantId/i)
-  assert.match(reconcileBody, /payload\.tenant_id !== configuredTenantId/)
+  assert.doesNotMatch(reconcileBody, /key:\s*["']active["']/)
+  assert.match(worker, /data\.tenantId !== configuredTenantId/)
+  assert.match(worker, /has_id:\s*\[point\.id\]/)
+})
+
+test("reconciliation paginates and classifies missing, extra and orphan points", async () => {
+  const calls: unknown[] = []
+  const validPayload = {
+    tenant_id: "educonnect",
+    teacher_id: teacherId,
+    document_id: documentId,
+    source_type: "content_item",
+    source_id: sourceId,
+    version: 2,
+    embedding_model: "text-embedding-3-small",
+    embedding_dimensions: 2,
+    chunk_index: 0,
+    content_hash: "a".repeat(64),
+    active: true,
+  }
+  const points = await collectQdrantPages(async (offset: unknown) => {
+    calls.push(offset)
+    if (offset === undefined) {
+      return {
+        points: [{ id: "point-valid", payload: validPayload }],
+        next_page_offset: "page-2",
+      }
+    }
+    return {
+      points: [
+        { id: "point-old", payload: { ...validPayload, version: 1 } },
+        { id: "point-wrong-source", payload: { ...validPayload, source_id: "wrong" } },
+        { id: "point-orphan", payload: { ...validPayload, document_id: classroomId } },
+        { id: "point-inactive", payload: { ...validPayload, active: false } },
+      ],
+      next_page_offset: null,
+    }
+  }, { tenantId: "educonnect", teacherId })
+  assert.deepEqual(calls, [undefined, "page-2"])
+
+  const plan = planReconciliation([{
+    id: documentId,
+    teacherId,
+    sourceType: "content_item",
+    sourceId,
+    version: 2,
+    embeddingModel: "text-embedding-3-small",
+    embeddingDimensions: 2,
+    chunks: [
+      { id: "point-valid", index: 0, contentHash: "a".repeat(64) },
+      { id: "point-missing", index: 1, contentHash: "b".repeat(64) },
+    ],
+  }], points, { tenantId: "educonnect", teacherId })
+  assert.deepEqual(plan.missingDocumentIds, [documentId])
+  assert.deepEqual(plan.extraPointIds.sort(), ["point-inactive", "point-old", "point-orphan", "point-wrong-source"])
+
+  await assert.rejects(
+    collectQdrantPages(async () => ({
+      points: [{ id: "cross-tenant", payload: { ...validPayload, tenant_id: "other" } }],
+      next_page_offset: null,
+    }), { tenantId: "educonnect", teacherId }),
+    /reconcile_scope_violation/
+  )
+})
+
+test("an older document job becomes a no-op after a newer version is current", () => {
+  const current = {
+    is_current: true,
+    version: 2,
+    embedding_model: "text-embedding-3-small",
+  }
+  assert.equal(documentJobMatchesCurrent({ documentVersion: 1, embeddingModel: "text-embedding-3-small" }, current), false)
+  assert.equal(documentJobMatchesCurrent({ documentVersion: 2, embeddingModel: "text-embedding-3-small" }, current), true)
+  assert.equal(documentJobMatchesCurrent({ documentVersion: 2, embeddingModel: "other-model" }, current), false)
+  assert.equal(documentJobMatchesCurrent({ documentVersion: 2, embeddingModel: "text-embedding-3-small" }, { ...current, is_current: false }), false)
 })
 
 test("AI worker remains opt-in and private in Compose", () => {

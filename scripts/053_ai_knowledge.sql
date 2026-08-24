@@ -11,6 +11,65 @@ begin
 end;
 $$;
 
+alter table public.ai_documents
+  add column if not exists is_current boolean not null default false,
+  add column if not exists embedding_model text not null default 'text-embedding-3-small',
+  add column if not exists embedding_dimensions integer
+    check (embedding_dimensions is null or embedding_dimensions > 0);
+
+update public.ai_documents document
+set is_current = document.id = (
+  select current_document.id
+  from public.ai_documents current_document
+  where current_document.teacher_id = document.teacher_id
+    and current_document.source_type = document.source_type
+    and current_document.source_id = document.source_id
+  order by current_document.version desc, current_document.created_at desc, current_document.id desc
+  limit 1
+);
+
+alter table public.ai_documents alter column is_current set default true;
+
+create unique index if not exists uq_ai_documents_current_source
+  on public.ai_documents (teacher_id, source_type, source_id)
+  where is_current;
+
+create or replace function public.activate_ai_document_version()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  current_version integer;
+begin
+  perform pg_advisory_xact_lock(
+    hashtextextended(new.teacher_id::text || ':' || new.source_type || ':' || new.source_id, 0)
+  );
+  select max(version) into current_version
+  from public.ai_documents
+  where teacher_id = new.teacher_id
+    and source_type = new.source_type
+    and source_id = new.source_id;
+  if current_version is not null and new.version <= current_version then
+    raise exception 'AI document version must increase monotonically'
+      using errcode = '23514';
+  end if;
+  update public.ai_documents
+     set is_current = false
+   where teacher_id = new.teacher_id
+     and source_type = new.source_type
+     and source_id = new.source_id
+     and is_current;
+  new.is_current := true;
+  return new;
+end;
+$$;
+
+drop trigger if exists activate_ai_document_version on public.ai_documents;
+create trigger activate_ai_document_version
+  before insert on public.ai_documents
+  for each row execute function public.activate_ai_document_version();
+
 create table if not exists public.ai_document_chunks (
   id uuid primary key default gen_random_uuid(),
   document_id uuid not null,
