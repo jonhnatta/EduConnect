@@ -27,7 +27,7 @@
     "test:production-security": "node --test tests/production-security.test.ts",
     "test:ai": "node --test tests/ai-*.test.ts",
     "test:e2e": "playwright test",
-    "test": "npm run test:oauth && npm run test:password-reset && npm run test:cache && npm run test:exam-security && npm run test:feed-pagination && npm run test:production-security",
+    "test": "npm run test:oauth && npm run test:password-reset && npm run test:cache && npm run test:exam-security && npm run test:feed-pagination && npm run test:production-security && npm run test:ai",
     "github:project": "node scripts/github-project-demand.mjs",
     "backlog:add": "node scripts/github-project-demand.mjs backlog",
     "ready:add": "node scripts/github-project-demand.mjs ready"

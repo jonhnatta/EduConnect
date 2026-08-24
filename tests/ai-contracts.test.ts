@@ -28,6 +28,43 @@ test("accepts a complete Copilot response with a web citation", () => {
   assert.deepEqual(copilotResponseSchema.parse(validResponse), validResponse)
 })
 
+test("accepts only same-origin internal citation paths", () => {
+  const internalCitation = {
+    ...validResponse.citations[0],
+    kind: "internal",
+    url: "/materiais/123",
+  }
+
+  assert.equal(
+    copilotResponseSchema.safeParse({
+      ...validResponse,
+      citations: [internalCitation],
+    }).success,
+    true
+  )
+
+  for (const url of ["//evil.example/path", "/\\evil.example/path"]) {
+    assert.equal(
+      copilotResponseSchema.safeParse({
+        ...validResponse,
+        citations: [{ ...internalCitation, url }],
+      }).success,
+      false,
+      `expected unsafe internal URL ${url} to be rejected`
+    )
+  }
+})
+
+test("rejects approved Copilot responses without citations", () => {
+  assert.equal(
+    copilotResponseSchema.safeParse({
+      ...validResponse,
+      citations: [],
+    }).success,
+    false
+  )
+})
+
 test("rejects incomplete web citations", () => {
   for (const missingField of ["retrievedAt", "excerpt", "url"] as const) {
     const citation = { ...validResponse.citations[0] }

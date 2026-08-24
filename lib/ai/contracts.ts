@@ -10,7 +10,9 @@ const citationBase = z.object({
 export const citationSchema = z.discriminatedUnion("kind", [
   citationBase.extend({
     kind: z.literal("internal"),
-    url: z.string().startsWith("/"),
+    url: z
+      .string()
+      .regex(/^\/(?!\/)[^\s\\]*$/, "Internal citation URL must be a same-origin path"),
   }),
   citationBase.extend({
     kind: z.literal("web"),
@@ -38,7 +40,7 @@ export const usageSchema = z.object({
 
 export const copilotResponseSchema = z.object({
   text: z.string().min(1),
-  citations: z.array(citationSchema),
+  citations: z.array(citationSchema).min(1),
   usage: usageSchema,
   safety: safetyResultSchema,
 })
