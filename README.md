@@ -38,7 +38,7 @@ transacao. O dispatcher publica os eventos no BullMQ. O worker registra cada exe
 - Docker Engine com Compose v2 para executar a stack completa; ou
 - Node.js 24, npm, PostgreSQL, Redis e storage S3 compativel para execucao sem Docker.
 
-## Executar na VPS com Docker Compose
+## Executar com Docker Compose
 
 1. Crie o arquivo de ambiente:
 
@@ -51,23 +51,23 @@ ajuste `APP_DOMAIN`, `AUTH_URL` e `NEXT_PUBLIC_APP_URL` para o dominio HTTPS rea
 comentarios de geracao do proprio arquivo. As senhas usadas em URLs devem conter somente
 caracteres URL-safe.
 
-3. Valide a configuracao completa, incluindo a infraestrutura de IA:
+3. Para rodar localmente com menor consumo de recursos, valide e suba sem o perfil `observability`:
 
 ```bash
-docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml --profile production config --quiet
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml config --quiet
 ```
 
-4. Suba a stack:
+4. Suba localmente:
 
 ```bash
-docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml --profile production up -d --build
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml up -d --build
 ```
 
-5. Verifique os servicos:
+5. Na VPS, inclua `--profile production --profile observability` nos comandos para iniciar Caddy, Langfuse e ClickHouse. Verifique os servicos:
 
 ```bash
-docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml --profile production ps
-docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml --profile production logs migrate minio-init dispatcher worker ai-worker app qdrant caddy
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml ps
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml logs migrate minio-init dispatcher worker ai-worker app qdrant
 curl --fail http://localhost:3000/api/health/live
 curl --fail http://localhost:3000/api/health/ready
 ```

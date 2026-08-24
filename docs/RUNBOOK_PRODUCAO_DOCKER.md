@@ -38,18 +38,18 @@ Valide antes de criar containers:
 
 ```bash
 docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml \
-  --profile production --profile operations config --quiet
+  --profile production --profile observability --profile operations config --quiet
 ```
 
 ## 3. Primeiro deploy
 
 ```bash
 docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml \
-  --profile production up -d --build
+  --profile production --profile observability up -d --build
 docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml \
-  --profile production ps
+  --profile production --profile observability ps
 docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml \
-  --profile production logs --no-color migrate minio-init dispatcher worker ai-worker scheduler app qdrant caddy
+  --profile production --profile observability logs --no-color migrate minio-init dispatcher worker ai-worker scheduler app qdrant caddy langfuse langfuse-worker
 curl --fail https://app.seu-dominio.com/api/health/live
 curl --fail https://app.seu-dominio.com/api/health/ready
 ```

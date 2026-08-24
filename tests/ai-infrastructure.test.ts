@@ -108,6 +108,14 @@ test("AI worker is activated by the opt-in overlay without a profile", () => {
   assert.doesNotMatch(worker, /ports:/)
 })
 
+test("Langfuse observability is opt-in while Qdrant remains in the local AI stack", () => {
+  const compose = readFileSync(new URL("../docker-compose.ai.yml", import.meta.url), "utf8")
+  for (const service of ["langfuse", "langfuse-worker", "langfuse-postgres", "langfuse-clickhouse", "langfuse-redis", "langfuse-minio"]) {
+    assert.match(serviceBlock(compose, service), /profiles:\s*\[observability\]/, `${service} must be opt-in locally`)
+  }
+  assert.doesNotMatch(serviceBlock(compose, "qdrant"), /profiles:/)
+})
+
 test("disabled AI readiness performs no dependency requests", async () => {
   const { checkAiDependenciesReady } = await import("../lib/ai/health.ts")
   let calls = 0

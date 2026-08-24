@@ -118,6 +118,7 @@ services:
     networks: [backend]
 
   langfuse:
+    profiles: [observability]
     image: docker.io/langfuse/langfuse:4@sha256:26b4dc06819dd15761822f6a79eb37bf34bac18a414692fcdde3593964e3dd4e
     restart: unless-stopped
     depends_on: &langfuse-dependencies
@@ -151,6 +152,7 @@ services:
     networks: [backend]
 
   langfuse-worker:
+    profiles: [observability]
     image: docker.io/langfuse/langfuse-worker:4@sha256:38cb37b87a6dd2aa1f09ae4496653bccdb33664a49b3dec37b52f3e32de166d2
     restart: unless-stopped
     depends_on: *langfuse-dependencies
@@ -170,6 +172,7 @@ services:
     networks: [backend]
 
   langfuse-postgres:
+    profiles: [observability]
     image: docker.io/postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
     restart: unless-stopped
     environment:
@@ -193,6 +196,7 @@ services:
     networks: [backend]
 
   langfuse-clickhouse:
+    profiles: [observability]
     image: docker.io/clickhouse/clickhouse-server:25.12@sha256:8a790dd3468db22b1d4e7b18a176f378ff5ff6053b9c48dd4ea1fa71a24c5ba6
     restart: unless-stopped
     user: "101:101"
@@ -218,6 +222,7 @@ services:
     networks: [backend]
 
   langfuse-redis:
+    profiles: [observability]
     image: docker.io/redis:7.4.7-alpine@sha256:02f2cc4882f8bf87c79a220ac958f58c700bdec0dfb9b9ea61b62fb0e8f1bfcf
     restart: unless-stopped
     command:
@@ -247,6 +252,7 @@ services:
     networks: [backend]
 
   langfuse-minio:
+    profiles: [observability]
     image: docker.io/minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
     restart: unless-stopped
     entrypoint: ["/bin/sh", "-c"]
