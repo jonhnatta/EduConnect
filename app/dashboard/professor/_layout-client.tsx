@@ -15,6 +15,7 @@ import {
   UsersRound,
   BarChart3,
   Rss,
+  Sparkles,
   Settings,
   User,
   Bell,
@@ -43,6 +44,7 @@ const navigation = [
   { name: "Meus Alunos", href: "/dashboard/professor/alunos", icon: UsersRound },
   { name: "Seguidores", href: "/dashboard/professor/seguidores", icon: UsersRound },
   { name: "Analise de Desempenho", href: "/dashboard/professor/analise", icon: BarChart3 },
+  { name: "Copilot", href: "/dashboard/professor/copilot", icon: Sparkles },
 ]
 
 const bottomNav = [
