@@ -255,6 +255,13 @@ export class PostgresCopilotRepository implements CopilotRepository {
         ...input.run,
         messageId: assistantMessage.id,
       })
+      await client.query(
+        `update public.ai_conversations
+            set updated_at = timezone('utc'::text, now())
+          where id = $1
+            and teacher_id = $2`,
+        [input.message.conversationId, input.message.teacherId]
+      )
       return assistantMessage
     })
   }

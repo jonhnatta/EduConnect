@@ -27,9 +27,12 @@ export type CopilotApiDependencies = {
 const feedbackRequestSchema = feedbackSchema.extend({
   messageId: z.string().uuid(),
 })
+const conversationParamsSchema = z.object({
+  conversationId: z.string().uuid(),
+})
 
 async function routeParams(context: RouteContext): Promise<{ conversationId: string }> {
-  return await context.params
+  return conversationParamsSchema.parse(await context.params)
 }
 
 async function jsonBody(request: Request): Promise<unknown> {

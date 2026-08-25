@@ -263,6 +263,13 @@ export function createCopilotService({
       const correlationId = crypto.randomUUID()
       const { content } = copilotMessageInputSchema.parse({ content: input.content })
       const conversation = await ownedConversation(actor, input.conversationId)
+
+      const reservation = await quota.reserve({
+        teacherId: actor.userId,
+        estimatedTokens: estimatedTokens(content),
+      })
+      if (!reservation.ok) throw new CopilotServiceError(reservation.code)
+
       const [history, allowedClassroomIds] = await Promise.all([
         repository.listMessages(actor.userId, conversation.id, HISTORY_LIMIT),
         repository.listAllowedClassroomIds(actor.userId),
@@ -306,12 +313,6 @@ export function createCopilotService({
           errorCode: "insufficient_context",
         })
       }
-
-      const reservation = await quota.reserve({
-        teacherId: actor.userId,
-        estimatedTokens: estimatedTokens(content),
-      })
-      if (!reservation.ok) throw new CopilotServiceError(reservation.code)
 
       const userMessage = await repository.appendMessage({
         teacherId: actor.userId,

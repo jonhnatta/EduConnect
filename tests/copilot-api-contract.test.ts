@@ -19,6 +19,7 @@ const routeFiles = [
   "app/api/copilot/conversations/[conversationId]/feedback/route.ts",
 ]
 const migrateRunner = "scripts/migrate.mjs"
+const postgresRepository = "lib/ai/copilot/postgres-repository.ts"
 
 const professor: CopilotActor = {
   userId: "11111111-1111-4111-8111-111111111111",
@@ -136,6 +137,11 @@ test("registers the feedback migration used by the feedback route", () => {
   assert.match(source, /\["00580", "ai_copilot_feedback", "scripts\/054_ai_copilot_feedback\.sql"\]/)
 })
 
+test("message persistence updates conversation recency in the same repository operation", () => {
+  const source = readFileSync(postgresRepository, "utf8")
+  assert.match(source, /update public\.ai_conversations\s+set updated_at = timezone\('utc'::text, now\(\)\)/i)
+})
+
 test("returns 401 when there is no authenticated session", async () => {
   const { calls, handlers } = setup({ actor: null })
 
@@ -233,6 +239,32 @@ test("returns 422 for invalid JSON or invalid payloads", async () => {
     assert.equal(response.status, 422)
     assert.deepEqual(await response.json(), { ok: false, error: "invalid_payload" })
   }
+})
+
+test("returns 422 for invalid conversation ids before calling the service", async () => {
+  const invalidParams = { params: { conversationId: "not-a-uuid" } }
+  const { calls, handlers } = setup()
+
+  const get = await handlers.getConversation(new Request("https://educonnect.test"), invalidParams)
+  const messageResponse = await handlers.sendMessage(
+    jsonRequest("/api/copilot/conversations/not-a-uuid/messages", { content: "Ajude" }),
+    invalidParams
+  )
+  const feedbackResponse = await handlers.saveFeedback(
+    jsonRequest("/api/copilot/conversations/not-a-uuid/feedback", {
+      messageId,
+      rating: "positive",
+    }),
+    invalidParams
+  )
+
+  for (const response of [get, messageResponse, feedbackResponse]) {
+    assert.equal(response.status, 422)
+    assert.deepEqual(await response.json(), { ok: false, error: "invalid_payload" })
+  }
+  assert.equal(calls.get.length, 0)
+  assert.equal(calls.send.length, 0)
+  assert.equal(calls.feedback.length, 0)
 })
 
 test("maps quota failures to 429 without exposing service internals", async () => {

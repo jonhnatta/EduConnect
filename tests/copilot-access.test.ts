@@ -181,3 +181,52 @@ test("checks quota before calling the provider", async () => {
   )
   assert.deepEqual(order, ["quota"])
 })
+
+test("does not retrieve context when quota is denied after ownership is verified", async () => {
+  let quotaCalls = 0
+  let retrievalCalls = 0
+  let providerCalls = 0
+  const service = createCopilotService({
+    repository: repositoryFor(activeConversation()),
+    quota: {
+      reserve: async () => {
+        quotaCalls += 1
+        return { ok: false, code: "monthly_quota_exceeded" }
+      },
+    },
+    provider: {
+      name: "openai",
+      model: "test-model",
+      generate: async () => {
+        providerCalls += 1
+        return {
+          text: "Resposta",
+          citations: [],
+          usage: { inputTokens: 1, outputTokens: 1 },
+          safety: { decision: "blocked", policyVersion: "test-v1" },
+        }
+      },
+    },
+    retrieveContext: async () => {
+      retrievalCalls += 1
+      return [
+        {
+          sourceId: "material-1",
+          sourceKind: "internal",
+          title: "Material",
+          excerpt: "Conteúdo autorizado",
+          url: "/materiais/material-1",
+          retrievedAt: "2026-08-24T12:00:00.000Z",
+        },
+      ]
+    },
+  })
+
+  await assert.rejects(
+    () => service.sendMessage({ actor: professor, conversationId, content: "Ajude" }),
+    isCopilotError("monthly_quota_exceeded")
+  )
+  assert.equal(quotaCalls, 1)
+  assert.equal(retrievalCalls, 0)
+  assert.equal(providerCalls, 0)
+})
