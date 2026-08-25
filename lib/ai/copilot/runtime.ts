@@ -20,6 +20,8 @@ import {
   type CopilotQuota,
 } from "./service.ts"
 import { createCopilotApiHandlers } from "./http.ts"
+import { createLessonPlanApiHandlers } from "./lesson-plan-http.ts"
+import { createLessonPlanService } from "./lesson-plan-service.ts"
 import { PostgresCopilotRepository } from "./postgres-repository.ts"
 import type { CopilotActor, CopilotProvider } from "./types.ts"
 
@@ -285,5 +287,20 @@ export function createDefaultCopilotApiHandlers() {
   return createCopilotApiHandlers({
     resolveActor: resolveCopilotActor,
     service: createDefaultCopilotService(),
+  })
+}
+
+export function createDefaultLessonPlanApiHandlers() {
+  const repository = new PostgresCopilotRepository()
+  return createLessonPlanApiHandlers({
+    resolveActor: resolveCopilotActor,
+    service: createLessonPlanService({
+      repository,
+      copilotRepository: repository,
+      quota: new PostgresAiQuota(),
+      provider: new LazyOpenAiCopilotProvider(),
+      retrieveContext,
+      telemetry: new LangfuseTelemetry(),
+    }),
   })
 }
