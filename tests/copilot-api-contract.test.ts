@@ -1,11 +1,13 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import test from "node:test"
+import type { QueryResultRow } from "pg"
 import {
   CopilotServiceError,
   type CopilotServiceApi,
   createCopilotApiHandlers,
 } from "../lib/ai/copilot/http.ts"
+import { PostgresCopilotRepository } from "../lib/ai/copilot/postgres-repository.ts"
 import type {
   CopilotActor,
   CopilotConversation,
@@ -140,6 +142,63 @@ test("registers the feedback migration used by the feedback route", () => {
 test("message persistence updates conversation recency in the same repository operation", () => {
   const source = readFileSync(postgresRepository, "utf8")
   assert.match(source, /update public\.ai_conversations\s+set updated_at = timezone\('utc'::text, now\(\)\)/i)
+})
+
+test("appendMessage updates conversation recency in the same transaction", async () => {
+  const calls: { sql: string; params?: unknown[] }[] = []
+  const repository = new PostgresCopilotRepository({
+    query: async () => {
+      throw new Error("appendMessage must use the injected transaction")
+    },
+    transaction: async (work) => {
+      const client = {
+        query: async <Row extends QueryResultRow = QueryResultRow>(
+          sql: string,
+          params?: unknown[]
+        ) => {
+          calls.push({ sql, params })
+          if (/insert into public\.ai_messages/i.test(sql)) {
+            const rows = [{
+              id: messageId,
+              conversation_id: conversationId,
+              role: "user",
+              content: "Ajude",
+              status: "completed",
+              model: null,
+              provider: null,
+              prompt_version: null,
+              created_at: "2026-08-24T12:00:00.000Z",
+              completed_at: "2026-08-24T12:00:01.000Z",
+              error_code: null,
+            }] as unknown as Row[]
+            return {
+              rows,
+            }
+          }
+          return { rows: [] }
+        },
+      }
+      return work(client)
+    },
+  })
+
+  const result = await repository.appendMessage({
+    teacherId: professor.userId,
+    conversationId,
+    role: "user",
+    content: "Ajude",
+    status: "completed",
+    model: null,
+    provider: null,
+    promptVersion: null,
+    errorCode: null,
+  })
+
+  assert.equal(result.content, "Ajude")
+  assert.equal(calls.length, 2)
+  assert.match(calls[0]!.sql, /insert into public\.ai_messages/i)
+  assert.match(calls[1]!.sql, /update public\.ai_conversations\s+set updated_at = timezone\('utc'::text, now\(\)\)/i)
+  assert.deepEqual(calls[1]!.params, [conversationId, professor.userId])
 })
 
 test("returns 401 when there is no authenticated session", async () => {

@@ -1,7 +1,5 @@
 import { createHash } from "node:crypto"
 import type { QueryResultRow } from "pg"
-import { query } from "../../db/query.ts"
-import { withTransaction } from "../../db/transaction.ts"
 import {
   CopilotServiceError,
   type CopilotRepository,
@@ -43,6 +41,29 @@ type Queryable = {
     text: string,
     params?: unknown[]
   ): Promise<{ rows: Row[] }>
+}
+
+type CopilotRepositoryDatabase = {
+  query<Row extends QueryResultRow = QueryResultRow>(
+    text: string,
+    params?: unknown[]
+  ): Promise<Row[]>
+  transaction<T>(work: (client: Queryable) => Promise<T>): Promise<T>
+}
+
+async function defaultQuery<Row extends QueryResultRow = QueryResultRow>(
+  text: string,
+  params?: unknown[]
+): Promise<Row[]> {
+  const db = await import("../../db/query.ts")
+  return db.query<Row>(text, params)
+}
+
+async function defaultTransaction<T>(
+  work: (client: Queryable) => Promise<T>
+): Promise<T> {
+  const db = await import("../../db/transaction.ts")
+  return db.withTransaction(work)
 }
 
 function iso(value: Date | string | null): string | null {
@@ -155,12 +176,35 @@ async function insertRun(client: Queryable, input: CopilotRun) {
   )
 }
 
+async function touchConversation(
+  client: Queryable,
+  conversationId: string,
+  teacherId: string
+) {
+  await client.query(
+    `update public.ai_conversations
+        set updated_at = timezone('utc'::text, now())
+      where id = $1
+        and teacher_id = $2`,
+    [conversationId, teacherId]
+  )
+}
+
 export class PostgresCopilotRepository implements CopilotRepository {
+  private readonly database: CopilotRepositoryDatabase
+
+  constructor(database: CopilotRepositoryDatabase = {
+    query: defaultQuery,
+    transaction: defaultTransaction,
+  }) {
+    this.database = database
+  }
+
   async createConversation(input: {
     teacherId: string
     title: string
   }): Promise<CopilotConversation> {
-    const rows = await query<ConversationRow>(
+    const rows = await this.database.query<ConversationRow>(
       `insert into public.ai_conversations (teacher_id, title)
        values ($1, $2)
        returning id, teacher_id, title, classroom_id, status, created_at, updated_at`,
@@ -170,7 +214,7 @@ export class PostgresCopilotRepository implements CopilotRepository {
   }
 
   async listConversations(teacherId: string): Promise<readonly CopilotConversation[]> {
-    const rows = await query<ConversationRow>(
+    const rows = await this.database.query<ConversationRow>(
       `select id, teacher_id, title, classroom_id, status, created_at, updated_at
          from public.ai_conversations
         where teacher_id = $1
@@ -186,7 +230,7 @@ export class PostgresCopilotRepository implements CopilotRepository {
     teacherId: string,
     conversationId: string
   ): Promise<CopilotConversation | null> {
-    const rows = await query<ConversationRow>(
+    const rows = await this.database.query<ConversationRow>(
       `select id, teacher_id, title, classroom_id, status, created_at, updated_at
          from public.ai_conversations
         where teacher_id = $1
@@ -202,7 +246,7 @@ export class PostgresCopilotRepository implements CopilotRepository {
     conversationId: string,
     limit: number
   ): Promise<readonly CopilotMessage[]> {
-    const rows = await query<MessageRow>(
+    const rows = await this.database.query<MessageRow>(
       `select m.id, m.conversation_id, m.role, m.content, m.status, m.model,
               m.provider, m.prompt_version, m.created_at, m.completed_at, m.error_code
          from public.ai_messages m
@@ -217,12 +261,11 @@ export class PostgresCopilotRepository implements CopilotRepository {
   }
 
   async appendMessage(input: CopilotMessageWrite): Promise<CopilotMessage> {
-    return insertMessage({
-      query: async <Row extends QueryResultRow = QueryResultRow>(
-        text: string,
-        params?: unknown[]
-      ) => ({ rows: await query<Row>(text, params) }),
-    }, input)
+    return this.database.transaction(async (client) => {
+      const message = await insertMessage(client, input)
+      await touchConversation(client, input.conversationId, input.teacherId)
+      return message
+    })
   }
 
   async persistAssistantResult(input: {
@@ -230,7 +273,7 @@ export class PostgresCopilotRepository implements CopilotRepository {
     citations: readonly CopilotMessageCitation[]
     run: Omit<CopilotRun, "messageId">
   }): Promise<CopilotMessage> {
-    return withTransaction(async (client) => {
+    return this.database.transaction(async (client) => {
       const assistantMessage = await insertMessage(client, input.message)
       for (const citation of input.citations) {
         await client.query(
@@ -255,13 +298,7 @@ export class PostgresCopilotRepository implements CopilotRepository {
         ...input.run,
         messageId: assistantMessage.id,
       })
-      await client.query(
-        `update public.ai_conversations
-            set updated_at = timezone('utc'::text, now())
-          where id = $1
-            and teacher_id = $2`,
-        [input.message.conversationId, input.message.teacherId]
-      )
+      await touchConversation(client, input.message.conversationId, input.message.teacherId)
       return assistantMessage
     })
   }
@@ -273,7 +310,7 @@ export class PostgresCopilotRepository implements CopilotRepository {
     rating: "positive" | "negative"
     comment?: string
   }): Promise<void> {
-    const rows = await query<{ message_id: string }>(
+    const rows = await this.database.query<{ message_id: string }>(
       `insert into public.ai_message_feedback (
          teacher_id, conversation_id, message_id, rating, comment
        )
@@ -302,7 +339,7 @@ export class PostgresCopilotRepository implements CopilotRepository {
   }
 
   async listAllowedClassroomIds(teacherId: string): Promise<readonly string[]> {
-    const rows = await query<{ id: string }>(
+    const rows = await this.database.query<{ id: string }>(
       `select id
          from public.classrooms
         where professor_id = $1
@@ -314,7 +351,7 @@ export class PostgresCopilotRepository implements CopilotRepository {
   }
 
   async recordRun(input: CopilotRun): Promise<void> {
-    await query(
+    await this.database.query(
       `insert into public.ai_runs (
          conversation_id, message_id, teacher_id, feature, provider, model,
          prompt_version, status, input_tokens, output_tokens, latency_ms,
