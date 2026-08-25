@@ -21,20 +21,36 @@ export type CopilotMessage = {
   role: "user" | "assistant" | "system" | "tool"
   content: string
   status: "pending" | "streaming" | "completed" | "failed" | "cancelled" | "blocked"
+  model: string | null
+  provider: string | null
+  promptVersion: string | null
   createdAt: string
   completedAt: string | null
+  errorCode: string | null
+}
+
+export type CopilotMessageWrite = {
+  teacherId: string
+  conversationId: string
+  role: CopilotMessage["role"]
+  content: string
+  status: CopilotMessage["status"]
+  model: string | null
+  provider: string | null
+  promptVersion: string | null
+  errorCode: string | null
 }
 
 export type CopilotCitation = {
   sourceId: string
+  sourceKind: Citation["kind"]
   title: string
   excerpt: string
+  url: string
+  retrievedAt: string
 }
 
 export type CopilotMessageCitation = CopilotCitation & {
-  sourceKind: Citation["kind"]
-  url: string
-  retrievedAt: string
   displayOrder: number
 }
 
@@ -46,7 +62,28 @@ export type CopilotProviderInput = {
 
 export type CopilotProviderOutput = CopilotResponse
 
+export type CopilotSafetyAudit = CopilotProviderOutput["safety"]
+
+export type CopilotRun = {
+  teacherId: string
+  conversationId: string
+  messageId: string | null
+  feature: string
+  provider: string
+  model: string
+  promptVersion: string
+  correlationId: string
+  latencyMs: number
+  safety: CopilotSafetyAudit
+  status: "completed" | "failed" | "blocked"
+  inputTokens: number
+  outputTokens: number
+  errorCode: string | null
+}
+
 export type CopilotProvider = {
+  readonly name: string
+  readonly model: string
   generate(input: CopilotProviderInput): Promise<CopilotProviderOutput>
 }
 

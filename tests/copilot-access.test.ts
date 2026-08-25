@@ -38,10 +38,26 @@ function repositoryFor(conversation: CopilotConversation | null): CopilotReposit
       role: input.role,
       content: input.content,
       status: input.status,
+      model: input.model,
+      provider: input.provider,
+      promptVersion: input.promptVersion,
       createdAt: "2026-08-24T12:00:00.000Z",
       completedAt: "2026-08-24T12:00:00.000Z",
+      errorCode: input.errorCode,
     }),
-    saveCitations: async () => {},
+    persistAssistantResult: async (input) => ({
+      id: "66666666-6666-4666-8666-666666666666",
+      conversationId: input.message.conversationId,
+      role: input.message.role,
+      content: input.message.content,
+      status: input.message.status,
+      model: input.message.model,
+      provider: input.message.provider,
+      promptVersion: input.message.promptVersion,
+      createdAt: "2026-08-24T12:00:00.000Z",
+      completedAt: "2026-08-24T12:00:00.000Z",
+      errorCode: input.message.errorCode,
+    }),
     saveFeedback: async () => {},
     listAllowedClassroomIds: async () => [],
     recordRun: async () => {},
@@ -50,6 +66,8 @@ function repositoryFor(conversation: CopilotConversation | null): CopilotReposit
 
 function providerCountingCalls(counter: { value: number }): CopilotProvider {
   return {
+    name: "openai",
+    model: "test-model",
     generate: async () => {
       counter.value += 1
       return {
@@ -133,6 +151,8 @@ test("checks quota before calling the provider", async () => {
       },
     },
     provider: {
+      name: "openai",
+      model: "test-model",
       generate: async () => {
         order.push("provider")
         return {
@@ -144,7 +164,14 @@ test("checks quota before calling the provider", async () => {
       },
     },
     retrieveContext: async () => [
-      { sourceId: "material-1", title: "Material", excerpt: "Conteúdo autorizado" },
+      {
+        sourceId: "material-1",
+        sourceKind: "internal",
+        title: "Material",
+        excerpt: "Conteúdo autorizado",
+        url: "/materiais/material-1",
+        retrievedAt: "2026-08-24T12:00:00.000Z",
+      },
     ],
   })
 

@@ -10,12 +10,17 @@ import type {
   CopilotContextRetriever,
   CopilotConversation,
   CopilotMessage,
+  CopilotMessageWrite,
   CopilotMessageCitation,
   CopilotProvider,
+  CopilotRun,
+  CopilotSafetyAudit,
 } from "./types.ts"
 
 const HISTORY_LIMIT = 12
 const DEFAULT_TITLE = "Nova conversa"
+const COPILOT_FEATURE = "teacher_copilot"
+const PROMPT_VERSION = "copilot-professor-v1"
 const BLOCKED_RESPONSE =
   "Nao encontrei evidencias suficientes nos materiais autorizados para responder com seguranca."
 
@@ -50,17 +55,12 @@ export type CopilotRepository = {
     conversationId: string,
     limit: number
   ): Promise<readonly CopilotMessage[]>
-  appendMessage(input: {
-    teacherId: string
-    conversationId: string
-    role: CopilotMessage["role"]
-    content: string
-    status: CopilotMessage["status"]
-  }): Promise<CopilotMessage>
-  saveCitations(input: {
-    messageId: string
+  appendMessage(input: CopilotMessageWrite): Promise<CopilotMessage>
+  persistAssistantResult(input: {
+    message: CopilotMessageWrite
     citations: readonly CopilotMessageCitation[]
-  }): Promise<void>
+    run: Omit<CopilotRun, "messageId">
+  }): Promise<CopilotMessage>
   saveFeedback(input: {
     teacherId: string
     conversationId: string
@@ -69,14 +69,7 @@ export type CopilotRepository = {
     comment?: string
   }): Promise<void>
   listAllowedClassroomIds(teacherId: string): Promise<readonly string[]>
-  recordRun(input: {
-    teacherId: string
-    conversationId: string
-    status: "completed" | "failed" | "blocked"
-    inputTokens: number
-    outputTokens: number
-    errorCode?: string
-  }): Promise<void>
+  recordRun(input: CopilotRun): Promise<void>
 }
 
 export type CopilotQuota = {
@@ -111,7 +104,11 @@ function normalizedEvidence(evidence: readonly CopilotCitation[]): CopilotCitati
     const sourceId = citation.sourceId.trim()
     const title = citation.title.trim()
     const excerpt = citation.excerpt.trim()
-    return sourceId && title && excerpt ? [{ sourceId, title, excerpt }] : []
+    const url = citation.url.trim()
+    const retrievedAt = citation.retrievedAt.trim()
+    return sourceId && title && excerpt && url && retrievedAt
+      ? [{ ...citation, sourceId, title, excerpt, url, retrievedAt }]
+      : []
   })
 }
 
@@ -142,13 +139,14 @@ function citationsSupportedBy(
   return citations.flatMap((citation) => {
     if (citation.kind !== "internal") return []
     const source = authorized.get(citation.id)
-    if (!source || seen.has(source.sourceId)) return []
+    if (
+      !source ||
+      source.sourceKind !== "internal" ||
+      seen.has(source.sourceId)
+    ) return []
     seen.add(source.sourceId)
     return [{
       ...source,
-      sourceKind: citation.kind,
-      url: citation.url,
-      retrievedAt: citation.retrievedAt,
       displayOrder: seen.size - 1,
     }]
   })
@@ -160,27 +158,71 @@ export function createCopilotService({
   provider,
   retrieveContext,
 }: CopilotServiceDependencies) {
+  const providerName = provider.name.trim()
+  const providerModel = provider.model.trim()
+  if (!providerName || !providerModel) {
+    throw new TypeError("Copilot provider audit metadata is required")
+  }
+
+  function runAudit(input: {
+    conversation: CopilotConversation
+    actor: CopilotActor
+    correlationId: string
+    startedAt: number
+    safety: CopilotSafetyAudit
+    status: CopilotRun["status"]
+    inputTokens: number
+    outputTokens: number
+    errorCode: string | null
+  }): Omit<CopilotRun, "messageId"> {
+    return {
+      teacherId: input.actor.userId,
+      conversationId: input.conversation.id,
+      feature: COPILOT_FEATURE,
+      provider: providerName,
+      model: providerModel,
+      promptVersion: PROMPT_VERSION,
+      correlationId: input.correlationId,
+      latencyMs: Math.max(0, Date.now() - input.startedAt),
+      safety: input.safety,
+      status: input.status,
+      inputTokens: input.inputTokens,
+      outputTokens: input.outputTokens,
+      errorCode: input.errorCode,
+    }
+  }
+
   async function persistBlockedResponse(input: {
     actor: CopilotActor
     conversation: CopilotConversation
     userMessage: CopilotMessage
+    correlationId: string
+    startedAt: number
+    safety: CopilotSafetyAudit
     errorCode: string
-    content?: string
+    inputTokens?: number
+    outputTokens?: number
   }) {
-    const assistantMessage = await repository.appendMessage({
-      teacherId: input.actor.userId,
-      conversationId: input.conversation.id,
-      role: "assistant",
-      content: input.content ?? BLOCKED_RESPONSE,
-      status: "blocked",
-    })
-    await repository.recordRun({
-      teacherId: input.actor.userId,
-      conversationId: input.conversation.id,
-      status: "blocked",
-      inputTokens: 0,
-      outputTokens: 0,
-      errorCode: input.errorCode,
+    const assistantMessage = await repository.persistAssistantResult({
+      message: {
+        teacherId: input.actor.userId,
+        conversationId: input.conversation.id,
+        role: "assistant",
+        content: BLOCKED_RESPONSE,
+        status: "blocked",
+        model: providerModel,
+        provider: providerName,
+        promptVersion: PROMPT_VERSION,
+        errorCode: input.errorCode,
+      },
+      citations: [],
+      run: runAudit({
+        ...input,
+        status: "blocked",
+        inputTokens: input.inputTokens ?? 0,
+        outputTokens: input.outputTokens ?? 0,
+        errorCode: input.errorCode,
+      }),
     })
     return { userMessage: input.userMessage, assistantMessage, citations: [] }
   }
@@ -217,6 +259,8 @@ export function createCopilotService({
       input: ActorInput & { conversationId: string; content: string }
     ) {
       const actor = requireProfessor(input.actor)
+      const startedAt = Date.now()
+      const correlationId = crypto.randomUUID()
       const { content } = copilotMessageInputSchema.parse({ content: input.content })
       const conversation = await ownedConversation(actor, input.conversationId)
       const [history, allowedClassroomIds] = await Promise.all([
@@ -243,11 +287,22 @@ export function createCopilotService({
           role: "user",
           content,
           status: "completed",
+          model: null,
+          provider: null,
+          promptVersion: null,
+          errorCode: null,
         })
         return persistBlockedResponse({
           actor,
           conversation,
           userMessage,
+          correlationId,
+          startedAt,
+          safety: {
+            decision: "abstain",
+            policyVersion: PROMPT_VERSION,
+            reasonCode: "insufficient_context",
+          },
           errorCode: "insufficient_context",
         })
       }
@@ -264,8 +319,17 @@ export function createCopilotService({
         role: "user",
         content,
         status: "completed",
+        model: null,
+        provider: null,
+        promptVersion: null,
+        errorCode: null,
       })
 
+      let lastSafety: CopilotSafetyAudit = {
+        decision: "blocked",
+        policyVersion: PROMPT_VERSION,
+        reasonCode: "provider_failed",
+      }
       try {
         const providerOutput = await provider.generate({
           system:
@@ -279,11 +343,19 @@ export function createCopilotService({
             actor,
             conversation,
             userMessage,
+            correlationId,
+            startedAt,
+            safety: {
+              decision: "blocked",
+              policyVersion: PROMPT_VERSION,
+              reasonCode: "invalid_provider_output",
+            },
             errorCode: "invalid_provider_output",
           })
         }
 
         const output = parsedOutput.data
+        lastSafety = output.safety
         const citations = citationsSupportedBy(output.citations, evidence)
         const approved =
           output.safety.decision === "approved" ||
@@ -294,8 +366,12 @@ export function createCopilotService({
             actor,
             conversation,
             userMessage,
-            content: output.text.trim(),
+            correlationId,
+            startedAt,
+            safety: output.safety,
             errorCode: output.safety.reasonCode ?? output.safety.decision,
+            inputTokens: output.usage.inputTokens,
+            outputTokens: output.usage.outputTokens,
           })
         }
         if (citations.length === 0) {
@@ -303,37 +379,60 @@ export function createCopilotService({
             actor,
             conversation,
             userMessage,
+            correlationId,
+            startedAt,
+            safety: {
+              decision: "blocked",
+              policyVersion: output.safety.policyVersion,
+              reasonCode: "invalid_provider_output",
+            },
             errorCode: "invalid_provider_output",
+            inputTokens: output.usage.inputTokens,
+            outputTokens: output.usage.outputTokens,
           })
         }
 
-        const assistantMessage = await repository.appendMessage({
-          teacherId: actor.userId,
-          conversationId: conversation.id,
-          role: "assistant",
-          content: output.text.trim(),
-          status: "completed",
-        })
-        if (citations.length > 0) {
-          await repository.saveCitations({ messageId: assistantMessage.id, citations })
-        }
-        await repository.recordRun({
-          teacherId: actor.userId,
-          conversationId: conversation.id,
-          status: "completed",
-          inputTokens: output.usage.inputTokens,
-          outputTokens: output.usage.outputTokens,
+        const assistantMessage = await repository.persistAssistantResult({
+          message: {
+            teacherId: actor.userId,
+            conversationId: conversation.id,
+            role: "assistant",
+            content: output.text.trim(),
+            status: "completed",
+            model: providerModel,
+            provider: providerName,
+            promptVersion: PROMPT_VERSION,
+            errorCode: null,
+          },
+          citations,
+          run: runAudit({
+            actor,
+            conversation,
+            correlationId,
+            startedAt,
+            safety: output.safety,
+            status: "completed",
+            inputTokens: output.usage.inputTokens,
+            outputTokens: output.usage.outputTokens,
+            errorCode: null,
+          }),
         })
         return { userMessage, assistantMessage, citations }
       } catch (error) {
         await repository.recordRun({
-          teacherId: actor.userId,
-          conversationId: conversation.id,
-          status: "failed",
-          inputTokens: 0,
-          outputTokens: 0,
-          errorCode:
-            error instanceof CopilotServiceError ? error.code : "provider_failed",
+          ...runAudit({
+            actor,
+            conversation,
+            correlationId,
+            startedAt,
+            safety: lastSafety,
+            status: "failed",
+            inputTokens: 0,
+            outputTokens: 0,
+            errorCode:
+              error instanceof CopilotServiceError ? error.code : "provider_failed",
+          }),
+          messageId: null,
         })
         throw error
       }
