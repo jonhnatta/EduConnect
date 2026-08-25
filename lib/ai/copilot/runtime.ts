@@ -12,6 +12,7 @@ import {
   searchKnowledge,
   type AuthorizedKnowledgeSource,
   type KnowledgeSourceRepository,
+  type RetrievalCitation,
 } from "../retrieval/search.ts"
 import {
   CopilotServiceError,
@@ -183,7 +184,7 @@ class PostgresKnowledgeSourceRepository implements KnowledgeSourceRepository {
   }
 }
 
-function toCopilotCitation(citation: Citation) {
+function toCopilotCitation(citation: RetrievalCitation) {
   return {
     sourceId: citation.id,
     contentSourceId: citation.contentSourceId,

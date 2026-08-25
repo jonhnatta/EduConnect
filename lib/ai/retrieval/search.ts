@@ -130,9 +130,11 @@ const payloadSchema = z.object({
 type ParsedCandidate = Readonly<{
   id: string
   score: number
-  citation: Citation
+  citation: RetrievalCitation
   source: AuthorizedKnowledgeSource
 }>
+
+export type RetrievalCitation = Citation & { contentSourceId?: string }
 
 function abortError(): Error {
   const error = new Error("retrieval_aborted")
@@ -206,10 +208,10 @@ function parseCandidate(
   return {
     id,
     score: point.score,
-    citation: citationSchema.parse({
-      ...payload,
+    citation: {
+      ...citationSchema.parse(payload),
       contentSourceId: payload.source_id,
-    }),
+    },
     source: {
       tenantId: payload.tenant_id,
       teacherId: payload.teacher_id,
@@ -289,7 +291,7 @@ async function searchKnowledgeWithSignal(
     sourceRepository: KnowledgeSourceRepository
     config: KnowledgeSearchConfig
   }>
-): Promise<readonly Citation[]> {
+): Promise<readonly RetrievalCitation[]> {
   const query = typeof input.query === "string" ? input.query.trim() : ""
   if (!query || query.length > MAX_QUERY_CHARS) throw new Error("invalid_retrieval_query")
   const limit = Math.min(input.limit ?? MAX_RESULTS, MAX_RESULTS)

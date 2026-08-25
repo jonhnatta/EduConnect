@@ -2,8 +2,6 @@ import { z } from "zod"
 
 const citationBase = z.object({
   id: z.string().min(1),
-  // Optional canonical document/source identity. `id` may be a retrieved chunk.
-  contentSourceId: z.string().trim().min(1).max(500).optional(),
   title: z.string().min(1),
   retrievedAt: z.string().datetime(),
   excerpt: z.string().min(1).max(2000),
