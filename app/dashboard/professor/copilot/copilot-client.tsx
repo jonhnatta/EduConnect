@@ -51,6 +51,12 @@ type Usage = {
   requestLimit: number
 }
 
+const suggestedQuestions = [
+  "Como posso adaptar a proxima atividade para alunos com dificuldades?",
+  "Quais materiais da minha turma precisam de reforco?",
+  "Sugira um plano de aula a partir dos meus conteudos recentes.",
+] as const
+
 const errorCopy: Record<string, string> = {
   unauthorized: "Sua sessao expirou. Entre novamente para usar o Copilot.",
   forbidden: "O Copilot esta disponivel apenas para professores autorizados.",
@@ -89,6 +95,7 @@ export function CopilotClient() {
   const [loadingDetails, setLoadingDetails] = useState<Record<string, boolean>>({})
   const [sending, setSending] = useState(false)
   const [usage, setUsage] = useState<Usage | null>(null)
+  const [feedbackCommentByMessage, setFeedbackCommentByMessage] = useState<Record<string, string>>({})
   const [creating, startCreating] = useTransition()
 
   const activeState = activeId ? stateById[activeId] ?? null : null
@@ -264,9 +271,8 @@ export function CopilotClient() {
     return data.conversation
   }
 
-  async function sendMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const content = input.trim()
+  async function sendPrompt(prompt: string) {
+    const content = prompt.trim()
     if (!content || sending) return
 
     setSending(true)
@@ -325,8 +331,20 @@ export function CopilotClient() {
     setSending(false)
   }
 
-  async function sendFeedback(messageId: string, rating: "positive" | "negative") {
+  async function sendMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    await sendPrompt(input)
+  }
+
+  function sendSuggestedQuestion(question: string) {
+    setInput(question)
+    void sendPrompt(question)
+  }
+
+  async function sendFeedback(messageId: string, rating: "positive" | "negative", comment?: string) {
     if (!activeId) return
+    const trimmedComment = comment?.trim() ?? ""
+    const previousFeedback = activeFeedback[messageId]
     setStateById((current) => {
       const previous = current[activeId]
       if (!previous) return current
@@ -336,7 +354,7 @@ export function CopilotClient() {
           ...previous,
           feedbackByMessage: {
             ...previous.feedbackByMessage,
-            [messageId]: { rating, comment: null },
+            [messageId]: { rating, comment: trimmedComment || null },
           },
         },
       }
@@ -346,7 +364,7 @@ export function CopilotClient() {
     const response = await fetch(`/api/copilot/conversations/${conversationId}/feedback`, {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({ messageId, rating }),
+      body: JSON.stringify({ messageId, rating, comment: trimmedComment || undefined }),
     })
 
     if (!response.ok) {
@@ -354,7 +372,11 @@ export function CopilotClient() {
         const previous = current[conversationId]
         if (!previous) return current
         const nextFeedback = { ...previous.feedbackByMessage }
-        delete nextFeedback[messageId]
+        if (previousFeedback) {
+          nextFeedback[messageId] = previousFeedback
+        } else {
+          delete nextFeedback[messageId]
+        }
         return {
           ...current,
           [conversationId]: {
@@ -454,12 +476,42 @@ export function CopilotClient() {
                 <p className="mt-2 max-w-md text-sm text-gray-500">
                   O Copilot responde somente com base no contexto autorizado e mostra as fontes usadas.
                 </p>
+                <div className="mt-6 grid w-full max-w-2xl gap-3">
+                  {suggestedQuestions.map((question) => (
+                    <div
+                      key={question}
+                      className="flex flex-col gap-3 rounded-lg border border-gray-100 bg-white p-3 text-left shadow-sm sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <span className="text-sm font-medium text-gray-700">{question}</span>
+                      <div className="flex shrink-0 gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setInput(question)}
+                        >
+                          Usar
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={sending}
+                          className="bg-[#1D4ED8] hover:bg-[#1E3A8A]"
+                          onClick={() => sendSuggestedQuestion(question)}
+                        >
+                          Enviar agora
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : (
               activeMessages.map((message) => {
                 const assistant = message.role === "assistant"
                 const citations = activeState?.citationsByMessage[message.id] ?? []
                 const feedback = activeFeedback[message.id]?.rating
+                const feedbackComment = feedbackCommentByMessage[message.id] ?? activeFeedback[message.id]?.comment ?? ""
                 return (
                   <article
                     key={message.id}
@@ -495,27 +547,41 @@ export function CopilotClient() {
                     )}
 
                     {assistant && (
-                      <div className="mt-3 flex items-center gap-2">
-                        <Button
-                          type="button"
-                          variant={feedback === "positive" ? "default" : "outline"}
-                          size="sm"
-                          className="gap-2"
-                          onClick={() => sendFeedback(message.id, "positive")}
-                        >
-                          {feedback === "positive" ? <Check className="h-4 w-4" /> : <ThumbsUp className="h-4 w-4" />}
-                          Resposta util
-                        </Button>
-                        <Button
-                          type="button"
-                          variant={feedback === "negative" ? "default" : "outline"}
-                          size="sm"
-                          className="gap-2"
-                          onClick={() => sendFeedback(message.id, "negative")}
-                        >
-                          {feedback === "negative" ? <Check className="h-4 w-4" /> : <ThumbsDown className="h-4 w-4" />}
-                          Resposta ruim
-                        </Button>
+                      <div className="mt-3 space-y-2">
+                        <Textarea
+                          value={feedbackComment}
+                          onChange={(event) =>
+                            setFeedbackCommentByMessage((current) => ({
+                              ...current,
+                              [message.id]: event.target.value,
+                            }))
+                          }
+                          placeholder="Conte o que ajudou ou faltou na resposta"
+                          className="min-h-16 resize-none bg-white"
+                          maxLength={1000}
+                        />
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            variant={feedback === "positive" ? "default" : "outline"}
+                            size="sm"
+                            className="gap-2"
+                            onClick={() => sendFeedback(message.id, "positive", feedbackCommentByMessage[message.id] ?? feedbackComment)}
+                          >
+                            {feedback === "positive" ? <Check className="h-4 w-4" /> : <ThumbsUp className="h-4 w-4" />}
+                            Resposta util
+                          </Button>
+                          <Button
+                            type="button"
+                            variant={feedback === "negative" ? "default" : "outline"}
+                            size="sm"
+                            className="gap-2"
+                            onClick={() => sendFeedback(message.id, "negative", feedbackCommentByMessage[message.id] ?? feedbackComment)}
+                          >
+                            {feedback === "negative" ? <Check className="h-4 w-4" /> : <ThumbsDown className="h-4 w-4" />}
+                            Resposta ruim
+                          </Button>
+                        </div>
                       </div>
                     )}
                   </article>

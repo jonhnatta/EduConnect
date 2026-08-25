@@ -68,3 +68,25 @@ test("Copilot client renders required states, citations, feedback and usage copy
     assert.match(client, new RegExp(requiredCopy))
   }
 })
+
+test("Copilot client sends optional feedback comments with the selected rating", () => {
+  const client = source(copilotClient)
+
+  assert.match(client, /feedbackCommentByMessage/)
+  assert.match(client, /placeholder="Conte o que ajudou ou faltou na resposta"/)
+  assert.match(client, /sendFeedback\(message\.id, "positive", feedbackCommentByMessage\[message\.id\]/)
+  assert.match(client, /sendFeedback\(message\.id, "negative", feedbackCommentByMessage\[message\.id\]/)
+  assert.match(client, /JSON\.stringify\(\{ messageId, rating, comment: trimmedComment \|\| undefined \}\)/)
+})
+
+test("Copilot empty state suggested questions can populate or send the prompt", () => {
+  const client = source(copilotClient)
+
+  assert.match(client, /const suggestedQuestions = \[/)
+  assert.match(client, /Como posso adaptar a proxima atividade para alunos com dificuldades\?/)
+  assert.match(client, /function sendSuggestedQuestion\(question: string\)/)
+  assert.match(client, /setInput\(question\)/)
+  assert.match(client, /sendPrompt\(question\)/)
+  assert.match(client, /Usar/)
+  assert.match(client, /Enviar agora/)
+})

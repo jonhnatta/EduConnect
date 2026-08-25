@@ -194,6 +194,11 @@ test("README documents the local Copilot enablement and validation flow", () => 
 
   assert.match(source, /FEATURE_AI_COPILOT=true/)
   assert.match(source, /OPENAI_API_KEY=/)
+  assert.match(source, /docker compose --env-file \.env -f docker-compose\.yml -f docker-compose\.ai\.yml up -d --build/)
+  assert.match(source, /insert into public\.ai_beta_access/i)
+  assert.match(source, /on conflict \(teacher_id\) do update/i)
+  assert.match(source, /professor aprovado/i)
+  assert.match(source, /beta/i)
   assert.match(source, /\.env[\s\S]*ignorado/)
   assert.match(source, /OpenAI[\s\S]*(?:nunca|nao deve)[\s\S]*commit/i)
   assert.match(source, /curl --fail http:\/\/localhost:3000\/api\/health\/live/)

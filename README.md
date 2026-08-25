@@ -167,6 +167,46 @@ Nunca grave uma chave real da OpenAI no `.env.example`, em commits ou em logs. C
 Copilot ativo, mantenha tambem as variaveis de Qdrant e Langfuse preenchidas no `.env`,
 pois `/api/health/ready` valida as dependencias de IA antes de aceitar trafego.
 
+Suba a stack local com o overlay de IA:
+
+```bash
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.ai.yml up -d --build
+```
+
+O acesso da tela depende de tres condicoes ao mesmo tempo: `FEATURE_AI_COPILOT=true`,
+professor aprovado e beta habilitado para esse professor em `public.ai_beta_access`.
+Depois de aprovar o professor, libere o beta com o UUID do perfil:
+
+```sql
+update public.profiles
+set professor_verification_status = 'approved',
+    account_status = 'active',
+    deleted_at = null
+where id = '<PROFESSOR_PROFILE_UUID>'
+  and user_type = 'professor';
+
+insert into public.ai_beta_access (
+  teacher_id,
+  enabled,
+  daily_request_limit,
+  monthly_token_limit,
+  starts_at
+)
+values (
+  '<PROFESSOR_PROFILE_UUID>',
+  true,
+  20,
+  1000000,
+  now()
+)
+on conflict (teacher_id) do update
+set enabled = excluded.enabled,
+    daily_request_limit = excluded.daily_request_limit,
+    monthly_token_limit = excluded.monthly_token_limit,
+    starts_at = excluded.starts_at,
+    expires_at = null;
+```
+
 Fluxo local minimo apos subir a aplicacao:
 
 ```bash
