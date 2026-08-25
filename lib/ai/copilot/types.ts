@@ -80,6 +80,7 @@ export type CopilotProviderInput = {
   system: string
   user: string
   context: string
+  maxOutputTokens: number
 }
 
 export type CopilotProviderOutput = CopilotResponse

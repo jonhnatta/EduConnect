@@ -175,7 +175,7 @@ function successfulReservationResults(beta: BetaFixture = activeBeta): FakeResul
     { rows: [approvedProfile] },
     { rows: [beta] },
     { rows: [{ used_tokens: "100" }] },
-    { rowCount: 1, rows: [{ reserved: 1 }] },
+    { rowCount: 1, rows: [{ usage_date: "2026-08-24" }] },
     {},
   ]
 }
@@ -185,7 +185,7 @@ test("usage reservation executes the transaction in snapshot-safe order", async 
 
   assert.deepEqual(
     await withEnabledAi(() => reserveAiUsage(asPoolClient(client), VALID_TEACHER_ID, 250)),
-    { ok: true }
+    { ok: true, reservedTokens: 250, usageDate: "2026-08-24" }
   )
 
   assert.deepEqual(client.calls.map(({ sql }) => sql.trim().split(/\s+/)[0].toUpperCase()), [
@@ -342,7 +342,7 @@ test("usage reservation applies positive beta quota overrides", async () => {
 
   assert.deepEqual(
     await withEnabledAi(() => reserveAiUsage(asPoolClient(client), VALID_TEACHER_ID, 250)),
-    { ok: true }
+    { ok: true, reservedTokens: 250, usageDate: "2026-08-24" }
   )
   assert.deepEqual(client.calls[5].values, [VALID_TEACHER_ID, 250, 7, "100", "2000"])
 })
@@ -375,4 +375,61 @@ test("usage reservation rolls back and preserves database errors", async () => {
     failure
   )
   assert.equal(client.calls.at(-1)?.sql, "ROLLBACK")
+})
+
+test("eligibility check enforces approval and active beta without consuming quota", async () => {
+  const accessModule = await import("../lib/ai/access.ts")
+  assert.equal(typeof accessModule.checkAiEligibility, "function")
+  const client = new FakeClient([
+    { rows: [approvedProfile] },
+    { rows: [activeBeta] },
+  ])
+
+  const decision = await withEnabledAi(() =>
+    accessModule.checkAiEligibility(asPoolClient(client), VALID_TEACHER_ID)
+  )
+
+  assert.deepEqual(decision, { ok: true })
+  assert.equal(client.calls.length, 2)
+  assert.match(client.calls[0]!.sql, /from public\.profiles/i)
+  assert.match(client.calls[1]!.sql, /from public\.ai_beta_access/i)
+  assert.equal(client.calls.some(({ sql }) => /ai_usage_daily/i.test(sql)), false)
+})
+
+test("usage settlement converts a reservation into actual tokens atomically", async () => {
+  const accessModule = await import("../lib/ai/access.ts")
+  assert.equal(typeof accessModule.settleAiUsage, "function")
+  const client = new FakeClient([
+    {},
+    {},
+    { rowCount: 1, rows: [{ reserved_tokens: "0" }] },
+    {},
+  ])
+
+  await accessModule.settleAiUsage(
+    asPoolClient(client),
+    VALID_TEACHER_ID,
+    "2026-08-24",
+    250,
+    { inputTokens: 31, outputTokens: 17 }
+  )
+
+  assert.deepEqual(client.calls.map(({ sql }) => sql.trim().split(/\s+/)[0].toUpperCase()), [
+    "BEGIN",
+    "SELECT",
+    "UPDATE",
+    "COMMIT",
+  ])
+  assert.match(client.calls[1]!.sql, /pg_advisory_xact_lock/)
+  assert.match(client.calls[2]!.sql, /reserved_tokens = reserved_tokens - \$3::bigint/i)
+  assert.match(client.calls[2]!.sql, /input_tokens = input_tokens \+ \$4::bigint/i)
+  assert.match(client.calls[2]!.sql, /output_tokens = output_tokens \+ \$5::bigint/i)
+  assert.match(client.calls[2]!.sql, /reserved_tokens >= \$3::bigint/i)
+  assert.deepEqual(client.calls[2]!.values, [
+    VALID_TEACHER_ID,
+    "2026-08-24",
+    250,
+    31,
+    17,
+  ])
 })

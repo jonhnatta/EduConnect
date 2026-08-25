@@ -15,13 +15,23 @@ test("professor dashboard exposes Copilot in the sidebar navigation", () => {
 
   assert.match(layout, /name:\s*"Copilot"/)
   assert.match(layout, /href:\s*"\/dashboard\/professor\/copilot"/)
+  assert.match(layout, /copilotAvailable/)
+  assert.match(layout, /item\.href !== "\/dashboard\/professor\/copilot" \|\| copilotAvailable/)
 })
 
 test("professor Copilot route is protected and renders the client experience", () => {
   const page = source(copilotPage)
 
-  assert.match(page, /requireProfessorAccess\(\)/)
+  assert.match(page, /requireApprovedProfessorAccess\(\)/)
+  assert.match(page, /requireDefaultCopilotAccess\(/)
   assert.match(page, /<CopilotClient\s*\/>/)
+})
+
+test("professor layout resolves beta access before exposing Copilot navigation", () => {
+  const layout = source("app/dashboard/professor/layout.tsx")
+
+  assert.match(layout, /getDefaultCopilotAccess\(/)
+  assert.match(layout, /copilotAvailable=\{copilotAccess\.ok\}/)
 })
 
 test("Copilot client uses the professor-scoped API without sending teacher_id", () => {

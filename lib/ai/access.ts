@@ -26,7 +26,7 @@ export type AiAccessDecision =
   | { ok: false; code: AiAccessDenialCode }
 
 export type AiUsageReservation =
-  | { ok: true }
+  | { ok: true; reservedTokens: number; usageDate: string }
   | {
       ok: false
       code:
@@ -36,6 +36,17 @@ export type AiUsageReservation =
         | "beta_disabled"
         | "daily_quota_exceeded"
         | "monthly_quota_exceeded"
+    }
+
+export type AiEligibilityDecision =
+  | { ok: true }
+  | {
+      ok: false
+      code:
+        | "feature_disabled"
+        | "professor_not_approved"
+        | "account_inactive"
+        | "beta_disabled"
     }
 
 type TeacherProfileRow = QueryResultRow & {
@@ -106,6 +117,50 @@ function nonNegativeUsage(value: string | number): bigint {
   const parsed = BigInt(value)
   if (parsed < BigInt(0)) throw new Error("Invalid negative AI usage returned by database")
   return parsed
+}
+
+export async function checkAiEligibility(
+  client: Pick<PoolClient, "query">,
+  teacherId: string
+): Promise<AiEligibilityDecision> {
+  const normalizedTeacherId = teacherId.trim()
+  if (!UUID_PATTERN.test(normalizedTeacherId)) {
+    throw new TypeError("teacherId must be a canonical UUID")
+  }
+  if (!readAiConfig().enabled) return { ok: false, code: "feature_disabled" }
+
+  const profileResult = await client.query<TeacherProfileRow>(
+    `SELECT user_type, professor_verification_status, account_status, deleted_at
+       FROM public.profiles
+      WHERE id = $1
+      LIMIT 1`,
+    [normalizedTeacherId]
+  )
+  const profile = profileResult.rows[0]
+  if (!profile) return { ok: false, code: "professor_not_approved" }
+  if (profile.account_status !== "active" || profile.deleted_at !== null) {
+    return { ok: false, code: "account_inactive" }
+  }
+  if (
+    profile.user_type !== "professor" ||
+    profile.professor_verification_status !== "approved"
+  ) {
+    return { ok: false, code: "professor_not_approved" }
+  }
+
+  const betaResult = await client.query<BetaAccessRow>(
+    `SELECT enabled, daily_request_limit, monthly_token_limit
+       FROM public.ai_beta_access
+      WHERE teacher_id = $1
+        AND enabled = TRUE
+        AND (starts_at IS NULL OR starts_at <= clock_timestamp())
+        AND (expires_at IS NULL OR expires_at > clock_timestamp())
+      LIMIT 1`,
+    [normalizedTeacherId]
+  )
+  return betaResult.rows[0]?.enabled
+    ? { ok: true }
+    : { ok: false, code: "beta_disabled" }
 }
 
 /**
@@ -214,7 +269,7 @@ export async function reserveAiUsage(
       return { ok: false, code: "monthly_quota_exceeded" }
     }
 
-    const reservationResult = await client.query(
+    const reservationResult = await client.query<{ usage_date: Date | string }>(
       `INSERT INTO public.ai_usage_daily AS usage (
          teacher_id,
          usage_date,
@@ -233,7 +288,7 @@ export async function reserveAiUsage(
            reserved_tokens = usage.reserved_tokens + EXCLUDED.reserved_tokens
        WHERE usage.request_count < $3
          AND $4::bigint + $2::bigint <= $5::bigint
-       RETURNING request_count`,
+       RETURNING usage_date`,
       [
         normalizedTeacherId,
         estimatedTokens,
@@ -249,7 +304,67 @@ export async function reserveAiUsage(
     }
 
     await client.query("COMMIT")
-    return { ok: true }
+    const usageDateValue = reservationResult.rows[0]!.usage_date
+    const usageDate = usageDateValue instanceof Date
+      ? usageDateValue.toISOString().slice(0, 10)
+      : String(usageDateValue).slice(0, 10)
+    return { ok: true, reservedTokens: estimatedTokens, usageDate }
+  } catch (error) {
+    if (transactionStarted) await client.query("ROLLBACK").catch(() => {})
+    throw error
+  }
+}
+
+export async function settleAiUsage(
+  client: PoolClient,
+  teacherId: string,
+  usageDate: string,
+  reservedTokens: number,
+  actualUsage: { inputTokens: number; outputTokens: number }
+): Promise<void> {
+  const normalizedTeacherId = teacherId.trim()
+  if (!UUID_PATTERN.test(normalizedTeacherId)) {
+    throw new TypeError("teacherId must be a canonical UUID")
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(usageDate)) {
+    throw new TypeError("usageDate must be an ISO date")
+  }
+  for (const [name, value] of Object.entries({ reservedTokens, ...actualUsage })) {
+    if (!isNonNegativeInteger(value)) {
+      throw new TypeError(`${name} must be a non-negative safe integer`)
+    }
+  }
+  if (actualUsage.inputTokens + actualUsage.outputTokens > reservedTokens) {
+    throw new Error("AI actual usage exceeds its reservation")
+  }
+
+  let transactionStarted = false
+  try {
+    await client.query("BEGIN")
+    transactionStarted = true
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtextextended($1::text || ':' || $2::text, 0))`,
+      [normalizedTeacherId, usageDate]
+    )
+    const result = await client.query(
+      `UPDATE public.ai_usage_daily
+          SET reserved_tokens = reserved_tokens - $3::bigint,
+              input_tokens = input_tokens + $4::bigint,
+              output_tokens = output_tokens + $5::bigint
+        WHERE teacher_id = $1
+          AND usage_date = $2::date
+          AND reserved_tokens >= $3::bigint
+      RETURNING reserved_tokens`,
+      [
+        normalizedTeacherId,
+        usageDate,
+        reservedTokens,
+        actualUsage.inputTokens,
+        actualUsage.outputTokens,
+      ]
+    )
+    if (result.rowCount !== 1) throw new Error("AI usage reservation was not found")
+    await client.query("COMMIT")
   } catch (error) {
     if (transactionStarted) await client.query("ROLLBACK").catch(() => {})
     throw error

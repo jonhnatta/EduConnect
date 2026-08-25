@@ -53,6 +53,7 @@ test("OpenAI adapter requests strict structured output and maps real usage", asy
   const result = await provider.generate({
     system: "system",
     user: "user",
+    maxOutputTokens: 750,
     signal,
   })
 
@@ -66,6 +67,7 @@ test("OpenAI adapter requests strict structured output and maps real usage", asy
   assert.equal(request.instructions, "system")
   assert.equal(request.input, "user")
   assert.equal(request.store, false)
+  assert.equal(request.max_output_tokens, 750)
   assert.equal((request.text as { format: { type: string; strict: boolean } }).format.type, "json_schema")
   assert.equal((request.text as { format: { type: string; strict: boolean } }).format.strict, true)
   assert.deepEqual(options, { timeout: 30_000, maxRetries: 0, signal })

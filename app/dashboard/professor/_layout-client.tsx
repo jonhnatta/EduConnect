@@ -55,9 +55,11 @@ const bottomNav = [
 function ProfessorLayoutContent({
   children,
   unreadNotifications = 0,
+  copilotAvailable = false,
 }: {
   children: React.ReactNode
   unreadNotifications?: number
+  copilotAvailable?: boolean
 }) {
   const pathname = usePathname()
   const router = useRouter()
@@ -78,6 +80,9 @@ function ProfessorLayoutContent({
   const isRejected = profile?.professor_verification_status === "rejected"
   // Só publica/cria sala quem está aprovado (espelha o guard do servidor).
   const cannotPublish = isPendente || isRejected
+  const visibleNavigation = navigation.filter(
+    (item) => item.href !== "/dashboard/professor/copilot" || copilotAvailable
+  )
 
   const reloadProfile = () =>
     fetch("/api/me")
@@ -226,7 +231,7 @@ function ProfessorLayoutContent({
 
           {/* Navigation */}
           <nav className="flex-1 px-3 py-2 space-y-1 overflow-y-auto">
-            {navigation.map((item) => {
+            {visibleNavigation.map((item) => {
               const isActive = pathname === item.href
               const isDisabled = cannotPublish && (item.href.includes("criar") || item.href.includes("salas"))
               return (
@@ -363,7 +368,7 @@ function ProfessorLayoutContent({
       {/* Mobile Bottom Navigation */}
       <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-2 py-2 z-40">
         <div className="flex items-center justify-around">
-          {navigation.slice(0, 5).map((item) => {
+          {visibleNavigation.slice(0, 5).map((item) => {
             const isActive = pathname === item.href
             return (
               <Link
@@ -387,9 +392,11 @@ function ProfessorLayoutContent({
 export function ProfessorLayoutClient({
   children,
   unreadNotifications = 0,
+  copilotAvailable = false,
 }: {
   children: React.ReactNode
   unreadNotifications?: number
+  copilotAvailable?: boolean
 }) {
   return (
     <Suspense fallback={
@@ -397,7 +404,12 @@ export function ProfessorLayoutClient({
         <div className="animate-spin h-8 w-8 border-4 border-[#1D4ED8] border-t-transparent rounded-full" />
       </div>
     }>
-      <ProfessorLayoutContent unreadNotifications={unreadNotifications}>{children}</ProfessorLayoutContent>
+      <ProfessorLayoutContent
+        unreadNotifications={unreadNotifications}
+        copilotAvailable={copilotAvailable}
+      >
+        {children}
+      </ProfessorLayoutContent>
     </Suspense>
   )
 }

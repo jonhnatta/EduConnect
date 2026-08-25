@@ -84,11 +84,14 @@ function errorResponse(error: unknown): Response {
     if (isQuotaError(error.code)) {
       return json({ ok: false, error: "quota_exceeded" }, 429)
     }
-    if (error.code === "professor_required") {
+    if (error.code === "professor_required" || error.code === "professor_not_approved" || error.code === "account_inactive") {
       return json({ ok: false, error: "forbidden" }, 403)
     }
-    if (error.code === "feature_disabled" || error.code === "beta_disabled") {
+    if (error.code === "beta_disabled") {
       return json({ ok: false, error: "copilot_unavailable" }, 403)
+    }
+    if (error.code === "feature_disabled") {
+      return json({ ok: false, error: "copilot_unavailable" }, 404)
     }
   }
   return json({ ok: false, error: "internal_error" }, 500)

@@ -191,12 +191,14 @@ async function insertRun(client: Queryable, input: CopilotRun) {
     `insert into public.ai_runs (
        conversation_id, message_id, teacher_id, feature, provider, model,
        prompt_version, status, input_tokens, output_tokens, latency_ms,
-       correlation_id, started_at, completed_at, error_code
+       correlation_id, started_at, completed_at, error_code,
+       safety_decision, safety_reason_code, safety_policy_version
      )
      values (
        $1, $2, $3, $4, $5, $6, $7, $8,
        $9::bigint, $10::bigint, $11, $12,
-       timezone('utc'::text, now()), timezone('utc'::text, now()), $13
+       timezone('utc'::text, now()), timezone('utc'::text, now()), $13,
+       $14, $15, $16
      )`,
     [
       input.conversationId,
@@ -212,6 +214,9 @@ async function insertRun(client: Queryable, input: CopilotRun) {
       input.latencyMs,
       input.correlationId,
       input.errorCode,
+      input.safety.decision,
+      input.safety.reasonCode ?? null,
+      input.safety.policyVersion,
     ]
   )
 }
@@ -430,12 +435,14 @@ export class PostgresCopilotRepository implements CopilotRepository {
       `insert into public.ai_runs (
          conversation_id, message_id, teacher_id, feature, provider, model,
          prompt_version, status, input_tokens, output_tokens, latency_ms,
-         correlation_id, started_at, completed_at, error_code
+         correlation_id, started_at, completed_at, error_code,
+         safety_decision, safety_reason_code, safety_policy_version
        )
        values (
          $1, $2, $3, $4, $5, $6, $7, $8,
          $9::bigint, $10::bigint, $11, $12,
-         timezone('utc'::text, now()), timezone('utc'::text, now()), $13
+         timezone('utc'::text, now()), timezone('utc'::text, now()), $13,
+         $14, $15, $16
        )`,
       [
         input.conversationId,
@@ -451,6 +458,9 @@ export class PostgresCopilotRepository implements CopilotRepository {
         input.latencyMs,
         input.correlationId,
         input.errorCode,
+        input.safety.decision,
+        input.safety.reasonCode ?? null,
+        input.safety.policyVersion,
       ]
     )
   }

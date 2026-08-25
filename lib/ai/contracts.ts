@@ -66,6 +66,7 @@ export interface LLMProvider {
   generate(input: {
     system: string
     user: string
+    maxOutputTokens?: number
     tools?: readonly unknown[]
     signal?: AbortSignal
   }): Promise<CopilotResponse>

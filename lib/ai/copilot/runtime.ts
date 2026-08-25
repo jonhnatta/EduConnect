@@ -2,10 +2,11 @@ import OpenAI from "openai"
 import { auth } from "../../../auth.ts"
 import { dbPool } from "../../db/pool.ts"
 import { queryOne } from "../../db/query.ts"
-import { reserveAiUsage } from "../access.ts"
+import { checkAiEligibility, reserveAiUsage, settleAiUsage } from "../access.ts"
 import { readAiConfig } from "../config.ts"
 import type { Citation } from "../contracts.ts"
 import { OpenAiEmbeddingProvider, OpenAiProvider } from "../providers/openai.ts"
+import { LangfuseTelemetry } from "../telemetry/langfuse.ts"
 import {
   qdrantHybridClient,
   searchKnowledge,
@@ -47,18 +48,52 @@ class LazyOpenAiCopilotProvider implements CopilotProvider {
     return provider.generate({
       system: input.system,
       user: `Contexto autorizado:\n${input.context}\n\nHistorico e pergunta:\n${input.user}`,
+      maxOutputTokens: input.maxOutputTokens,
     })
   }
 }
 
 class PostgresAiQuota implements CopilotQuota {
+  async checkAccess(input: { teacherId: string }) {
+    const client = await dbPool().connect()
+    try {
+      return await checkAiEligibility(client, input.teacherId)
+    } finally {
+      client.release()
+    }
+  }
+
   async reserve(input: {
     teacherId: string
     estimatedTokens: number
-  }): Promise<{ ok: true } | { ok: false; code: string }> {
+  }) {
     const client = await dbPool().connect()
     try {
       return await reserveAiUsage(client, input.teacherId, input.estimatedTokens)
+    } finally {
+      client.release()
+    }
+  }
+
+  async settle(input: {
+    teacherId: string
+    reservedTokens: number
+    usageDate: string
+    inputTokens: number
+    outputTokens: number
+  }): Promise<void> {
+    const client = await dbPool().connect()
+    try {
+      await settleAiUsage(
+        client,
+        input.teacherId,
+        input.usageDate,
+        input.reservedTokens,
+        {
+          inputTokens: input.inputTokens,
+          outputTokens: input.outputTokens,
+        }
+      )
     } finally {
       client.release()
     }
@@ -226,7 +261,22 @@ export function createDefaultCopilotService() {
     quota: new PostgresAiQuota(),
     provider: new LazyOpenAiCopilotProvider(),
     retrieveContext,
+    telemetry: new LangfuseTelemetry(),
   })
+}
+
+export async function getDefaultCopilotAccess(teacherId: string) {
+  const client = await dbPool().connect()
+  try {
+    return await checkAiEligibility(client, teacherId)
+  } finally {
+    client.release()
+  }
+}
+
+export async function requireDefaultCopilotAccess(teacherId: string): Promise<void> {
+  const access = await getDefaultCopilotAccess(teacherId)
+  if (!access.ok) throw new CopilotServiceError(access.code)
 }
 
 export function createDefaultCopilotApiHandlers() {

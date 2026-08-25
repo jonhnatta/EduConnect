@@ -213,6 +213,22 @@ test("message persistence updates conversation recency in the same repository op
   assert.match(source, /update public\.ai_conversations\s+set updated_at = timezone\('utc'::text, now\(\)\)/i)
 })
 
+test("Copilot run persistence stores the complete safety decision", () => {
+  const source = readFileSync(postgresRepository, "utf8")
+
+  assert.match(source, /safety_decision, safety_reason_code, safety_policy_version/)
+  assert.match(source, /input\.safety\.decision/)
+  assert.match(source, /input\.safety\.reasonCode \?\? null/)
+  assert.match(source, /input\.safety\.policyVersion/)
+})
+
+test("default Copilot runtime uses the existing Langfuse telemetry adapter", () => {
+  const source = readFileSync("lib/ai/copilot/runtime.ts", "utf8")
+
+  assert.match(source, /new LangfuseTelemetry\(\)/)
+  assert.match(source, /telemetry:/)
+})
+
 test("appendMessage updates conversation recency in the same transaction", async () => {
   const calls: { sql: string; params?: unknown[] }[] = []
   const repository = new PostgresCopilotRepository({
@@ -437,6 +453,41 @@ test("maps quota failures to 429 without exposing service internals", async () =
 
   assert.equal(response.status, 429)
   assert.deepEqual(await response.json(), { ok: false, error: "quota_exceeded" })
+})
+
+test("maps Copilot eligibility denials to stable non-500 responses", async () => {
+  const cases = [
+    {
+      code: "professor_not_approved",
+      status: 403,
+      body: { ok: false, error: "forbidden" },
+    },
+    {
+      code: "beta_disabled",
+      status: 403,
+      body: { ok: false, error: "copilot_unavailable" },
+    },
+    {
+      code: "feature_disabled",
+      status: 404,
+      body: { ok: false, error: "copilot_unavailable" },
+    },
+  ] as const
+
+  for (const expected of cases) {
+    const { handlers } = setup({
+      service: {
+        listConversations: async () => {
+          throw new CopilotServiceError(expected.code)
+        },
+      },
+    })
+
+    const response = await handlers.listConversations()
+
+    assert.equal(response.status, expected.status, expected.code)
+    assert.deepEqual(await response.json(), expected.body, expected.code)
+  }
 })
 
 test("sends messages and saves feedback idempotently", async () => {

@@ -5,6 +5,7 @@ import test from "node:test"
 const migrationUrl = new URL("../scripts/052_ai_foundation.sql", import.meta.url)
 const baselineUrl = new URL("../scripts/200_app_schema_postgres.sql", import.meta.url)
 const migrateRunnerUrl = new URL("../scripts/migrate.mjs", import.meta.url)
+const hardeningMigrationUrl = new URL("../scripts/056_ai_copilot_hardening.sql", import.meta.url)
 const baselineMarker = "-- 052_ai_foundation.sql"
 
 function normalized(value: string) {
@@ -174,4 +175,17 @@ test("historical PostgreSQL baseline remains independent from migration 00560", 
 
   assert.equal(baseline.includes(baselineMarker), false)
   assert.doesNotMatch(baseline, /create table if not exists public\.ai_beta_access/i)
+})
+
+test("Copilot hardening migration persists constrained safety decisions", () => {
+  assert.ok(existsSync(hardeningMigrationUrl))
+  const sql = normalized(readFileSync(hardeningMigrationUrl, "utf8"))
+
+  assert.match(sql, /alter table public\.ai_runs add column if not exists safety_decision text/)
+  assert.match(sql, /add column if not exists safety_reason_code text/)
+  assert.match(sql, /add column if not exists safety_policy_version text/)
+  assert.match(sql, /check \(safety_decision is null or safety_decision in \('approved', 'approved_with_warning', 'regenerate', 'abstain', 'blocked', 'human_review_required'\)\)/)
+
+  const runner = normalized(readFileSync(migrateRunnerUrl, "utf8"))
+  assert.match(runner, /\["00600", "ai_copilot_hardening", "scripts\/056_ai_copilot_hardening\.sql"\]/)
 })

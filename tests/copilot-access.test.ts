@@ -68,7 +68,13 @@ function repositoryFor(conversation: CopilotConversation | null): CopilotReposit
 
 function allowingQuota() {
   return {
-    reserve: async () => ({ ok: true as const }),
+    checkAccess: async () => ({ ok: true as const }),
+    reserve: async () => ({
+      ok: true as const,
+      reservedTokens: 1_200,
+      usageDate: "2026-08-24",
+    }),
+    settle: async () => {},
     getDailyUsage: async () => ({
       usedRequests: 0,
       requestLimit: 20,
@@ -135,10 +141,12 @@ test("does not reveal or use a conversation owned by another professor", async (
   const service = createCopilotService({
     repository: repositoryFor(activeConversation("33333333-3333-4333-8333-333333333333")),
     quota: {
+      checkAccess: async () => ({ ok: true }),
       reserve: async () => {
         quotaCalls += 1
-        return { ok: true }
+        return { ok: true, reservedTokens: 1_200, usageDate: "2026-08-24" }
       },
+      settle: async () => {},
       getDailyUsage: async () => ({
         usedRequests: 0,
         requestLimit: 20,
@@ -161,10 +169,12 @@ test("checks quota before calling the provider", async () => {
   const service = createCopilotService({
     repository: repositoryFor(activeConversation()),
     quota: {
+      checkAccess: async () => ({ ok: true }),
       reserve: async () => {
         order.push("quota")
         return { ok: false, code: "daily_quota_exceeded" }
       },
+      settle: async () => {},
       getDailyUsage: async () => ({
         usedRequests: 0,
         requestLimit: 20,
@@ -209,10 +219,12 @@ test("does not retrieve context when quota is denied after ownership is verified
   const service = createCopilotService({
     repository: repositoryFor(activeConversation()),
     quota: {
+      checkAccess: async () => ({ ok: true }),
       reserve: async () => {
         quotaCalls += 1
         return { ok: false, code: "monthly_quota_exceeded" }
       },
+      settle: async () => {},
       getDailyUsage: async () => ({
         usedRequests: 0,
         requestLimit: 20,
@@ -253,4 +265,39 @@ test("does not retrieve context when quota is denied after ownership is verified
   assert.equal(quotaCalls, 1)
   assert.equal(retrievalCalls, 0)
   assert.equal(providerCalls, 0)
+})
+
+test("enforces Copilot eligibility before create, list, get and feedback operations", async () => {
+  const quota = {
+    checkAccess: async () => ({ ok: false as const, code: "beta_disabled" }),
+    reserve: async () => ({
+      ok: true as const,
+      reservedTokens: 1_200,
+      usageDate: "2026-08-24",
+    }),
+    settle: async () => {},
+    getDailyUsage: async () => ({ usedRequests: 0, requestLimit: 20 }),
+  }
+  const service = createCopilotService({
+    repository: repositoryFor(activeConversation()),
+    quota,
+    provider: providerCountingCalls({ value: 0 }),
+    retrieveContext: async () => [],
+  })
+
+  const operations = [
+    () => service.createConversation({ actor: professor, title: "Plano" }),
+    () => service.listConversations({ actor: professor }),
+    () => service.getConversation({ actor: professor, conversationId }),
+    () => service.saveFeedback({
+      actor: professor,
+      conversationId,
+      messageId: "55555555-5555-4555-8555-555555555555",
+      rating: "positive" as const,
+    }),
+  ]
+
+  for (const operation of operations) {
+    await assert.rejects(operation, isCopilotError("beta_disabled"))
+  }
 })

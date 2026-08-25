@@ -140,6 +140,7 @@ export class OpenAiProvider implements LLMProvider {
   async generate(input: {
     system: string
     user: string
+    maxOutputTokens?: number
     tools?: readonly unknown[]
     signal?: AbortSignal
   }) {
@@ -150,6 +151,12 @@ export class OpenAiProvider implements LLMProvider {
       input: input.user,
       store: false,
       text: { format: zodTextFormat(generatedResponseSchema, "copilot_response") },
+    }
+    if (input.maxOutputTokens !== undefined) {
+      if (!Number.isSafeInteger(input.maxOutputTokens) || input.maxOutputTokens <= 0) {
+        throw new Error("invalid_max_output_tokens")
+      }
+      request.max_output_tokens = input.maxOutputTokens
     }
     if (tools !== undefined) request.tools = tools
 

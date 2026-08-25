@@ -1,4 +1,6 @@
 import { copilotResponseSchema, type Citation } from "../contracts.ts"
+import { NoopTelemetry, type Telemetry } from "../telemetry/langfuse.ts"
+import { evaluateCopilotInput } from "./guardrail.ts"
 import {
   conversationCreateSchema,
   copilotMessageInputSchema,
@@ -26,6 +28,9 @@ const DETAIL_MESSAGE_LIMIT = 100
 const DEFAULT_TITLE = "Nova conversa"
 const COPILOT_FEATURE = "teacher_copilot"
 const PROMPT_VERSION = "copilot-professor-v1"
+const COPILOT_MAX_OUTPUT_TOKENS = 1_000
+const COPILOT_MAX_PROMPT_BYTES = 28_000
+const COPILOT_RESERVED_TOKENS = 40_000
 const BLOCKED_RESPONSE =
   "Nao encontrei evidencias suficientes nos materiais autorizados para responder com seguranca."
 
@@ -86,10 +91,23 @@ export type CopilotRepository = {
 }
 
 export type CopilotQuota = {
+  checkAccess(input: {
+    teacherId: string
+  }): Promise<{ ok: true } | { ok: false; code: string }>
   reserve(input: {
     teacherId: string
     estimatedTokens: number
-  }): Promise<{ ok: true } | { ok: false; code: string }>
+  }): Promise<
+    | { ok: true; reservedTokens: number; usageDate: string }
+    | { ok: false; code: string }
+  >
+  settle(input: {
+    teacherId: string
+    reservedTokens: number
+    usageDate: string
+    inputTokens: number
+    outputTokens: number
+  }): Promise<void>
   getDailyUsage(input: {
     teacherId: string
   }): Promise<CopilotDailyUsage>
@@ -100,6 +118,7 @@ export type CopilotServiceDependencies = {
   quota: CopilotQuota
   provider: CopilotProvider
   retrieveContext: CopilotContextRetriever
+  telemetry?: Telemetry
 }
 
 type ActorInput = { actor: CopilotActor | null | undefined }
@@ -111,8 +130,29 @@ function requireProfessor(actor: CopilotActor | null | undefined): CopilotActor 
   return actor
 }
 
-function estimatedTokens(content: string): number {
-  return Math.max(1, Math.ceil(content.length / 4) + 1_000)
+function estimatedTokens(_content: string): number {
+  return COPILOT_RESERVED_TOKENS
+}
+
+function truncateUtf8(value: string, maxBytes: number, keepEnd = false): string {
+  const bytes = Buffer.from(value, "utf8")
+  if (bytes.length <= maxBytes) return value
+  const truncated = keepEnd
+    ? bytes.subarray(bytes.length - maxBytes).toString("utf8")
+    : bytes.subarray(0, maxBytes).toString("utf8")
+  return truncated.replace(keepEnd ? /^\uFFFD+/ : /\uFFFD+$/, "")
+}
+
+function boundedProviderPrompt(
+  history: readonly CopilotMessage[],
+  content: string,
+  evidence: readonly CopilotCitation[]
+) {
+  const halfBudget = Math.floor((COPILOT_MAX_PROMPT_BYTES - 1) / 2)
+  return {
+    user: truncateUtf8(formatUserPrompt(history, content), halfBudget, true),
+    context: truncateUtf8(formatContext(evidence), halfBudget),
+  }
 }
 
 function normalizedEvidence(evidence: readonly CopilotCitation[]): CopilotCitation[] {
@@ -194,11 +234,21 @@ export function createCopilotService({
   quota,
   provider,
   retrieveContext,
+  telemetry = new NoopTelemetry(),
 }: CopilotServiceDependencies) {
   const providerName = provider.name.trim()
   const providerModel = provider.model.trim()
   if (!providerName || !providerModel) {
     throw new TypeError("Copilot provider audit metadata is required")
+  }
+
+  async function requireCopilotAccess(
+    actorInput: CopilotActor | null | undefined
+  ): Promise<CopilotActor> {
+    const actor = requireProfessor(actorInput)
+    const access = await quota.checkAccess({ teacherId: actor.userId })
+    if (!access.ok) throw new CopilotServiceError(access.code)
+    return actor
   }
 
   function runAudit(input: {
@@ -274,7 +324,7 @@ export function createCopilotService({
 
   return {
     async createConversation(input: ActorInput & { title?: string }) {
-      const actor = requireProfessor(input.actor)
+      const actor = await requireCopilotAccess(input.actor)
       const parsed = conversationCreateSchema.parse({ title: input.title })
       return repository.createConversation({
         teacherId: actor.userId,
@@ -283,12 +333,12 @@ export function createCopilotService({
     },
 
     async listConversations(input: ActorInput) {
-      const actor = requireProfessor(input.actor)
+      const actor = await requireCopilotAccess(input.actor)
       return repository.listConversations(actor.userId)
     },
 
     async getConversation(input: ActorInput & { conversationId: string }) {
-      const actor = requireProfessor(input.actor)
+      const actor = await requireCopilotAccess(input.actor)
       const conversation = await ownedConversation(actor, input.conversationId)
       const [messages, citations, feedback] = await Promise.all([
         repository.listMessages(actor.userId, conversation.id, DETAIL_MESSAGE_LIMIT),
@@ -304,18 +354,74 @@ export function createCopilotService({
     },
 
     async getDailyUsage(input: ActorInput) {
-      const actor = requireProfessor(input.actor)
+      const actor = await requireCopilotAccess(input.actor)
       return quota.getDailyUsage({ teacherId: actor.userId })
     },
 
     async sendMessage(
       input: ActorInput & { conversationId: string; content: string }
     ) {
-      const actor = requireProfessor(input.actor)
+      const actor = await requireCopilotAccess(input.actor)
       const startedAt = Date.now()
       const correlationId = crypto.randomUUID()
       const { content } = copilotMessageInputSchema.parse({ content: input.content })
       const conversation = await ownedConversation(actor, input.conversationId)
+
+      const inputGuardrail = evaluateCopilotInput(content)
+      if (!inputGuardrail.ok) {
+        let blockedUserMessage: CopilotMessage | null = null
+        try {
+          return await telemetry.trace({
+            name: "copilot.execution",
+            metadata: {
+              teacherId: actor.userId,
+              conversationId: conversation.id,
+              correlationId,
+              provider: providerName,
+              model: providerModel,
+              decision: inputGuardrail.safety.decision,
+              reasonCode: inputGuardrail.safety.reasonCode,
+            },
+          }, async () => {
+            blockedUserMessage = await repository.appendMessage({
+              teacherId: actor.userId,
+              conversationId: conversation.id,
+              role: "user",
+              content,
+              status: "completed",
+              model: null,
+              provider: null,
+              promptVersion: null,
+              errorCode: null,
+            })
+            return persistBlockedResponse({
+              actor,
+              conversation,
+              userMessage: blockedUserMessage,
+              correlationId,
+              startedAt,
+              safety: inputGuardrail.safety,
+              errorCode: "prompt_injection",
+            })
+          })
+        } catch (error) {
+          await repository.recordRun({
+            ...runAudit({
+              actor,
+              conversation,
+              correlationId,
+              startedAt,
+              safety: inputGuardrail.safety,
+              status: "failed",
+              inputTokens: 0,
+              outputTokens: 0,
+              errorCode: "message_persistence_failed",
+            }),
+            messageId: null,
+          })
+          throw error
+        }
+      }
 
       const reservation = await quota.reserve({
         teacherId: actor.userId,
@@ -323,25 +429,16 @@ export function createCopilotService({
       })
       if (!reservation.ok) throw new CopilotServiceError(reservation.code)
 
-      const [history, allowedClassroomIds] = await Promise.all([
-        repository.listMessages(actor.userId, conversation.id, HISTORY_LIMIT),
-        repository.listAllowedClassroomIds(actor.userId),
-      ])
-      const classroomId =
-        conversation.classroomId && allowedClassroomIds.includes(conversation.classroomId)
-          ? conversation.classroomId
-          : null
-      const evidence = normalizedEvidence(
-        await retrieveContext({
-          teacherId: actor.userId,
-          query: content,
-          classroomId,
-          allowedClassroomIds,
-        })
-      )
-
-      if (evidence.length === 0) {
-        const userMessage = await repository.appendMessage({
+      let userMessage: CopilotMessage | null = null
+      let lastSafety: CopilotSafetyAudit = {
+        decision: "blocked",
+        policyVersion: PROMPT_VERSION,
+        reasonCode: "message_persistence_failed",
+      }
+      let failureCode = "message_persistence_failed"
+      let actualUsage = { inputTokens: 0, outputTokens: 0 }
+      try {
+        const persistedUserMessage = await repository.appendMessage({
           teacherId: actor.userId,
           conversationId: conversation.id,
           role: "user",
@@ -352,51 +449,81 @@ export function createCopilotService({
           promptVersion: null,
           errorCode: null,
         })
-        return persistBlockedResponse({
-          actor,
-          conversation,
-          userMessage,
-          correlationId,
-          startedAt,
-          safety: {
-            decision: "abstain",
-            policyVersion: PROMPT_VERSION,
-            reasonCode: "insufficient_context",
+        userMessage = persistedUserMessage
+        failureCode = "retrieval_failed"
+        lastSafety = {
+          decision: "blocked",
+          policyVersion: PROMPT_VERSION,
+          reasonCode: "retrieval_failed",
+        }
+        return await telemetry.trace({
+          name: "copilot.execution",
+          metadata: {
+            teacherId: actor.userId,
+            conversationId: conversation.id,
+            correlationId,
+            provider: providerName,
+            model: providerModel,
           },
-          errorCode: "insufficient_context",
-        })
-      }
+        }, async () => {
+          const [history, allowedClassroomIds] = await Promise.all([
+            repository.listMessages(actor.userId, conversation.id, HISTORY_LIMIT),
+            repository.listAllowedClassroomIds(actor.userId),
+          ])
+          const classroomId =
+            conversation.classroomId && allowedClassroomIds.includes(conversation.classroomId)
+              ? conversation.classroomId
+              : null
+          const evidence = normalizedEvidence(
+            await retrieveContext({
+              teacherId: actor.userId,
+              query: content,
+              classroomId,
+              allowedClassroomIds,
+            })
+          )
 
-      const userMessage = await repository.appendMessage({
-        teacherId: actor.userId,
-        conversationId: conversation.id,
-        role: "user",
-        content,
-        status: "completed",
-        model: null,
-        provider: null,
-        promptVersion: null,
-        errorCode: null,
-      })
+          if (evidence.length === 0) {
+            lastSafety = {
+              decision: "abstain",
+              policyVersion: PROMPT_VERSION,
+              reasonCode: "insufficient_context",
+            }
+            return persistBlockedResponse({
+              actor,
+              conversation,
+              userMessage: persistedUserMessage,
+              correlationId,
+              startedAt,
+              safety: lastSafety,
+              errorCode: "insufficient_context",
+            })
+          }
 
-      let lastSafety: CopilotSafetyAudit = {
-        decision: "blocked",
-        policyVersion: PROMPT_VERSION,
-        reasonCode: "provider_failed",
-      }
-      try {
-        const providerOutput = await provider.generate({
-          system:
-            "Voce e o Copilot do Professor. Responda somente com base no contexto autorizado.",
-          user: formatUserPrompt(history, content),
-          context: formatContext(evidence),
-        })
+          failureCode = "provider_failed"
+          const prompt = boundedProviderPrompt(history, content, evidence)
+          const providerOutput = await telemetry.wrap({
+            name: "copilot.generate",
+            metadata: {
+              teacherId: actor.userId,
+              conversationId: conversation.id,
+              correlationId,
+              provider: providerName,
+              model: providerModel,
+            },
+          }, () => provider.generate({
+            system:
+              "Voce e o Copilot do Professor. Responda somente com base no contexto autorizado.",
+            user: prompt.user,
+            context: prompt.context,
+            maxOutputTokens: COPILOT_MAX_OUTPUT_TOKENS,
+          }))
         const parsedOutput = copilotResponseSchema.safeParse(providerOutput)
         if (!parsedOutput.success || parsedOutput.data.text.trim() === "") {
           return persistBlockedResponse({
             actor,
             conversation,
-            userMessage,
+            userMessage: persistedUserMessage,
             correlationId,
             startedAt,
             safety: {
@@ -409,7 +536,26 @@ export function createCopilotService({
         }
 
         const output = parsedOutput.data
+        actualUsage = output.usage
         lastSafety = output.safety
+        if (output.usage.outputTokens > COPILOT_MAX_OUTPUT_TOKENS) {
+          lastSafety = {
+            decision: "blocked",
+            policyVersion: PROMPT_VERSION,
+            reasonCode: "output_token_limit_exceeded",
+          }
+          return persistBlockedResponse({
+            actor,
+            conversation,
+            userMessage: persistedUserMessage,
+            correlationId,
+            startedAt,
+            safety: lastSafety,
+            errorCode: "output_token_limit_exceeded",
+            inputTokens: output.usage.inputTokens,
+            outputTokens: output.usage.outputTokens,
+          })
+        }
         const citations = citationsSupportedBy(output.citations, evidence)
         const approved =
           output.safety.decision === "approved" ||
@@ -419,7 +565,7 @@ export function createCopilotService({
           return persistBlockedResponse({
             actor,
             conversation,
-            userMessage,
+            userMessage: persistedUserMessage,
             correlationId,
             startedAt,
             safety: output.safety,
@@ -432,7 +578,7 @@ export function createCopilotService({
           return persistBlockedResponse({
             actor,
             conversation,
-            userMessage,
+            userMessage: persistedUserMessage,
             correlationId,
             startedAt,
             safety: {
@@ -471,7 +617,8 @@ export function createCopilotService({
             errorCode: null,
           }),
         })
-        return { userMessage, assistantMessage, citations }
+        return { userMessage: persistedUserMessage, assistantMessage, citations }
+        })
       } catch (error) {
         await repository.recordRun({
           ...runAudit({
@@ -481,14 +628,26 @@ export function createCopilotService({
             startedAt,
             safety: lastSafety,
             status: "failed",
-            inputTokens: 0,
-            outputTokens: 0,
+            inputTokens: actualUsage.inputTokens,
+            outputTokens: actualUsage.outputTokens,
             errorCode:
-              error instanceof CopilotServiceError ? error.code : "provider_failed",
+              error instanceof CopilotServiceError ? error.code : failureCode,
           }),
-          messageId: null,
+          messageId: userMessage?.id ?? null,
         })
         throw error
+      } finally {
+        if (
+          "reservedTokens" in reservation &&
+          "usageDate" in reservation
+        ) {
+          await quota.settle({
+            teacherId: actor.userId,
+            reservedTokens: reservation.reservedTokens as number,
+            usageDate: reservation.usageDate as string,
+            ...actualUsage,
+          })
+        }
       }
     },
 
@@ -500,7 +659,7 @@ export function createCopilotService({
         comment?: string
       }
     ) {
-      const actor = requireProfessor(input.actor)
+      const actor = await requireCopilotAccess(input.actor)
       await ownedConversation(actor, input.conversationId)
       const feedback = feedbackSchema.parse({
         rating: input.rating,
