@@ -151,6 +151,33 @@ npm run db:migrate
 npm run dev
 ```
 
+### Copilot MVP local
+
+O Copilot do professor e opt-in. Para testar localmente, edite somente o `.env` criado a
+partir do `.env.example`, que e ignorado pelo git, e habilite:
+
+```bash
+FEATURE_AI_COPILOT=true
+OPENAI_API_KEY=sk-...
+OPENAI_COPILOT_MODEL=gpt-5-mini
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+```
+
+Nunca grave uma chave real da OpenAI no `.env.example`, em commits ou em logs. Com o
+Copilot ativo, mantenha tambem as variaveis de Qdrant e Langfuse preenchidas no `.env`,
+pois `/api/health/ready` valida as dependencias de IA antes de aceitar trafego.
+
+Fluxo local minimo apos subir a aplicacao:
+
+```bash
+curl --fail http://localhost:3000/api/health/live
+curl --fail http://localhost:3000/api/health/ready
+npm test
+npm run lint
+npx tsc --noEmit
+npm run build
+```
+
 ## Validacao
 
 ```bash

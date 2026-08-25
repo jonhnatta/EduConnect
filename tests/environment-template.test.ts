@@ -189,6 +189,21 @@ test("documentation uses only the canonical environment workflow", () => {
   }
 })
 
+test("README documents the local Copilot enablement and validation flow", () => {
+  const source = readFileSync(new URL("README.md", repositoryRoot), "utf8")
+
+  assert.match(source, /FEATURE_AI_COPILOT=true/)
+  assert.match(source, /OPENAI_API_KEY=/)
+  assert.match(source, /\.env[\s\S]*ignorado/)
+  assert.match(source, /OpenAI[\s\S]*(?:nunca|nao deve)[\s\S]*commit/i)
+  assert.match(source, /curl --fail http:\/\/localhost:3000\/api\/health\/live/)
+  assert.match(source, /curl --fail http:\/\/localhost:3000\/api\/health\/ready/)
+  assert.match(source, /npm test/)
+  assert.match(source, /npm run lint/)
+  assert.match(source, /npx tsc --noEmit/)
+  assert.match(source, /npm run build/)
+})
+
 test("keeps the thirteen specified sections complete and ordered", () => {
   const source = readFileSync(templateUrl, "utf8")
   let previousIndex = -1
