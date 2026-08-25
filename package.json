@@ -26,7 +26,7 @@
     "test:feed-pagination": "node --test tests/feed-pagination.test.ts",
     "test:production-security": "node --test tests/production-security.test.ts",
     "test:env-config": "node --test tests/environment-template.test.ts",
-    "test:ai": "node --test tests/ai-*.test.ts",
+    "test:ai": "node --test tests/ai-*.test.ts tests/copilot-*.test.ts",
     "test:e2e": "playwright test",
     "test": "npm run test:oauth && npm run test:password-reset && npm run test:cache && npm run test:exam-security && npm run test:feed-pagination && npm run test:production-security && npm run test:env-config && npm run test:ai",
     "github:project": "node scripts/github-project-demand.mjs",
