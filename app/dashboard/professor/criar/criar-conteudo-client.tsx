@@ -50,6 +50,7 @@ import {
   Upload,
   Video,
   X,
+  Sparkles,
 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -245,6 +246,48 @@ export function CriarConteudoClient({
   const [dicaBodyText, setDicaBodyText] = useState("")
   const [dicaVideoUrl, setDicaVideoUrl] = useState<string | null>(null)
   const [dicaImageUrls, setDicaImageUrls] = useState<string[]>([])
+  const [lessonPlanLoading, setLessonPlanLoading] = useState(false)
+  const [lessonPlanError, setLessonPlanError] = useState<string | null>(null)
+  const [lessonPlanProposal, setLessonPlanProposal] = useState<{
+    id: string
+    draft: { title: string; objectives: string[]; steps: { title: string; minutes: number; description: string }[]; materials: string[]; activity: string; assessment: string; citations: { title: string; excerpt: string; url: string }[] }
+  } | null>(null)
+
+  const generateLessonPlan = async () => {
+    const topic = formData.titulo.trim()
+    if (!topic) { toast.error("Informe o titulo ou tema antes de gerar"); return }
+    setLessonPlanLoading(true); setLessonPlanError(null)
+    try {
+      const conversationResponse = await fetch("/api/copilot/conversations", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: `Plano de aula: ${topic}` }),
+      })
+      const conversationData = await conversationResponse.json().catch(() => null)
+      if (!conversationResponse.ok) throw new Error(conversationData?.error || "Nao foi possivel iniciar o Copilot")
+      const response = await fetch("/api/copilot/lesson-plans", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversationId: conversationData.conversation.id,
+          idempotencyKey: crypto.randomUUID(),
+          request: { topic, audience: formData.nivel || "Alunos", durationMinutes: 50, objective: `Ensinar ${topic}`, contentIds: [] },
+        }),
+      })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(data?.error || "Nao foi possivel gerar o plano")
+      setLessonPlanProposal(data.proposal)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Erro ao gerar plano de aula"
+      setLessonPlanError(message); toast.error(message)
+    } finally { setLessonPlanLoading(false) }
+  }
+
+  const saveLessonPlanDraft = async () => {
+    if (!lessonPlanProposal) return
+    const response = await fetch(`/api/copilot/lesson-plans/${lessonPlanProposal.id}/save`, { method: "POST" })
+    if (!response.ok) { toast.error("Nao foi possivel salvar o rascunho"); return }
+    toast.success("Plano salvo como rascunho")
+    setLessonPlanProposal(null)
+  }
 
   const ensureArticleDraftId = useCallback(async () => {
     if (articleDraftId) return articleDraftId
@@ -1317,6 +1360,33 @@ export function CriarConteudoClient({
                 onChange={(e) => setFormData({ ...formData, titulo: e.target.value })}
               />
             </div>
+
+            {tipoSelecionado === "artigo" && (
+              <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-4 space-y-3">
+                <div className="flex items-start gap-3">
+                  <Sparkles className="h-5 w-5 text-[#1D4ED8] mt-0.5" />
+                  <div className="flex-1">
+                    <p className="font-semibold text-gray-900">Copilot do professor</p>
+                    <p className="text-sm text-gray-600">Gere uma proposta de plano de aula baseada nos seus materiais autorizados.</p>
+                  </div>
+                  <Button type="button" onClick={() => void generateLessonPlan()} disabled={lessonPlanLoading} className="gap-2">
+                    {lessonPlanLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                    {lessonPlanLoading ? "Gerando..." : "Criar plano com Copilot"}
+                  </Button>
+                </div>
+                {lessonPlanError && <p className="text-sm text-red-600">{lessonPlanError}</p>}
+                {lessonPlanProposal && (
+                  <div className="rounded-lg border bg-white p-4 space-y-3">
+                    <div className="flex justify-between gap-3"><h3 className="font-semibold">{lessonPlanProposal.draft.title}</h3><Button type="button" variant="ghost" size="sm" onClick={() => setLessonPlanProposal(null)}>Fechar</Button></div>
+                    <p className="text-sm"><strong>Objetivos:</strong> {lessonPlanProposal.draft.objectives.join(" ")}</p>
+                    <ol className="list-decimal pl-5 text-sm space-y-1">{lessonPlanProposal.draft.steps.map((step) => <li key={`${step.title}-${step.minutes}`}><strong>{step.title}</strong> ({step.minutes} min): {step.description}</li>)}</ol>
+                    <p className="text-sm"><strong>Atividade:</strong> {lessonPlanProposal.draft.activity}</p>
+                    <div className="flex gap-2"><Button type="button" onClick={() => void saveLessonPlanDraft()}>Salvar como rascunho</Button><Button type="button" variant="outline" onClick={() => setLessonPlanProposal(null)}>Rejeitar</Button></div>
+                    <p className="text-xs text-gray-500">Fontes: {lessonPlanProposal.draft.citations.map((citation) => citation.title).join(", ")}</p>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="grid sm:grid-cols-2 gap-4">
               <div className="space-y-2">
