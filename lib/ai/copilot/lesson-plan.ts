@@ -51,6 +51,7 @@ export const lessonPlanProposalSchema = z
     status: lessonPlanStatusSchema,
     draft: lessonPlanDraftSchema,
     citations: z.array(citationSchema).max(20),
+    model: z.string().trim().min(1).max(160),
     usage: usageSchema,
     safety: safetyResultSchema,
     contentItemId: z.string().uuid().nullable().optional(),

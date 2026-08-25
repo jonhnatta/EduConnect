@@ -13,6 +13,13 @@ import type {
   CopilotRun,
   CopilotStoredCitation,
 } from "./types.ts"
+import type {
+  LessonPlanProposalPayload,
+  LessonPlanProposalRepository,
+  LessonPlanSavedContentItem,
+  StoredLessonPlanProposal,
+} from "./lesson-plan-service.ts"
+import { LessonPlanServiceError } from "./lesson-plan-service.ts"
 
 type ConversationRow = QueryResultRow & {
   id: string
@@ -53,6 +60,30 @@ type FeedbackRow = QueryResultRow & {
   message_id: string
   rating: CopilotMessageFeedback["rating"]
   comment: string | null
+}
+
+type LessonPlanProposalRow = QueryResultRow & {
+  id: string
+  teacher_id: string
+  conversation_id: string
+  status: StoredLessonPlanProposal["status"]
+  payload: LessonPlanProposalPayload | string
+  payload_hash: string
+  idempotency_key: string
+  content_item_id: string | null
+  model: string
+  created_at: Date | string
+  updated_at: Date | string
+}
+
+type LessonPlanContentItemRow = QueryResultRow & {
+  id: string
+  author_id: string
+  title: string
+  body_html: string
+  status: string
+  visibility: string
+  settings: Record<string, unknown> | string
 }
 
 type Queryable = {
@@ -136,6 +167,42 @@ function mapFeedback(row: FeedbackRow): CopilotMessageFeedback {
     messageId: row.message_id,
     rating: row.rating,
     comment: row.comment,
+  }
+}
+
+function jsonObject<T>(value: T | string): T {
+  return typeof value === "string" ? JSON.parse(value) as T : value
+}
+
+function mapLessonPlanProposal(row: LessonPlanProposalRow): StoredLessonPlanProposal {
+  const payload = jsonObject<LessonPlanProposalPayload>(row.payload)
+  return {
+    id: row.id,
+    teacherId: row.teacher_id,
+    conversationId: row.conversation_id,
+    status: row.status,
+    draft: payload.draft,
+    citations: payload.citations,
+    model: row.model,
+    usage: payload.usage,
+    safety: payload.safety,
+    contentItemId: row.content_item_id,
+    payloadHash: row.payload_hash,
+    idempotencyKey: row.idempotency_key,
+    createdAt: iso(row.created_at)!,
+    updatedAt: iso(row.updated_at)!,
+  }
+}
+
+function mapLessonPlanContentItem(row: LessonPlanContentItemRow): LessonPlanSavedContentItem {
+  return {
+    id: row.id,
+    authorId: row.author_id,
+    title: row.title,
+    bodyHtml: row.body_html,
+    status: row.status,
+    visibility: row.visibility,
+    settings: jsonObject<Record<string, unknown>>(row.settings),
   }
 }
 
@@ -235,7 +302,7 @@ async function touchConversation(
   )
 }
 
-export class PostgresCopilotRepository implements CopilotRepository {
+export class PostgresCopilotRepository implements CopilotRepository, LessonPlanProposalRepository {
   private readonly database: CopilotRepositoryDatabase
 
   constructor(database: CopilotRepositoryDatabase = {
@@ -463,5 +530,173 @@ export class PostgresCopilotRepository implements CopilotRepository {
         input.safety.policyVersion,
       ]
     )
+  }
+
+  async createProposal(input: {
+    teacherId: string
+    conversationId: string
+    status: StoredLessonPlanProposal["status"]
+    payload: LessonPlanProposalPayload
+    payloadHash: string
+    idempotencyKey: string
+    safetyDecision: string
+    model: string
+  }): Promise<StoredLessonPlanProposal> {
+    const rows = await this.database.query<LessonPlanProposalRow>(
+      `insert into public.ai_lesson_plan_proposals (
+         teacher_id, conversation_id, status, payload, payload_hash,
+         idempotency_key, safety_decision, model
+       )
+       select c.teacher_id, c.id, $3, $4::jsonb, $5, $6, $7, $8
+         from public.ai_conversations c
+        where c.teacher_id = $1
+          and c.id = $2
+       on conflict (teacher_id, idempotency_key)
+       do update set updated_at = public.ai_lesson_plan_proposals.updated_at
+       where public.ai_lesson_plan_proposals.payload_hash = excluded.payload_hash
+       returning id, teacher_id, conversation_id, status, payload, payload_hash,
+                 idempotency_key, content_item_id, model, created_at, updated_at`,
+      [
+        input.teacherId,
+        input.conversationId,
+        input.status,
+        JSON.stringify(input.payload),
+        input.payloadHash,
+        input.idempotencyKey,
+        input.safetyDecision,
+        input.model,
+      ]
+    )
+    const row = rows[0]
+    if (!row) {
+      const conflicts = await this.database.query<{ id: string; payload_hash: string }>(
+        `select id, payload_hash
+           from public.ai_lesson_plan_proposals
+          where teacher_id = $1
+            and idempotency_key = $2
+          limit 1`,
+        [input.teacherId, input.idempotencyKey]
+      )
+      if (conflicts[0]) {
+        throw new LessonPlanServiceError("lesson_plan_idempotency_conflict")
+      }
+      throw new CopilotServiceError("conversation_not_found")
+    }
+    return mapLessonPlanProposal(row)
+  }
+
+  async getProposal(input: {
+    teacherId: string
+    proposalId: string
+  }): Promise<StoredLessonPlanProposal | null> {
+    const rows = await this.database.query<LessonPlanProposalRow>(
+      `select id, teacher_id, conversation_id, status, payload, payload_hash,
+              idempotency_key, content_item_id, model, created_at, updated_at
+         from public.ai_lesson_plan_proposals
+        where teacher_id = $1
+          and id = $2
+        limit 1`,
+      [input.teacherId, input.proposalId]
+    )
+    return rows[0] ? mapLessonPlanProposal(rows[0]) : null
+  }
+
+  async rejectProposal(input: {
+    teacherId: string
+    proposalId: string
+  }): Promise<StoredLessonPlanProposal | null> {
+    const rows = await this.database.query<LessonPlanProposalRow>(
+      `update public.ai_lesson_plan_proposals
+          set status = 'rejected',
+              updated_at = timezone('utc'::text, now())
+        where teacher_id = $1
+          and id = $2
+          and status = 'proposed'
+        returning id, teacher_id, conversation_id, status, payload, payload_hash,
+                  idempotency_key, content_item_id, model, created_at, updated_at`,
+      [input.teacherId, input.proposalId]
+    )
+    if (rows[0]) return mapLessonPlanProposal(rows[0])
+    return this.getProposal(input)
+  }
+
+  async saveDraft(input: {
+    teacherId: string
+    proposalId: string
+    contentDraft: {
+      title: string
+      bodyHtml: string
+      status: "draft"
+      visibility: "private"
+      settings: Record<string, unknown>
+    }
+  }) {
+    return this.database.transaction(async (client) => {
+      const proposalRows = await client.query<LessonPlanProposalRow>(
+        `select id, teacher_id, conversation_id, status, payload, payload_hash,
+                idempotency_key, content_item_id, model, created_at, updated_at
+           from public.ai_lesson_plan_proposals
+          where teacher_id = $1
+            and id = $2
+          for update`,
+        [input.teacherId, input.proposalId]
+      )
+      const proposalRow = proposalRows.rows[0]
+      if (!proposalRow) return null
+      const proposal = mapLessonPlanProposal(proposalRow)
+
+      if (proposal.contentItemId) {
+        const contentRows = await client.query<LessonPlanContentItemRow>(
+          `select id, author_id, title, body_html, status, visibility, settings
+             from public.content_items
+            where id = $1
+              and author_id = $2
+            limit 1`,
+          [proposal.contentItemId, input.teacherId]
+        )
+        const contentRow = contentRows.rows[0]
+        return contentRow
+          ? { proposal, contentItem: mapLessonPlanContentItem(contentRow) }
+          : null
+      }
+
+      if (proposal.status !== "proposed") return null
+
+      const contentRows = await client.query<LessonPlanContentItemRow>(
+        `insert into public.content_items (
+           author_id, type, title, body_html, status, visibility, settings,
+           created_at, updated_at
+         )
+         values (
+           $1, 'article', $2, $3, 'draft', 'private', $4::jsonb,
+           timezone('utc'::text, now()), timezone('utc'::text, now())
+         )
+         returning id, author_id, title, body_html, status, visibility, settings`,
+        [
+          input.teacherId,
+          input.contentDraft.title,
+          input.contentDraft.bodyHtml,
+          JSON.stringify(input.contentDraft.settings),
+        ]
+      )
+      const contentItem = mapLessonPlanContentItem(contentRows.rows[0]!)
+      const savedRows = await client.query<LessonPlanProposalRow>(
+        `update public.ai_lesson_plan_proposals
+            set status = 'saved',
+                content_item_id = $3,
+                updated_at = timezone('utc'::text, now())
+          where teacher_id = $1
+            and id = $2
+            and status = 'proposed'
+          returning id, teacher_id, conversation_id, status, payload, payload_hash,
+                    idempotency_key, content_item_id, model, created_at, updated_at`,
+        [input.teacherId, input.proposalId, contentItem.id]
+      )
+
+      return {
+        proposal: mapLessonPlanProposal(savedRows.rows[0]!),
+        contentItem,
+      }
+    })
   }
 }

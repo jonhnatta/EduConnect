@@ -101,6 +101,7 @@ test("accepts a lesson plan proposal with status, usage, safety and optional sav
     status: "proposed",
     draft: validDraft,
     citations: validDraft.citations,
+    model: "gpt-5-mini-test",
     usage: { inputTokens: 120, outputTokens: 240 },
     safety: { decision: "approved", policyVersion: "2026-08-25" },
     contentItemId: null,
@@ -116,6 +117,7 @@ test("requires proposal citations to match the draft citations", () => {
     status: "proposed",
     draft: validDraft,
     citations: [],
+    model: "gpt-5-mini-test",
     usage: { inputTokens: 120, outputTokens: 240 },
     safety: { decision: "approved", policyVersion: "2026-08-25" },
     contentItemId: null,
@@ -130,6 +132,7 @@ test("requires a saved proposal to have a content item and other statuses not to
     conversationId: "123e4567-e89b-12d3-a456-426614174002",
     draft: validDraft,
     citations: validDraft.citations,
+    model: "gpt-5-mini-test",
     usage: { inputTokens: 120, outputTokens: 240 },
     safety: { decision: "approved", policyVersion: "2026-08-25" },
   }
@@ -149,4 +152,21 @@ test("requires a saved proposal to have a content item and other statuses not to
       `expected ${status} to reject a content item`
     )
   }
+})
+
+test("requires the persisted model on lesson plan proposals", () => {
+  const proposal = {
+    id: "123e4567-e89b-12d3-a456-426614174001",
+    conversationId: "123e4567-e89b-12d3-a456-426614174002",
+    status: "proposed",
+    draft: validDraft,
+    citations: validDraft.citations,
+    usage: { inputTokens: 120, outputTokens: 240 },
+    safety: { decision: "approved", policyVersion: "2026-08-25" },
+    contentItemId: null,
+  }
+
+  assert.equal(lessonPlanProposalSchema.safeParse(proposal).success, false)
+  assert.equal(lessonPlanProposalSchema.safeParse({ ...proposal, model: "   " }).success, false)
+  assert.equal(lessonPlanProposalSchema.safeParse({ ...proposal, model: "gpt-5-mini-test" }).success, true)
 })
