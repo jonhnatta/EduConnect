@@ -186,6 +186,7 @@ class PostgresKnowledgeSourceRepository implements KnowledgeSourceRepository {
 function toCopilotCitation(citation: Citation) {
   return {
     sourceId: citation.id,
+    contentSourceId: citation.contentSourceId,
     sourceKind: citation.kind,
     title: citation.title,
     excerpt: citation.excerpt,

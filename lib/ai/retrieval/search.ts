@@ -206,7 +206,10 @@ function parseCandidate(
   return {
     id,
     score: point.score,
-    citation: citationSchema.parse(payload),
+    citation: citationSchema.parse({
+      ...payload,
+      contentSourceId: payload.source_id,
+    }),
     source: {
       tenantId: payload.tenant_id,
       teacherId: payload.teacher_id,

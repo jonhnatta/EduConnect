@@ -305,7 +305,8 @@ function normalizedEvidence(
   const requested = new Set(requestedContentIds)
   const filtered = evidence.filter((citation) => {
     if (citation.sourceKind !== "internal") return false
-    if (requested.size > 0 && !requested.has(citation.sourceId)) return false
+    const contentSourceId = citation.contentSourceId ?? citation.sourceId
+    if (requested.size > 0 && !requested.has(contentSourceId)) return false
     return [
       citation.sourceId,
       citation.title,

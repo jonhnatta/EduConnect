@@ -43,6 +43,7 @@ export type CopilotMessageWrite = {
 
 export type CopilotCitation = {
   sourceId: string
+  contentSourceId?: string
   sourceKind: Citation["kind"]
   title: string
   excerpt: string

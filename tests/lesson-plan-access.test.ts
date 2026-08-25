@@ -516,6 +516,29 @@ test("generates a grounded proposal with canonical citations, telemetry, audit a
   })
 })
 
+test("keeps authorized content identity separate from retrieved chunk identity", async () => {
+  const chunkId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+  const evidence: CopilotCitation = {
+    ...canonicalEvidence,
+    sourceId: chunkId,
+    contentSourceId: allowedContentId,
+  }
+  const output = providerOutput({
+    citations: [{ ...canonicalCitation, id: chunkId }],
+  })
+  const { service, repository } = setup({ evidence: [evidence], output })
+
+  const proposal = await service.generateProposal({
+    actor: professor,
+    conversationId,
+    idempotencyKey: "different-chunk-id",
+    request,
+  })
+
+  assert.equal(proposal.status, "proposed")
+  assert.equal(repository.proposal?.citations[0]?.id, chunkId)
+})
+
 test("persists a safe blocked proposal when provider output is invalid", async () => {
   const { repository, quota, service } = setup({
     output: providerOutput({
