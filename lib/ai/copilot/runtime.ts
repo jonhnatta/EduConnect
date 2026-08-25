@@ -63,6 +63,40 @@ class PostgresAiQuota implements CopilotQuota {
       client.release()
     }
   }
+
+  async getDailyUsage(input: { teacherId: string }) {
+    const config = readAiConfig()
+    if (!config.enabled) throw new CopilotServiceError("feature_disabled")
+
+    const row = await queryOne<{
+      used_requests: number | string | null
+      request_limit: number | string | null
+    }>(
+      `select
+         coalesce(usage.request_count, 0)::integer as used_requests,
+         coalesce(beta.daily_request_limit, $2)::integer as request_limit
+       from public.profiles p
+       left join public.ai_beta_access beta
+         on beta.teacher_id = p.id
+        and beta.enabled = true
+        and (beta.starts_at is null or beta.starts_at <= clock_timestamp())
+        and (beta.expires_at is null or beta.expires_at > clock_timestamp())
+       left join public.ai_usage_daily usage
+         on usage.teacher_id = p.id
+        and usage.usage_date = (current_timestamp at time zone 'UTC')::date
+       where p.id = $1
+         and p.user_type = 'professor'
+         and p.account_status = 'active'
+         and p.deleted_at is null
+       limit 1`,
+      [input.teacherId, config.dailyRequests]
+    )
+
+    return {
+      usedRequests: Number(row?.used_requests ?? 0),
+      requestLimit: Number(row?.request_limit ?? config.dailyRequests),
+    }
+  }
 }
 
 class PostgresKnowledgeSourceRepository implements KnowledgeSourceRepository {

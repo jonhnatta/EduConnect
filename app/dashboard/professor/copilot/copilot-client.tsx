@@ -1,6 +1,6 @@
 "use client"
 
-import { FormEvent, useEffect, useMemo, useState, useTransition } from "react"
+import { FormEvent, useCallback, useEffect, useMemo, useState, useTransition } from "react"
 import { AlertCircle, Bot, Check, Loader2, MessageSquare, Plus, Send, Sparkles, ThumbsDown, ThumbsUp } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -37,6 +37,18 @@ type ConversationState = {
   conversation: Conversation
   messages: Message[]
   citationsByMessage: Record<string, Citation[]>
+  feedbackByMessage: Record<string, Feedback>
+  loaded: boolean
+}
+
+type Feedback = {
+  rating: "positive" | "negative"
+  comment: string | null
+}
+
+type Usage = {
+  usedRequests: number
+  requestLimit: number
 }
 
 const errorCopy: Record<string, string> = {
@@ -74,14 +86,58 @@ export function CopilotClient() {
   const [input, setInput] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadingDetails, setLoadingDetails] = useState<Record<string, boolean>>({})
   const [sending, setSending] = useState(false)
-  const [sessionRequests, setSessionRequests] = useState(0)
-  const [feedbackByMessage, setFeedbackByMessage] = useState<Record<string, "positive" | "negative">>({})
+  const [usage, setUsage] = useState<Usage | null>(null)
   const [creating, startCreating] = useTransition()
 
   const activeState = activeId ? stateById[activeId] ?? null : null
   const activeMessages = activeState?.messages ?? []
+  const activeFeedback = activeState?.feedbackByMessage ?? {}
+  const activeLoaded = activeState?.loaded ?? false
+  const activeLoading = activeId ? loadingDetails[activeId] === true : false
   const sortedConversations = useMemo(() => sortConversations(conversations), [conversations])
+
+  const loadUsage = useCallback(async () => {
+    const response = await fetch("/api/copilot/usage", {
+      headers: { accept: "application/json" },
+      cache: "no-store",
+    })
+    const data = await parseJson(response)
+    if (!response.ok || !data.ok) {
+      setError(apiError(data.error, "Nao foi possivel carregar o uso do Copilot."))
+      return
+    }
+    setUsage(data.usage)
+  }, [])
+
+  const loadConversationDetail = useCallback(async (conversationId: string) => {
+    setLoadingDetails((current) => ({ ...current, [conversationId]: true }))
+    const response = await fetch(`/api/copilot/conversations/${conversationId}`, {
+      headers: { accept: "application/json" },
+      cache: "no-store",
+    })
+    const data = await parseJson(response)
+    if (!response.ok || !data.ok) {
+      setError(apiError(data.error, "Nao foi possivel carregar a conversa."))
+      setLoadingDetails((current) => ({ ...current, [conversationId]: false }))
+      return
+    }
+    setConversations((current) =>
+      sortConversations(current.map((item) => item.id === conversationId ? data.conversation : item))
+    )
+    setStateById((current) => ({
+      ...current,
+      [conversationId]: {
+        conversation: data.conversation,
+        messages: data.messages ?? [],
+        citationsByMessage: data.citationsByMessage ?? {},
+        feedbackByMessage: data.feedbackByMessage ?? {},
+        loaded: true,
+      },
+    }))
+    setLoadingDetails((current) => ({ ...current, [conversationId]: false }))
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -112,6 +168,8 @@ export function CopilotClient() {
             conversation,
             messages: [],
             citationsByMessage: {},
+            feedbackByMessage: {},
+            loaded: false,
           }
         }
         return next
@@ -132,6 +190,28 @@ export function CopilotClient() {
     }
   }, [])
 
+  useEffect(() => {
+    async function refreshUsage() {
+      await loadUsage()
+    }
+
+    refreshUsage().catch(() => {
+      setError("Nao foi possivel carregar o uso do Copilot.")
+    })
+  }, [loadUsage])
+
+  useEffect(() => {
+    if (!activeId || activeLoaded) return
+    async function refreshConversationDetail(conversationId: string) {
+      await loadConversationDetail(conversationId)
+    }
+
+    refreshConversationDetail(activeId).catch(() => {
+      setError("Nao foi possivel carregar a conversa.")
+      setLoadingDetails((current) => ({ ...current, [activeId]: false }))
+    })
+  }, [activeId, activeLoaded, loadConversationDetail])
+
   function upsertConversation(conversation: Conversation) {
     setConversations((current) => {
       const withoutCurrent = current.filter((item) => item.id !== conversation.id)
@@ -143,6 +223,8 @@ export function CopilotClient() {
         conversation,
         messages: [],
         citationsByMessage: {},
+        feedbackByMessage: {},
+        loaded: true,
       },
     }))
     setActiveId(conversation.id)
@@ -223,6 +305,8 @@ export function CopilotClient() {
         conversation,
         messages: [],
         citationsByMessage: {},
+        feedbackByMessage: {},
+        loaded: true,
       }
       return {
         ...current,
@@ -233,16 +317,30 @@ export function CopilotClient() {
             ...previous.citationsByMessage,
             [assistantMessage.id]: citations,
           },
+          loaded: true,
         },
       }
     })
-    setSessionRequests((current) => current + 1)
+    await loadUsage().catch(() => {})
     setSending(false)
   }
 
   async function sendFeedback(messageId: string, rating: "positive" | "negative") {
     if (!activeId) return
-    setFeedbackByMessage((current) => ({ ...current, [messageId]: rating }))
+    setStateById((current) => {
+      const previous = current[activeId]
+      if (!previous) return current
+      return {
+        ...current,
+        [activeId]: {
+          ...previous,
+          feedbackByMessage: {
+            ...previous.feedbackByMessage,
+            [messageId]: { rating, comment: null },
+          },
+        },
+      }
+    })
 
     const conversationId = activeId
     const response = await fetch(`/api/copilot/conversations/${conversationId}/feedback`, {
@@ -252,10 +350,18 @@ export function CopilotClient() {
     })
 
     if (!response.ok) {
-      setFeedbackByMessage((current) => {
-        const next = { ...current }
-        delete next[messageId]
-        return next
+      setStateById((current) => {
+        const previous = current[conversationId]
+        if (!previous) return current
+        const nextFeedback = { ...previous.feedbackByMessage }
+        delete nextFeedback[messageId]
+        return {
+          ...current,
+          [conversationId]: {
+            ...previous,
+            feedbackByMessage: nextFeedback,
+          },
+        }
       })
       const data = await parseJson(response)
       setError(apiError(data.error, "Nao foi possivel salvar o feedback."))
@@ -276,7 +382,7 @@ export function CopilotClient() {
         </div>
         <div className="flex items-center gap-3">
           <Badge variant="secondary" className="bg-blue-50 text-[#1D4ED8]">
-            Uso diario: {sessionRequests} pergunta{sessionRequests === 1 ? "" : "s"} nesta sessao
+            Uso diario: {usage ? `${usage.usedRequests}/${usage.requestLimit}` : "carregando"}
           </Badge>
           <Button onClick={createConversation} disabled={creating} className="gap-2 bg-[#1D4ED8] hover:bg-[#1E3A8A]">
             {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
@@ -336,7 +442,12 @@ export function CopilotClient() {
 
         <section className="flex min-h-[640px] flex-col">
           <div className="flex-1 space-y-4 overflow-y-auto p-4 lg:p-6">
-            {!loading && activeMessages.length === 0 ? (
+            {activeLoading ? (
+              <div className="flex h-full min-h-[360px] items-center justify-center gap-2 text-sm text-gray-500">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Carregando mensagens
+              </div>
+            ) : !loading && activeMessages.length === 0 ? (
               <div className="flex h-full min-h-[360px] flex-col items-center justify-center text-center">
                 <Bot className="mb-4 h-12 w-12 text-gray-300" />
                 <p className="font-display text-lg font-semibold text-gray-900">Pergunte sobre suas turmas e materiais</p>
@@ -348,7 +459,7 @@ export function CopilotClient() {
               activeMessages.map((message) => {
                 const assistant = message.role === "assistant"
                 const citations = activeState?.citationsByMessage[message.id] ?? []
-                const feedback = feedbackByMessage[message.id]
+                const feedback = activeFeedback[message.id]?.rating
                 return (
                   <article
                     key={message.id}

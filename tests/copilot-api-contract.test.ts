@@ -19,6 +19,7 @@ const routeFiles = [
   "app/api/copilot/conversations/[conversationId]/route.ts",
   "app/api/copilot/conversations/[conversationId]/messages/route.ts",
   "app/api/copilot/conversations/[conversationId]/feedback/route.ts",
+  "app/api/copilot/usage/route.ts",
 ]
 const migrateRunner = "scripts/migrate.mjs"
 const postgresRepository = "lib/ai/copilot/postgres-repository.ts"
@@ -64,6 +65,40 @@ function message(overrides: Partial<CopilotMessage> = {}): CopilotMessage {
   }
 }
 
+function conversationDetail() {
+  return {
+    conversation: conversation(),
+    messages: [
+      message({
+        id: "66666666-6666-4666-8666-666666666666",
+        role: "user",
+        content: "Ajude",
+        model: null,
+        provider: null,
+        promptVersion: null,
+      }),
+      message(),
+    ],
+    citationsByMessage: {
+      [messageId]: [{
+        sourceId: "material-1",
+        sourceKind: "internal" as const,
+        title: "Sequencia didatica",
+        excerpt: "Pratica guiada ajuda a consolidar o conteudo.",
+        url: "/materiais/material-1",
+        retrievedAt: "2026-08-24T12:00:00.000Z",
+        displayOrder: 0,
+      }],
+    },
+    feedbackByMessage: {
+      [messageId]: {
+        rating: "positive" as const,
+        comment: "util",
+      },
+    },
+  }
+}
+
 function jsonRequest(path: string, body: unknown): Request {
   return new Request(`https://educonnect.test${path}`, {
     method: "POST",
@@ -86,6 +121,7 @@ function setup(options: {
     get: [],
     send: [],
     feedback: [],
+    usage: [],
   }
   const service: CopilotServiceApi = {
     createConversation: async (input) => {
@@ -98,7 +134,7 @@ function setup(options: {
     },
     getConversation: async (input) => {
       calls.get.push(input)
-      return conversation()
+      return conversationDetail()
     },
     sendMessage: async (input) => {
       calls.send.push(input)
@@ -118,6 +154,13 @@ function setup(options: {
     saveFeedback: async (input) => {
       calls.feedback.push(input)
     },
+    getDailyUsage: async (input) => {
+      calls.usage.push(input)
+      return {
+        usedRequests: 4,
+        requestLimit: 20,
+      }
+    },
     ...options.service,
   }
   const handlers = createCopilotApiHandlers({
@@ -132,6 +175,13 @@ test("exposes the required App Router copilot route files", () => {
     const source = readFileSync(file, "utf8")
     assert.match(source, /createDefaultCopilotApiHandlers/)
   }
+})
+
+test("usage route is wired to the default App Router handlers", () => {
+  const source = readFileSync("app/api/copilot/usage/route.ts", "utf8")
+
+  assert.match(source, /createDefaultCopilotApiHandlers/)
+  assert.match(source, /handlers\.getDailyUsage/)
 })
 
 test("registers the feedback migration used by the feedback route", () => {
@@ -264,10 +314,26 @@ test("reads a conversation and hides conversations owned by another professor", 
   const otherResponse = await otherProfessor.handlers.getConversation(new Request("https://educonnect.test"), params())
 
   assert.equal(okResponse.status, 200)
-  assert.deepEqual(await okResponse.json(), { ok: true, conversation: conversation() })
+  assert.deepEqual(await okResponse.json(), { ok: true, ...conversationDetail() })
   assert.equal(missingResponse.status, 404)
   assert.equal(otherResponse.status, 404)
   assert.deepEqual(await missingResponse.json(), await otherResponse.json())
+})
+
+test("returns daily usage using only the server-side professor actor", async () => {
+  const { calls, handlers } = setup()
+
+  const response = await handlers.getDailyUsage()
+
+  assert.equal(response.status, 200)
+  assert.deepEqual(await response.json(), {
+    ok: true,
+    usage: {
+      usedRequests: 4,
+      requestLimit: 20,
+    },
+  })
+  assert.deepEqual(calls.usage[0], { actor: professor })
 })
 
 test("returns 422 for invalid JSON or invalid payloads", async () => {

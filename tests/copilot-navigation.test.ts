@@ -28,9 +28,19 @@ test("Copilot client uses the professor-scoped API without sending teacher_id", 
   const client = source(copilotClient)
 
   assert.match(client, /fetch\("\/api\/copilot\/conversations"/)
+  assert.match(client, /fetch\(`\/api\/copilot\/conversations\/\$\{conversationId\}`/)
   assert.match(client, /fetch\(`\/api\/copilot\/conversations\/\$\{conversationId\}\/messages`/)
   assert.match(client, /fetch\(`\/api\/copilot\/conversations\/\$\{conversationId\}\/feedback`/)
+  assert.match(client, /fetch\("\/api\/copilot\/usage"/)
   assert.doesNotMatch(client, /teacher_id|teacherId/)
+})
+
+test("Copilot usage display is backed by server values", () => {
+  const client = source(copilotClient)
+
+  assert.match(client, /usedRequests/)
+  assert.match(client, /requestLimit/)
+  assert.doesNotMatch(client, /sessionRequests|setSessionRequests/)
 })
 
 test("Copilot client renders required states, citations, feedback and usage copy", () => {

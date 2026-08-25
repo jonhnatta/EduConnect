@@ -9,15 +9,20 @@ import type {
   CopilotCitation,
   CopilotContextRetriever,
   CopilotConversation,
+  CopilotConversationDetail,
+  CopilotDailyUsage,
   CopilotMessage,
   CopilotMessageWrite,
   CopilotMessageCitation,
+  CopilotMessageFeedback,
   CopilotProvider,
   CopilotRun,
   CopilotSafetyAudit,
+  CopilotStoredCitation,
 } from "./types.ts"
 
 const HISTORY_LIMIT = 12
+const DETAIL_MESSAGE_LIMIT = 100
 const DEFAULT_TITLE = "Nova conversa"
 const COPILOT_FEATURE = "teacher_copilot"
 const PROMPT_VERSION = "copilot-professor-v1"
@@ -55,6 +60,14 @@ export type CopilotRepository = {
     conversationId: string,
     limit: number
   ): Promise<readonly CopilotMessage[]>
+  listMessageCitations(
+    teacherId: string,
+    conversationId: string
+  ): Promise<readonly CopilotStoredCitation[]>
+  listMessageFeedback(
+    teacherId: string,
+    conversationId: string
+  ): Promise<readonly CopilotMessageFeedback[]>
   appendMessage(input: CopilotMessageWrite): Promise<CopilotMessage>
   persistAssistantResult(input: {
     message: CopilotMessageWrite
@@ -77,6 +90,9 @@ export type CopilotQuota = {
     teacherId: string
     estimatedTokens: number
   }): Promise<{ ok: true } | { ok: false; code: string }>
+  getDailyUsage(input: {
+    teacherId: string
+  }): Promise<CopilotDailyUsage>
 }
 
 export type CopilotServiceDependencies = {
@@ -150,6 +166,27 @@ function citationsSupportedBy(
       displayOrder: seen.size - 1,
     }]
   })
+}
+
+function groupCitations(
+  citations: readonly CopilotStoredCitation[]
+): CopilotConversationDetail["citationsByMessage"] {
+  const grouped: CopilotConversationDetail["citationsByMessage"] = {}
+  for (const { messageId, ...citation } of citations) {
+    grouped[messageId] ??= []
+    grouped[messageId]!.push(citation)
+  }
+  return grouped
+}
+
+function groupFeedback(
+  feedbackRows: readonly CopilotMessageFeedback[]
+): CopilotConversationDetail["feedbackByMessage"] {
+  const grouped: CopilotConversationDetail["feedbackByMessage"] = {}
+  for (const { messageId, ...feedback } of feedbackRows) {
+    grouped[messageId] = feedback
+  }
+  return grouped
 }
 
 export function createCopilotService({
@@ -252,7 +289,23 @@ export function createCopilotService({
 
     async getConversation(input: ActorInput & { conversationId: string }) {
       const actor = requireProfessor(input.actor)
-      return ownedConversation(actor, input.conversationId)
+      const conversation = await ownedConversation(actor, input.conversationId)
+      const [messages, citations, feedback] = await Promise.all([
+        repository.listMessages(actor.userId, conversation.id, DETAIL_MESSAGE_LIMIT),
+        repository.listMessageCitations(actor.userId, conversation.id),
+        repository.listMessageFeedback(actor.userId, conversation.id),
+      ])
+      return {
+        conversation,
+        messages,
+        citationsByMessage: groupCitations(citations),
+        feedbackByMessage: groupFeedback(feedback),
+      }
+    },
+
+    async getDailyUsage(input: ActorInput) {
+      const actor = requireProfessor(input.actor)
+      return quota.getDailyUsage({ teacherId: actor.userId })
     },
 
     async sendMessage(

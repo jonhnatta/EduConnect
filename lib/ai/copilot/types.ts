@@ -54,6 +54,28 @@ export type CopilotMessageCitation = CopilotCitation & {
   displayOrder: number
 }
 
+export type CopilotStoredCitation = CopilotMessageCitation & {
+  messageId: string
+}
+
+export type CopilotMessageFeedback = {
+  messageId: string
+  rating: "positive" | "negative"
+  comment: string | null
+}
+
+export type CopilotConversationDetail = {
+  conversation: CopilotConversation
+  messages: readonly CopilotMessage[]
+  citationsByMessage: Record<string, CopilotMessageCitation[]>
+  feedbackByMessage: Record<string, Omit<CopilotMessageFeedback, "messageId">>
+}
+
+export type CopilotDailyUsage = {
+  usedRequests: number
+  requestLimit: number
+}
+
 export type CopilotProviderInput = {
   system: string
   user: string

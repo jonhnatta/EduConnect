@@ -22,8 +22,10 @@ class MemoryRepository implements CopilotRepository {
   readonly conversations = new Map<string, CopilotConversation>()
   readonly messages: CopilotMessage[] = []
   readonly citations: CopilotMessageCitation[] = []
+  readonly citationsByMessage = new Map<string, CopilotMessageCitation[]>()
   readonly runs: Array<Record<string, unknown>> = []
   feedback: unknown
+  readonly feedbackByMessage = new Map<string, { rating: "positive" | "negative"; comment: string | null }>()
   listMessagesLimit: number | null = null
   failAssistantPersistenceAfterMessage = false
 
@@ -101,6 +103,7 @@ class MemoryRepository implements CopilotRepository {
         throw new Error("injected_assistant_persistence_failure")
       }
       this.citations.push(...input.citations)
+      this.citationsByMessage.set(assistantMessage.id, [...input.citations])
       this.runs.push({ ...input.run, messageId: assistantMessage.id })
       return assistantMessage
     } catch (error) {
@@ -113,6 +116,26 @@ class MemoryRepository implements CopilotRepository {
 
   async saveFeedback(input: Parameters<CopilotRepository["saveFeedback"]>[0]) {
     this.feedback = input
+    this.feedbackByMessage.set(input.messageId, {
+      rating: input.rating,
+      comment: input.comment ?? null,
+    })
+  }
+
+  async listMessageCitations() {
+    return [...this.citationsByMessage.entries()].flatMap(([messageId, citations]) =>
+      citations.map((citation) => ({
+        messageId,
+        ...citation,
+      }))
+    )
+  }
+
+  async listMessageFeedback() {
+    return [...this.feedbackByMessage.entries()].map(([messageId, feedback]) => ({
+      messageId,
+      ...feedback,
+    }))
   }
 
   async listAllowedClassroomIds() {
@@ -135,7 +158,13 @@ function setup(options: {
   let retrievalInput: Parameters<NonNullable<Parameters<typeof createCopilotService>[0]["retrieveContext"]>>[0] | null = null
   const service = createCopilotService({
     repository,
-    quota: { reserve: async () => ({ ok: true }) },
+    quota: {
+      reserve: async () => ({ ok: true }),
+      getDailyUsage: async () => ({
+        usedRequests: 3,
+        requestLimit: 20,
+      }),
+    },
     provider: {
       name: "openai",
       model: "test-model",
@@ -196,6 +225,84 @@ test("creates and lists professor conversations through teacher ownership", asyn
   assert.equal(created.teacherId, actor.userId)
   assert.equal(created.title, "Aula de matemática")
   assert.equal(conversations.some((conversation) => conversation.id === created.id), true)
+})
+
+test("loads a conversation with persisted messages, citations and feedback", async () => {
+  const { repository, service } = setup()
+  const assistantMessage: CopilotMessage = {
+    id: "assistant-message",
+    conversationId,
+    role: "assistant",
+    content: "Use exemplos resolvidos.",
+    status: "completed",
+    model: "test-model",
+    provider: "openai",
+    promptVersion: "copilot-professor-v1",
+    createdAt: "2026-08-24T12:00:00.000Z",
+    completedAt: "2026-08-24T12:00:00.000Z",
+    errorCode: null,
+  }
+  repository.messages.push({
+    id: "user-message",
+    conversationId,
+    role: "user",
+    content: "Como revisar equacoes?",
+    status: "completed",
+    model: null,
+    provider: null,
+    promptVersion: null,
+    createdAt: "2026-08-24T11:59:00.000Z",
+    completedAt: "2026-08-24T11:59:00.000Z",
+    errorCode: null,
+  }, assistantMessage)
+  repository.citationsByMessage.set(assistantMessage.id, [{
+    sourceId: "material-1",
+    sourceKind: "internal",
+    title: "Sequencia didatica",
+    excerpt: "Pratica guiada ajuda a consolidar o conteudo.",
+    url: "/materiais/material-1",
+    retrievedAt: "2026-08-24T12:00:00.000Z",
+    displayOrder: 0,
+  }])
+  repository.feedbackByMessage.set(assistantMessage.id, {
+    rating: "positive",
+    comment: "util",
+  })
+
+  const detail = await service.getConversation({
+    actor,
+    conversationId,
+  })
+
+  assert.equal(detail.conversation.id, conversationId)
+  assert.deepEqual(detail.messages.map((message) => message.id), [
+    "user-message",
+    "assistant-message",
+  ])
+  assert.deepEqual(detail.citationsByMessage[assistantMessage.id], [{
+    sourceId: "material-1",
+    sourceKind: "internal",
+    title: "Sequencia didatica",
+    excerpt: "Pratica guiada ajuda a consolidar o conteudo.",
+    url: "/materiais/material-1",
+    retrievedAt: "2026-08-24T12:00:00.000Z",
+    displayOrder: 0,
+  }])
+  assert.deepEqual(detail.feedbackByMessage[assistantMessage.id], {
+    rating: "positive",
+    comment: "util",
+  })
+})
+
+test("reads real daily usage through the quota provider", async () => {
+  const { service } = setup()
+
+  const usage = await service.getDailyUsage({ actor })
+
+  assert.deepEqual(usage, {
+    usedRequests: 3,
+    requestLimit: 20,
+  })
 })
 
 test("sends a message with authorized context, bounded history and structured citations", async () => {

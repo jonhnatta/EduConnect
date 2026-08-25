@@ -126,11 +126,22 @@ export function createCopilotApiHandlers(dependencies: CopilotApiDependencies) {
       if (!access.ok) return access.response
       try {
         const { conversationId } = await routeParams(context)
-        const conversation = await service.getConversation({
+        const detail = await service.getConversation({
           actor: access.actor,
           conversationId,
         })
-        return json({ ok: true, conversation })
+        return json({ ok: true, ...detail })
+      } catch (error) {
+        return errorResponse(error)
+      }
+    },
+
+    async getDailyUsage() {
+      const access = await requireProfessor(resolveActor)
+      if (!access.ok) return access.response
+      try {
+        const usage = await service.getDailyUsage({ actor: access.actor })
+        return json({ ok: true, usage })
       } catch (error) {
         return errorResponse(error)
       }

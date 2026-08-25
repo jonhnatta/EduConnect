@@ -32,6 +32,8 @@ function repositoryFor(conversation: CopilotConversation | null): CopilotReposit
         ? conversation
         : null,
     listMessages: async () => [],
+    listMessageCitations: async () => [],
+    listMessageFeedback: async () => [],
     appendMessage: async (input) => ({
       id: "55555555-5555-4555-8555-555555555555",
       conversationId: input.conversationId,
@@ -61,6 +63,16 @@ function repositoryFor(conversation: CopilotConversation | null): CopilotReposit
     saveFeedback: async () => {},
     listAllowedClassroomIds: async () => [],
     recordRun: async () => {},
+  }
+}
+
+function allowingQuota() {
+  return {
+    reserve: async () => ({ ok: true as const }),
+    getDailyUsage: async () => ({
+      usedRequests: 0,
+      requestLimit: 20,
+    }),
   }
 }
 
@@ -101,7 +113,7 @@ test("allows only a professor actor to use the Copilot", async () => {
   const providerCalls = { value: 0 }
   const service = createCopilotService({
     repository: repositoryFor(activeConversation()),
-    quota: { reserve: async () => ({ ok: true }) },
+    quota: allowingQuota(),
     provider: providerCountingCalls(providerCalls),
     retrieveContext: async () => [],
   })
@@ -127,6 +139,10 @@ test("does not reveal or use a conversation owned by another professor", async (
         quotaCalls += 1
         return { ok: true }
       },
+      getDailyUsage: async () => ({
+        usedRequests: 0,
+        requestLimit: 20,
+      }),
     },
     provider: providerCountingCalls(providerCalls),
     retrieveContext: async () => [],
@@ -149,6 +165,10 @@ test("checks quota before calling the provider", async () => {
         order.push("quota")
         return { ok: false, code: "daily_quota_exceeded" }
       },
+      getDailyUsage: async () => ({
+        usedRequests: 0,
+        requestLimit: 20,
+      }),
     },
     provider: {
       name: "openai",
@@ -193,6 +213,10 @@ test("does not retrieve context when quota is denied after ownership is verified
         quotaCalls += 1
         return { ok: false, code: "monthly_quota_exceeded" }
       },
+      getDailyUsage: async () => ({
+        usedRequests: 0,
+        requestLimit: 20,
+      }),
     },
     provider: {
       name: "openai",

@@ -8,8 +8,10 @@ import type {
   CopilotConversation,
   CopilotMessage,
   CopilotMessageCitation,
+  CopilotMessageFeedback,
   CopilotMessageWrite,
   CopilotRun,
+  CopilotStoredCitation,
 } from "./types.ts"
 
 type ConversationRow = QueryResultRow & {
@@ -34,6 +36,23 @@ type MessageRow = QueryResultRow & {
   created_at: Date | string
   completed_at: Date | string | null
   error_code: string | null
+}
+
+type CitationRow = QueryResultRow & {
+  message_id: string
+  source_kind: CopilotStoredCitation["sourceKind"]
+  source_id: string | null
+  title: string
+  excerpt: string | null
+  url: string | null
+  retrieved_at: Date | string
+  display_order: number
+}
+
+type FeedbackRow = QueryResultRow & {
+  message_id: string
+  rating: CopilotMessageFeedback["rating"]
+  comment: string | null
 }
 
 type Queryable = {
@@ -96,6 +115,27 @@ function mapMessage(row: MessageRow): CopilotMessage {
     createdAt: iso(row.created_at)!,
     completedAt: iso(row.completed_at),
     errorCode: row.error_code,
+  }
+}
+
+function mapCitation(row: CitationRow): CopilotStoredCitation {
+  return {
+    messageId: row.message_id,
+    sourceKind: row.source_kind,
+    sourceId: row.source_id ?? "",
+    title: row.title,
+    excerpt: row.excerpt ?? "",
+    url: row.url ?? "",
+    retrievedAt: iso(row.retrieved_at)!,
+    displayOrder: row.display_order,
+  }
+}
+
+function mapFeedback(row: FeedbackRow): CopilotMessageFeedback {
+  return {
+    messageId: row.message_id,
+    rating: row.rating,
+    comment: row.comment,
   }
 }
 
@@ -260,6 +300,40 @@ export class PostgresCopilotRepository implements CopilotRepository {
     return rows.reverse().map(mapMessage)
   }
 
+  async listMessageCitations(
+    teacherId: string,
+    conversationId: string
+  ): Promise<readonly CopilotStoredCitation[]> {
+    const rows = await this.database.query<CitationRow>(
+      `select ci.message_id, ci.source_kind, ci.source_id, ci.title,
+              ci.excerpt, ci.url, ci.retrieved_at, ci.display_order
+         from public.ai_citations ci
+         join public.ai_messages m on m.id = ci.message_id
+         join public.ai_conversations c on c.id = m.conversation_id
+        where c.teacher_id = $1
+          and c.id = $2
+        order by m.created_at asc, ci.display_order asc`,
+      [teacherId, conversationId]
+    )
+    return rows.map(mapCitation)
+  }
+
+  async listMessageFeedback(
+    teacherId: string,
+    conversationId: string
+  ): Promise<readonly CopilotMessageFeedback[]> {
+    const rows = await this.database.query<FeedbackRow>(
+      `select f.message_id, f.rating, f.comment
+         from public.ai_message_feedback f
+         join public.ai_conversations c on c.id = f.conversation_id
+        where c.teacher_id = $1
+          and c.id = $2
+        order by f.updated_at asc`,
+      [teacherId, conversationId]
+    )
+    return rows.map(mapFeedback)
+  }
+
   async appendMessage(input: CopilotMessageWrite): Promise<CopilotMessage> {
     return this.database.transaction(async (client) => {
       const message = await insertMessage(client, input)
@@ -278,15 +352,16 @@ export class PostgresCopilotRepository implements CopilotRepository {
       for (const citation of input.citations) {
         await client.query(
           `insert into public.ai_citations (
-             message_id, source_kind, source_id, title, url, retrieved_at,
+             message_id, source_kind, source_id, title, excerpt, url, retrieved_at,
              content_hash, display_order
            )
-           values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
           [
             assistantMessage.id,
             citation.sourceKind,
             citation.sourceId,
             citation.title,
+            citation.excerpt,
             citation.url,
             citation.retrievedAt,
             citationHash(citation),
