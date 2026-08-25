@@ -1,4 +1,4 @@
-import { copilotResponseSchema, type Citation } from "../contracts.ts"
+import { copilotResponseSchema, usageSchema, type Citation } from "../contracts.ts"
 import { NoopTelemetry, type Telemetry } from "../telemetry/langfuse.ts"
 import { evaluateCopilotInput } from "./guardrail.ts"
 import {
@@ -388,11 +388,11 @@ export function createCopilotService({
               conversationId: conversation.id,
               role: "user",
               content,
-              status: "completed",
+              status: "blocked",
               model: null,
               provider: null,
               promptVersion: null,
-              errorCode: null,
+              errorCode: "prompt_injection",
             })
             return persistBlockedResponse({
               actor,
@@ -437,6 +437,7 @@ export function createCopilotService({
       }
       let failureCode = "message_persistence_failed"
       let actualUsage = { inputTokens: 0, outputTokens: 0 }
+      let settlementUsage = { inputTokens: 0, outputTokens: 0 }
       try {
         const persistedUserMessage = await repository.appendMessage({
           teacherId: actor.userId,
@@ -511,13 +512,28 @@ export function createCopilotService({
               provider: providerName,
               model: providerModel,
             },
-          }, () => provider.generate({
-            system:
-              "Voce e o Copilot do Professor. Responda somente com base no contexto autorizado.",
-            user: prompt.user,
-            context: prompt.context,
-            maxOutputTokens: COPILOT_MAX_OUTPUT_TOKENS,
-          }))
+          }, () => {
+            settlementUsage = {
+              inputTokens: reservation.reservedTokens,
+              outputTokens: 0,
+            }
+            return provider.generate({
+              system:
+                "Voce e o Copilot do Professor. Responda somente com base no contexto autorizado.",
+              user: prompt.user,
+              context: prompt.context,
+              maxOutputTokens: COPILOT_MAX_OUTPUT_TOKENS,
+            })
+          })
+        const reportedUsage = usageSchema.safeParse(providerOutput.usage)
+        if (
+          reportedUsage.success &&
+          reportedUsage.data.inputTokens + reportedUsage.data.outputTokens <=
+            reservation.reservedTokens
+        ) {
+          actualUsage = reportedUsage.data
+          settlementUsage = reportedUsage.data
+        }
         const parsedOutput = copilotResponseSchema.safeParse(providerOutput)
         if (!parsedOutput.success || parsedOutput.data.text.trim() === "") {
           return persistBlockedResponse({
@@ -532,6 +548,8 @@ export function createCopilotService({
               reasonCode: "invalid_provider_output",
             },
             errorCode: "invalid_provider_output",
+            inputTokens: actualUsage.inputTokens,
+            outputTokens: actualUsage.outputTokens,
           })
         }
 
@@ -645,7 +663,7 @@ export function createCopilotService({
             teacherId: actor.userId,
             reservedTokens: reservation.reservedTokens as number,
             usageDate: reservation.usageDate as string,
-            ...actualUsage,
+            ...settlementUsage,
           })
         }
       }
