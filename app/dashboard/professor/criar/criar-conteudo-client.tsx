@@ -289,6 +289,14 @@ export function CriarConteudoClient({
     setLessonPlanProposal(null)
   }
 
+  const rejectLessonPlan = async () => {
+    if (!lessonPlanProposal) return
+    const response = await fetch(`/api/copilot/lesson-plans/${lessonPlanProposal.id}`, { method: "DELETE" })
+    if (!response.ok) { toast.error("Nao foi possivel rejeitar a proposta"); return }
+    setLessonPlanProposal(null)
+    toast.message("Proposta rejeitada")
+  }
+
   const ensureArticleDraftId = useCallback(async () => {
     if (articleDraftId) return articleDraftId
     const id = await getOrCreateArticleDraftId()
@@ -1381,7 +1389,7 @@ export function CriarConteudoClient({
                     <p className="text-sm"><strong>Objetivos:</strong> {lessonPlanProposal.draft.objectives.join(" ")}</p>
                     <ol className="list-decimal pl-5 text-sm space-y-1">{lessonPlanProposal.draft.steps.map((step) => <li key={`${step.title}-${step.minutes}`}><strong>{step.title}</strong> ({step.minutes} min): {step.description}</li>)}</ol>
                     <p className="text-sm"><strong>Atividade:</strong> {lessonPlanProposal.draft.activity}</p>
-                    <div className="flex gap-2"><Button type="button" onClick={() => void saveLessonPlanDraft()}>Salvar como rascunho</Button><Button type="button" variant="outline" onClick={() => setLessonPlanProposal(null)}>Rejeitar</Button></div>
+                    <div className="flex gap-2"><Button type="button" onClick={() => void saveLessonPlanDraft()}>Salvar como rascunho</Button><Button type="button" variant="outline" onClick={() => void rejectLessonPlan()}>Rejeitar</Button></div>
                     <p className="text-xs text-gray-500">Fontes: {lessonPlanProposal.draft.citations.map((citation) => citation.title).join(", ")}</p>
                   </div>
                 )}
