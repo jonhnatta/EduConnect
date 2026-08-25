@@ -10,6 +10,7 @@ import {
   feedbackSchema,
 } from "./validation.ts"
 import type { CopilotActor } from "./types.ts"
+import type { CopilotConversation } from "./types.ts"
 
 export { CopilotServiceError } from "./service.ts"
 
@@ -57,6 +58,17 @@ function noContent(): Response {
   })
 }
 
+function publicConversation(conversation: CopilotConversation) {
+  return {
+    id: conversation.id,
+    title: conversation.title,
+    classroomId: conversation.classroomId,
+    status: conversation.status,
+    createdAt: conversation.createdAt,
+    updatedAt: conversation.updatedAt,
+  }
+}
+
 function isQuotaError(code: string): boolean {
   return code === "daily_quota_exceeded" || code === "monthly_quota_exceeded"
 }
@@ -100,7 +112,10 @@ export function createCopilotApiHandlers(dependencies: CopilotApiDependencies) {
       if (!access.ok) return access.response
       try {
         const conversations = await service.listConversations({ actor: access.actor })
-        return json({ ok: true, conversations })
+        return json({
+          ok: true,
+          conversations: conversations.map(publicConversation),
+        })
       } catch (error) {
         return errorResponse(error)
       }
@@ -115,7 +130,7 @@ export function createCopilotApiHandlers(dependencies: CopilotApiDependencies) {
           actor: access.actor,
           title: input.title,
         })
-        return json({ ok: true, conversation }, 201)
+        return json({ ok: true, conversation: publicConversation(conversation) }, 201)
       } catch (error) {
         return errorResponse(error)
       }
@@ -130,7 +145,11 @@ export function createCopilotApiHandlers(dependencies: CopilotApiDependencies) {
           actor: access.actor,
           conversationId,
         })
-        return json({ ok: true, ...detail })
+        return json({
+          ok: true,
+          ...detail,
+          conversation: publicConversation(detail.conversation),
+        })
       } catch (error) {
         return errorResponse(error)
       }

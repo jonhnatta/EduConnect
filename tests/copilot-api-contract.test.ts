@@ -48,6 +48,25 @@ function conversation(overrides: Partial<CopilotConversation> = {}): CopilotConv
   }
 }
 
+function publicConversation(overrides: Partial<CopilotConversation> = {}) {
+  const { teacherId: _teacherId, ...publicDto } = conversation(overrides)
+  return publicDto
+}
+
+function assertNoTeacherIdentifier(value: unknown) {
+  if (Array.isArray(value)) {
+    for (const item of value) assertNoTeacherIdentifier(item)
+    return
+  }
+  if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      assert.notEqual(key, "teacherId")
+      assert.notEqual(key, "teacher_id")
+      assertNoTeacherIdentifier(item)
+    }
+  }
+}
+
 function message(overrides: Partial<CopilotMessage> = {}): CopilotMessage {
   return {
     id: messageId,
@@ -285,9 +304,13 @@ test("creates and lists conversations using only the server-side professor actor
   const listed = await handlers.listConversations()
 
   assert.equal(created.status, 201)
-  assert.deepEqual(await created.json(), { ok: true, conversation: conversation({ title: "Plano semanal" }) })
+  const createdBody = await created.json()
+  assert.deepEqual(createdBody, { ok: true, conversation: publicConversation({ title: "Plano semanal" }) })
+  assertNoTeacherIdentifier(createdBody)
   assert.equal(listed.status, 200)
-  assert.deepEqual(await listed.json(), { ok: true, conversations: [conversation()] })
+  const listedBody = await listed.json()
+  assert.deepEqual(listedBody, { ok: true, conversations: [publicConversation()] })
+  assertNoTeacherIdentifier(listedBody)
   assert.deepEqual(calls.create[0], { actor: professor, title: "Plano semanal" })
   assert.deepEqual(calls.list[0], { actor: professor })
 })
@@ -314,7 +337,13 @@ test("reads a conversation and hides conversations owned by another professor", 
   const otherResponse = await otherProfessor.handlers.getConversation(new Request("https://educonnect.test"), params())
 
   assert.equal(okResponse.status, 200)
-  assert.deepEqual(await okResponse.json(), { ok: true, ...conversationDetail() })
+  const okBody = await okResponse.json()
+  assert.deepEqual(okBody, {
+    ok: true,
+    ...conversationDetail(),
+    conversation: publicConversation(),
+  })
+  assertNoTeacherIdentifier(okBody)
   assert.equal(missingResponse.status, 404)
   assert.equal(otherResponse.status, 404)
   assert.deepEqual(await missingResponse.json(), await otherResponse.json())
