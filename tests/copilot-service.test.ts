@@ -820,6 +820,19 @@ test("preserves the full reservation when provider usage is unknown after dispat
     /provider timeout after dispatch/
   )
 
+  assert.deepEqual({
+    status: repository.runs[0]?.status,
+    errorCode: repository.runs[0]?.errorCode,
+    safety: repository.runs[0]?.safety,
+  }, {
+    status: "failed",
+    errorCode: "provider_failed",
+    safety: {
+      decision: "blocked",
+      policyVersion: "copilot-professor-v1",
+      reasonCode: "provider_failed",
+    },
+  })
   assert.deepEqual(settlements, [{
     teacherId: actor.userId,
     reservedTokens: 1_200,

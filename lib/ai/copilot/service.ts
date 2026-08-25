@@ -502,6 +502,11 @@ export function createCopilotService({
           }
 
           failureCode = "provider_failed"
+          lastSafety = {
+            decision: "blocked",
+            policyVersion: PROMPT_VERSION,
+            reasonCode: "provider_failed",
+          }
           const prompt = boundedProviderPrompt(history, content, evidence)
           const providerOutput = await telemetry.wrap({
             name: "copilot.generate",
