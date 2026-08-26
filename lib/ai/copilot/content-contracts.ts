@@ -275,6 +275,12 @@ export const contentProposalSchema = z.object({
   if (!requiresCitation && proposal.draft !== null) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["draft"], message: "Non-approved proposals must not expose a factual draft" })
   }
+  if (
+    (proposal.safety.decision === "abstain" || proposal.safety.decision === "blocked") &&
+    proposal.citations.length !== 0
+  ) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["citations"], message: "Abstained and blocked proposals must not include citations" })
+  }
   if (proposal.mode === "generate" && proposal.draft !== null && proposal.module !== proposal.draft.module) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["draft", "module"], message: "Generated proposal draft must match its module" })
   }

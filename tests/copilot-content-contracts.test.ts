@@ -247,6 +247,22 @@ test("accepts abstained and blocked proposals with a null factual draft", () => 
   }
 })
 
+test("rejects citations on abstained and blocked proposals", () => {
+  for (const decision of ["abstain", "blocked"] as const) {
+    assert.equal(contentProposalSchema.safeParse({
+      module: "article",
+      mode: "generate",
+      draft: null,
+      changeSummary: "Não foi possível gerar conteúdo com segurança.",
+      warnings: ["Faltam evidências autorizadas para sustentar uma proposta."],
+      citations: [citation],
+      model: "gpt-test",
+      usage: { inputTokens: 20, outputTokens: 0 },
+      safety: { decision, policyVersion: "content-v1" },
+    }).success, false, decision)
+  }
+})
+
 test("creates a strict student DTO that never includes teacher answers", () => {
   const teacherDraft = {
     module: "assessment" as const,
