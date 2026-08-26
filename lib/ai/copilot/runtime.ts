@@ -24,6 +24,7 @@ import { createCopilotApiHandlers } from "./http.ts"
 import { createLessonPlanApiHandlers } from "./lesson-plan-http.ts"
 import { createLessonPlanService } from "./lesson-plan-service.ts"
 import { PostgresCopilotRepository } from "./postgres-repository.ts"
+import { createContentApiHandlers } from "./content-http.ts"
 import {
   createContentService,
   type ContentProvider,
@@ -402,6 +403,15 @@ export function createDefaultContentService() {
     provider: new LazyOpenAiContentProvider(),
     retrieveContext,
     telemetry: new LangfuseTelemetry(),
+  })
+}
+
+export function createDefaultContentApiHandlers() {
+  return createContentApiHandlers({
+    resolveActor: resolveCopilotActor,
+    service: createDefaultContentService(),
+    repository: new PostgresCopilotRepository(),
+    provider: "openai",
   })
 }
 
