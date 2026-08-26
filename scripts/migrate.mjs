@@ -47,6 +47,7 @@ const MIGRATIONS = [
   ["00590", "ai_copilot_citation_excerpt", "scripts/055_ai_copilot_citation_excerpt.sql"],
   ["00600", "ai_copilot_hardening", "scripts/056_ai_copilot_hardening.sql"],
   ["00610", "ai_lesson_plan_proposals", "scripts/057_ai_lesson_plan_proposals.sql"],
+  ["00620", "ai_content_proposals", "scripts/058_ai_copilot_content_proposals.sql"],
 ]
 
 const databaseUrl = process.env.DATABASE_MIGRATION_URL ?? process.env.DATABASE_URL

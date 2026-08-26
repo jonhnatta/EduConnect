@@ -20,6 +20,13 @@ import type {
   StoredLessonPlanProposal,
 } from "./lesson-plan-service.ts"
 import { LessonPlanServiceError } from "./lesson-plan-service.ts"
+import type {
+  ContentModule,
+  ContentProposal,
+  TeacherContentDraft,
+} from "./content-contracts.ts"
+import type { ProposalStatus, StoredProposal } from "./proposal-service.ts"
+import { ProposalServiceError } from "./proposal-service.ts"
 
 type ConversationRow = QueryResultRow & {
   id: string
@@ -84,6 +91,105 @@ type LessonPlanContentItemRow = QueryResultRow & {
   status: string
   visibility: string
   settings: Record<string, unknown> | string
+}
+
+type ContentProposalRow = QueryResultRow & {
+  id: string
+  teacher_id: string
+  conversation_id: string
+  module: ContentModule
+  mode: ContentProposal["mode"]
+  original_content: TeacherContentDraft | string | null
+  payload: ContentProposal | string
+  change_summary: string
+  payload_hash: string
+  provider: string
+  model: string
+  status: ProposalStatus
+  idempotency_key: string
+  content_item_id: string | null
+  created_at: Date | string
+  updated_at: Date | string
+}
+
+type ContentItemRow = QueryResultRow & {
+  id: string
+  author_id: string
+  type: ContentProposalSavedContentDraft["type"]
+  title: string
+  body_html: string | null
+  status: "draft"
+  visibility: "private"
+  settings: Record<string, unknown> | string
+}
+
+export type ContentProposalSavedContentDraft = {
+  type: "article" | "exercise" | "assessment" | "simulado" | "dica"
+  title: string
+  bodyHtml: string | null
+  status: "draft"
+  visibility: "private"
+  settings: Record<string, unknown>
+}
+
+export type SavedContentProposalItem = {
+  id: string
+  authorId: string
+  type: ContentProposalSavedContentDraft["type"]
+  title: string
+  bodyHtml: string | null
+  status: "draft"
+  visibility: "private"
+  settings: Record<string, unknown>
+}
+
+export type StoredContentProposal = StoredProposal & {
+  module: ContentModule
+  mode: ContentProposal["mode"]
+  originalContent: TeacherContentDraft | null
+  payload: ContentProposal
+  changeSummary: string
+  provider: string
+  model: string
+}
+
+export type ContentProposalCursor = {
+  updatedAt: string
+  id: string
+}
+
+export type ContentProposalPage = {
+  items: readonly StoredContentProposal[]
+  nextCursor: ContentProposalCursor | null
+}
+
+export type ContentProposalRepository = {
+  createContentProposal(input: {
+    teacherId: string
+    conversationId: string
+    module: ContentModule
+    mode: ContentProposal["mode"]
+    originalContent?: TeacherContentDraft | null
+    payload: ContentProposal
+    payloadHash: string
+    provider: string
+    idempotencyKey: string
+    status: Exclude<ProposalStatus, "saved">
+  }): Promise<StoredContentProposal>
+  getContentProposal(input: { teacherId: string; proposalId: string }): Promise<StoredContentProposal | null>
+  rejectContentProposal(input: { teacherId: string; proposalId: string }): Promise<StoredContentProposal | null>
+  saveContentDraft(input: {
+    teacherId: string
+    proposalId: string
+    contentDraft: ContentProposalSavedContentDraft
+  }): Promise<{ proposal: StoredContentProposal; contentItem: SavedContentProposalItem } | null>
+  listContentProposals(input: {
+    teacherId: string
+    module?: ContentModule
+    status?: ProposalStatus
+    limit: number
+    cursor?: ContentProposalCursor | null
+  }): Promise<ContentProposalPage>
 }
 
 type Queryable = {
@@ -206,6 +312,41 @@ function mapLessonPlanContentItem(row: LessonPlanContentItemRow): LessonPlanSave
   }
 }
 
+function mapContentProposal(row: ContentProposalRow): StoredContentProposal {
+  const payload = jsonObject<ContentProposal>(row.payload)
+  return {
+    id: row.id,
+    teacherId: row.teacher_id,
+    conversationId: row.conversation_id,
+    module: row.module,
+    mode: row.mode,
+    originalContent: row.original_content === null ? null : jsonObject<TeacherContentDraft>(row.original_content),
+    payload,
+    changeSummary: row.change_summary,
+    provider: row.provider,
+    model: row.model,
+    status: row.status,
+    payloadHash: row.payload_hash,
+    idempotencyKey: row.idempotency_key,
+    contentItemId: row.content_item_id,
+    createdAt: iso(row.created_at)!,
+    updatedAt: iso(row.updated_at)!,
+  }
+}
+
+function mapSavedContentProposalItem(row: ContentItemRow): SavedContentProposalItem {
+  return {
+    id: row.id,
+    authorId: row.author_id,
+    type: row.type,
+    title: row.title,
+    bodyHtml: row.body_html,
+    status: row.status,
+    visibility: row.visibility,
+    settings: jsonObject<Record<string, unknown>>(row.settings),
+  }
+}
+
 function completedAtExpression(status: CopilotMessage["status"]): string | null {
   return status === "pending" || status === "streaming"
     ? null
@@ -302,7 +443,7 @@ async function touchConversation(
   )
 }
 
-export class PostgresCopilotRepository implements CopilotRepository, LessonPlanProposalRepository {
+export class PostgresCopilotRepository implements CopilotRepository, LessonPlanProposalRepository, ContentProposalRepository {
   private readonly database: CopilotRepositoryDatabase
 
   constructor(database: CopilotRepositoryDatabase = {
@@ -698,5 +839,218 @@ export class PostgresCopilotRepository implements CopilotRepository, LessonPlanP
         contentItem,
       }
     })
+  }
+
+  async createContentProposal(input: {
+    teacherId: string
+    conversationId: string
+    module: ContentModule
+    mode: ContentProposal["mode"]
+    originalContent?: TeacherContentDraft | null
+    payload: ContentProposal
+    payloadHash: string
+    provider: string
+    idempotencyKey: string
+    status: Exclude<ProposalStatus, "saved">
+  }): Promise<StoredContentProposal> {
+    const rows = await this.database.query<ContentProposalRow>(
+      `insert into public.ai_content_proposals (
+         teacher_id, conversation_id, module, mode, original_content, payload,
+         change_summary, payload_hash, provider, model, status, idempotency_key
+       )
+       select c.teacher_id, c.id, $3, $4, $5::jsonb, $6::jsonb,
+              $7, $8, $9, $10, $11, $12
+         from public.ai_conversations c
+        where c.teacher_id = $1
+          and c.id = $2
+       on conflict (teacher_id, idempotency_key)
+       do update set updated_at = public.ai_content_proposals.updated_at
+       where public.ai_content_proposals.payload_hash = excluded.payload_hash
+       returning id, teacher_id, conversation_id, module, mode, original_content,
+                 payload, change_summary, payload_hash, provider, model, status,
+                 idempotency_key, content_item_id, created_at, updated_at`,
+      [
+        input.teacherId,
+        input.conversationId,
+        input.module,
+        input.mode,
+        input.originalContent == null ? null : JSON.stringify(input.originalContent),
+        JSON.stringify(input.payload),
+        input.payload.changeSummary,
+        input.payloadHash,
+        input.provider,
+        input.payload.model,
+        input.status,
+        input.idempotencyKey,
+      ]
+    )
+    const row = rows[0]
+    if (row) return mapContentProposal(row)
+
+    const conflicts = await this.database.query<{ id: string }>(
+      `select id
+         from public.ai_content_proposals
+        where teacher_id = $1
+          and idempotency_key = $2
+        limit 1`,
+      [input.teacherId, input.idempotencyKey]
+    )
+    if (conflicts[0]) throw new ProposalServiceError("content_idempotency_conflict")
+    throw new CopilotServiceError("conversation_not_found")
+  }
+
+  async getContentProposal(input: {
+    teacherId: string
+    proposalId: string
+  }): Promise<StoredContentProposal | null> {
+    const rows = await this.database.query<ContentProposalRow>(
+      `select id, teacher_id, conversation_id, module, mode, original_content,
+              payload, change_summary, payload_hash, provider, model, status,
+              idempotency_key, content_item_id, created_at, updated_at
+         from public.ai_content_proposals
+        where teacher_id = $1
+          and id = $2
+        limit 1`,
+      [input.teacherId, input.proposalId]
+    )
+    return rows[0] ? mapContentProposal(rows[0]) : null
+  }
+
+  async rejectContentProposal(input: {
+    teacherId: string
+    proposalId: string
+  }): Promise<StoredContentProposal | null> {
+    const rows = await this.database.query<ContentProposalRow>(
+      `update public.ai_content_proposals
+          set status = 'rejected',
+              updated_at = timezone('utc'::text, now())
+        where teacher_id = $1
+          and id = $2
+          and status = 'proposed'
+        returning id, teacher_id, conversation_id, module, mode, original_content,
+                  payload, change_summary, payload_hash, provider, model, status,
+                  idempotency_key, content_item_id, created_at, updated_at`,
+      [input.teacherId, input.proposalId]
+    )
+    if (rows[0]) return mapContentProposal(rows[0])
+    return this.getContentProposal(input)
+  }
+
+  async saveContentDraft(input: {
+    teacherId: string
+    proposalId: string
+    contentDraft: ContentProposalSavedContentDraft
+  }): Promise<{ proposal: StoredContentProposal; contentItem: SavedContentProposalItem } | null> {
+    return this.database.transaction(async (client) => {
+      const proposalRows = await client.query<ContentProposalRow>(
+        `select id, teacher_id, conversation_id, module, mode, original_content,
+                payload, change_summary, payload_hash, provider, model, status,
+                idempotency_key, content_item_id, created_at, updated_at
+           from public.ai_content_proposals
+          where teacher_id = $1
+            and id = $2
+          for update`,
+        [input.teacherId, input.proposalId]
+      )
+      const proposalRow = proposalRows.rows[0]
+      if (!proposalRow) return null
+      const proposal = mapContentProposal(proposalRow)
+
+      if (proposal.contentItemId) {
+        const contentRows = await client.query<ContentItemRow>(
+          `select id, author_id, type, title, body_html, status, visibility, settings
+             from public.content_items
+            where id = $1
+              and author_id = $2
+            limit 1`,
+          [proposal.contentItemId, input.teacherId]
+        )
+        const contentRow = contentRows.rows[0]
+        return contentRow ? { proposal, contentItem: mapSavedContentProposalItem(contentRow) } : null
+      }
+
+      if (proposal.status !== "proposed") return null
+
+      const contentRows = await client.query<ContentItemRow>(
+        `insert into public.content_items (
+           author_id, type, title, body_html, status, visibility, settings,
+           created_at, updated_at
+         )
+         values (
+           $1, $2, $3, $4, 'draft', 'private', $5::jsonb,
+           timezone('utc'::text, now()), timezone('utc'::text, now())
+         )
+         returning id, author_id, type, title, body_html, status, visibility, settings`,
+        [
+          input.teacherId,
+          input.contentDraft.type,
+          input.contentDraft.title,
+          input.contentDraft.bodyHtml,
+          JSON.stringify(input.contentDraft.settings),
+        ]
+      )
+      const contentRow = contentRows.rows[0]
+      if (!contentRow) throw new ProposalServiceError("content_draft_not_saved")
+      const contentItem = mapSavedContentProposalItem(contentRow)
+      const savedRows = await client.query<ContentProposalRow>(
+        `update public.ai_content_proposals
+            set status = 'saved',
+                content_item_id = $3,
+                updated_at = timezone('utc'::text, now())
+          where teacher_id = $1
+            and id = $2
+            and status = 'proposed'
+          returning id, teacher_id, conversation_id, module, mode, original_content,
+                    payload, change_summary, payload_hash, provider, model, status,
+                    idempotency_key, content_item_id, created_at, updated_at`,
+        [input.teacherId, input.proposalId, contentItem.id]
+      )
+      const savedRow = savedRows.rows[0]
+      if (!savedRow) throw new ProposalServiceError("content_proposal_save_conflict")
+      return { proposal: mapContentProposal(savedRow), contentItem }
+    })
+  }
+
+  async listContentProposals(input: {
+    teacherId: string
+    module?: ContentModule
+    status?: ProposalStatus
+    limit: number
+    cursor?: ContentProposalCursor | null
+  }): Promise<ContentProposalPage> {
+    const limit = Math.max(1, Math.min(input.limit, 50))
+    const conditions = ["teacher_id = $1"]
+    const params: unknown[] = [input.teacherId]
+    if (input.module) {
+      params.push(input.module)
+      conditions.push(`module = $${params.length}`)
+    }
+    if (input.status) {
+      params.push(input.status)
+      conditions.push(`status = $${params.length}`)
+    }
+    if (input.cursor) {
+      params.push(input.cursor.updatedAt, input.cursor.id)
+      conditions.push(`(updated_at, id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`)
+    }
+    params.push(limit + 1)
+    const rows = await this.database.query<ContentProposalRow>(
+      `select id, teacher_id, conversation_id, module, mode, original_content,
+              payload, change_summary, payload_hash, provider, model, status,
+              idempotency_key, content_item_id, created_at, updated_at
+         from public.ai_content_proposals
+        where ${conditions.join("\n          and ")}
+        order by updated_at desc, id desc
+        limit $${params.length}`,
+      params
+    )
+    const pageRows = rows.slice(0, limit)
+    const last = pageRows.at(-1)
+    return {
+      items: pageRows.map(mapContentProposal),
+      nextCursor: rows.length > limit && last
+        ? { updatedAt: iso(last.updated_at)!, id: last.id }
+        : null,
+    }
   }
 }
