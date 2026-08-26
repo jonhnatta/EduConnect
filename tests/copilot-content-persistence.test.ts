@@ -170,8 +170,6 @@ test("content proposal migration protects ownership, lifecycle, normalized paylo
   assert.match(sql, /model text not null/)
   assert.match(sql, /status text not null default 'proposed'/)
   assert.match(sql, /idempotency_key text not null/)
-  assert.match(sql, /add constraint content_items_id_author_id_key unique \(id, author_id\)/)
-  assert.match(sql, /foreign key \(content_item_id, teacher_id\) references public\.content_items\(id, author_id\) on delete restrict/)
   assert.match(sql, /unique \(teacher_id, idempotency_key\)/)
   assert.match(sql, /foreign key \(conversation_id, teacher_id\) references public\.ai_conversations\(id, teacher_id\) on delete cascade/)
   assert.match(sql, /check \(\(status = 'saved' and content_item_id is not null\) or \(status <> 'saved' and content_item_id is null\)\)/)
@@ -181,6 +179,15 @@ test("content proposal migration protects ownership, lifecycle, normalized paylo
 
   const runner = readFileSync(migrateRunnerUrl, "utf8").replace(/\s+/g, " ").trim().toLowerCase()
   assert.match(runner, /\["00620", "ai_content_proposals", "scripts\/058_ai_copilot_content_proposals\.sql"\]/)
+})
+
+test("content proposal migration makes saved content ownership a composite foreign-key contract", () => {
+  // DATABASE_URL is not configured in this test environment, so this static assertion
+  // documents the DDL contract that PostgreSQL will enforce during migration.
+  const sql = readFileSync(migrationUrl, "utf8").replace(/\s+/g, " ").trim().toLowerCase()
+
+  assert.match(sql, /add constraint content_items_id_author_id_key unique \(id, author_id\)/)
+  assert.match(sql, /foreign key \(content_item_id, teacher_id\) references public\.content_items\(id, author_id\) on delete restrict/)
 })
 
 test("creates, reads, rejects and lists proposals through teacher-scoped SQL", async () => {
