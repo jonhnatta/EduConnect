@@ -85,6 +85,45 @@ const niveis = [
 ]
 
 type ClassroomOpt = { id: string; name: string; subject: string }
+type EditorCopilotModule = "article" | "exercise" | "assessment" | "simulado" | "tip"
+
+type CopilotQuestion = {
+  id: string
+  order: number
+  type: "mcq" | "open"
+  prompt: string
+  points: number
+  disciplina: string | null
+  options?: string[]
+}
+
+type CopilotDraft =
+  | { module: "article" | "tip"; title: string; bodyHtml: string }
+  | { module: "exercise" | "assessment" | "simulado"; title: string; instructions: string; questions: CopilotQuestion[] }
+
+type CopilotContentProposal = {
+  id: string
+  module: EditorCopilotModule | "review"
+  mode: "generate" | "review"
+  draft: CopilotDraft | null
+  changeSummary: string
+  warnings: string[]
+  citations: { id: string; title: string; excerpt: string; url: string }[]
+  safety: { decision: string; reasonCode: string | null }
+}
+
+function copilotModuleForEditor(tipo: string | null): EditorCopilotModule | null {
+  if (tipo === "artigo") return "article"
+  if (tipo === "exercicios") return "exercise"
+  if (tipo === "avaliacao") return "assessment"
+  if (tipo === "simulado") return "simulado"
+  if (tipo === "dica") return "tip"
+  return null
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
 
 /** Dedupes createArticleDraft across React Strict Mode remounts (same tab). */
 let articleDraftCreationPromise: Promise<string> | null = null
@@ -246,55 +285,196 @@ export function CriarConteudoClient({
   const [dicaBodyText, setDicaBodyText] = useState("")
   const [dicaVideoUrl, setDicaVideoUrl] = useState<string | null>(null)
   const [dicaImageUrls, setDicaImageUrls] = useState<string[]>([])
-  const [lessonPlanLoading, setLessonPlanLoading] = useState(false)
-  const [lessonPlanError, setLessonPlanError] = useState<string | null>(null)
-  const [lessonPlanProposal, setLessonPlanProposal] = useState<{
-    id: string
-    draft: { title: string; objectives: string[]; steps: { title: string; minutes: number; description: string }[]; materials: string[]; activity: string; assessment: string; citations: { title: string; excerpt: string; url: string }[] }
-  } | null>(null)
+  const [copilotObjective, setCopilotObjective] = useState("")
+  const [copilotNotes, setCopilotNotes] = useState("")
+  const [copilotSourceIds, setCopilotSourceIds] = useState("")
+  const [copilotQuestionCount, setCopilotQuestionCount] = useState(5)
+  const [contentProposalLoading, setContentProposalLoading] = useState(false)
+  const [contentProposalSaving, setContentProposalSaving] = useState(false)
+  const [contentProposalError, setContentProposalError] = useState<string | null>(null)
+  const [contentProposal, setContentProposal] = useState<CopilotContentProposal | null>(null)
 
-  const generateLessonPlan = async () => {
+  const selectedCopilotModule = copilotModuleForEditor(tipoSelecionado)
+
+  const sourceIdsForCopilot = () => {
+    const sourceIds = copilotSourceIds.split(",").map((id) => id.trim()).filter(Boolean)
+    if (sourceIds.some((id) => !isUuid(id))) {
+      throw new Error("Use IDs UUID de fontes autorizadas separados por virgula")
+    }
+    return sourceIds
+  }
+
+  const currentContentForReview = (module: EditorCopilotModule) => {
+    const title = formData.titulo.trim()
+    if (!title) throw new Error("Informe o titulo antes de revisar")
+    if (module === "article") return { module, title, bodyHtml: articleBodyHtml }
+    if (module === "tip") return { module, title, bodyHtml: dicaBodyText }
+    const instructions = module === "exercise"
+      ? exerciseIntroHtml
+      : module === "assessment"
+        ? assessmentIntroHtml
+        : simuladoIntroHtml
+    if (!examDef?.questions.length) throw new Error("Adicione ao menos uma questao antes de revisar")
+    return {
+      module,
+      title,
+      instructions: instructions.trim() || "Leia as instrucoes e responda as questoes.",
+      questions: examDef.questions.map((question) => question.type === "mcq"
+        ? {
+            id: question.id,
+            order: question.order,
+            type: "mcq" as const,
+            prompt: question.prompt || "Questao a revisar",
+            points: question.points,
+            disciplina: question.disciplina ?? null,
+            options: question.options.map((option) => option || "Opcao a revisar"),
+            teacherAnswer: {
+              correctIndex: question.correctIndex,
+              rationale: "Gabarito definido pelo professor para esta revisao.",
+            },
+          }
+        : {
+            id: question.id,
+            order: question.order,
+            type: "open" as const,
+            prompt: question.prompt || "Questao a revisar",
+            points: question.points,
+            disciplina: question.disciplina ?? null,
+            teacherAnswer: {
+              referenceAnswer: "Resposta de referencia a ser definida pelo professor.",
+              rubric: ["Avaliar aderencia ao enunciado."],
+            },
+          }),
+    }
+  }
+
+  const requestContentProposal = async (mode: "generate" | "review") => {
+    const contentModule = selectedCopilotModule
     const topic = formData.titulo.trim()
-    if (!topic) { toast.error("Informe o titulo ou tema antes de gerar"); return }
-    setLessonPlanLoading(true); setLessonPlanError(null)
+    if (!contentModule) return
+    if (!topic) {
+      const message = "Informe o titulo ou tema antes de usar o Copilot"
+      setContentProposalError(message)
+      toast.error(message)
+      return
+    }
+
+    setContentProposalLoading(true)
+    setContentProposalError(null)
     try {
+      const sourceIds = sourceIdsForCopilot()
       const conversationResponse = await fetch("/api/copilot/conversations", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: `Plano de aula: ${topic}` }),
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: `${mode === "review" ? "Revisao" : "Geracao"}: ${topic}` }),
       })
       const conversationData = await conversationResponse.json().catch(() => null)
-      if (!conversationResponse.ok) throw new Error(conversationData?.error || "Nao foi possivel iniciar o Copilot")
-      const response = await fetch("/api/copilot/lesson-plans", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          conversationId: conversationData.conversation.id,
-          idempotencyKey: crypto.randomUUID(),
-          request: { topic, audience: formData.nivel || "Alunos", durationMinutes: 50, objective: `Ensinar ${topic}`, contentIds: [] },
-        }),
+      const conversationId = conversationData?.conversation?.id
+      if (!conversationResponse.ok || typeof conversationId !== "string") {
+        throw new Error(conversationData?.error || "Nao foi possivel iniciar o Copilot")
+      }
+      const objective = copilotObjective.trim() || `Ensinar ${topic}`
+      const request = mode === "review"
+        ? {
+            module: "review",
+            targetModule: contentModule,
+            objective,
+            notes: copilotNotes.trim(),
+            sourceIds,
+            originalContent: currentContentForReview(contentModule),
+          }
+        : contentModule === "exercise" || contentModule === "assessment" || contentModule === "simulado"
+          ? { module: contentModule, topic, audience: formData.nivel || "Alunos", objective, sourceIds, questionCount: copilotQuestionCount }
+          : { module: contentModule, topic, audience: formData.nivel || "Alunos", objective, sourceIds }
+      const response = await fetch("/api/copilot/content", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId, idempotencyKey: crypto.randomUUID(), request }),
       })
       const data = await response.json().catch(() => null)
-      if (!response.ok) throw new Error(data?.error || "Nao foi possivel gerar o plano")
-      setLessonPlanProposal(data.proposal)
+      if (!response.ok || !data?.proposal) {
+        throw new Error(data?.error || "Nao foi possivel gerar a proposta")
+      }
+      setContentProposal(data.proposal as CopilotContentProposal)
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Erro ao gerar plano de aula"
-      setLessonPlanError(message); toast.error(message)
-    } finally { setLessonPlanLoading(false) }
+      const message = error instanceof Error ? error.message : "Nao foi possivel gerar a proposta"
+      setContentProposalError(message)
+      toast.error(message)
+    } finally {
+      setContentProposalLoading(false)
+    }
   }
 
-  const saveLessonPlanDraft = async () => {
-    if (!lessonPlanProposal) return
-    const response = await fetch(`/api/copilot/lesson-plans/${lessonPlanProposal.id}/save`, { method: "POST" })
-    if (!response.ok) { toast.error("Nao foi possivel salvar o rascunho"); return }
-    toast.success("Plano salvo como rascunho")
-    setLessonPlanProposal(null)
+  const applyContentProposal = () => {
+    const draft = contentProposal?.draft
+    if (!draft) return
+    setFormData((previous) => ({ ...previous, titulo: draft.title }))
+    if ("bodyHtml" in draft) {
+      if (draft.module === "article") setArticleBodyHtml(draft.bodyHtml)
+      else setDicaBodyText(draft.bodyHtml)
+    } else {
+      if (draft.module === "exercise") setExerciseIntroHtml(draft.instructions)
+      else if (draft.module === "assessment") setAssessmentIntroHtml(draft.instructions)
+      else setSimuladoIntroHtml(draft.instructions)
+      setExamDef({
+        version: 1,
+        questions: draft.questions.map((question) => question.type === "mcq"
+          ? {
+              id: question.id,
+              order: question.order,
+              type: "mcq" as const,
+              prompt: question.prompt,
+              points: question.points,
+              options: question.options ?? ["Opcao 1", "Opcao 2"],
+              correctIndex: 0,
+              ...(question.disciplina ? { disciplina: question.disciplina } : {}),
+            }
+          : {
+              id: question.id,
+              order: question.order,
+              type: "open" as const,
+              prompt: question.prompt,
+              points: question.points,
+              ...(question.disciplina ? { disciplina: question.disciplina } : {}),
+            }),
+      })
+    }
+    toast.success("Proposta aplicada ao editor. Revise antes de salvar ou publicar.")
   }
 
-  const rejectLessonPlan = async () => {
-    if (!lessonPlanProposal) return
-    const response = await fetch(`/api/copilot/lesson-plans/${lessonPlanProposal.id}`, { method: "DELETE" })
-    if (!response.ok) { toast.error("Nao foi possivel rejeitar a proposta"); return }
-    setLessonPlanProposal(null)
-    toast.message("Proposta rejeitada")
+  const saveContentProposal = async () => {
+    if (!contentProposal?.draft) return
+    setContentProposalSaving(true)
+    try {
+      const response = await fetch(`/api/copilot/content/${contentProposal.id}/save`, { method: "POST" })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(data?.error || "Nao foi possivel salvar o rascunho")
+      setContentProposal(data?.proposal as CopilotContentProposal)
+      toast.success("Proposta salva como rascunho. Ela nao foi publicada.")
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Nao foi possivel salvar o rascunho"
+      setContentProposalError(message)
+      toast.error(message)
+    } finally {
+      setContentProposalSaving(false)
+    }
+  }
+
+  const rejectContentProposal = async () => {
+    if (!contentProposal) return
+    setContentProposalSaving(true)
+    try {
+      const response = await fetch(`/api/copilot/content/${contentProposal.id}`, { method: "DELETE" })
+      if (!response.ok) throw new Error("Nao foi possivel rejeitar a proposta")
+      setContentProposal(null)
+      toast.message("Proposta rejeitada")
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Nao foi possivel rejeitar a proposta"
+      setContentProposalError(message)
+      toast.error(message)
+    } finally {
+      setContentProposalSaving(false)
+    }
   }
 
   const ensureArticleDraftId = useCallback(async () => {
@@ -1369,31 +1549,80 @@ export function CriarConteudoClient({
               />
             </div>
 
-            {tipoSelecionado === "artigo" && (
-              <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-4 space-y-3">
+            {selectedCopilotModule && (
+              <section className="rounded-xl border border-blue-200 bg-blue-50/60 p-4 space-y-4" aria-label="Copilot do professor">
                 <div className="flex items-start gap-3">
                   <Sparkles className="h-5 w-5 text-[#1D4ED8] mt-0.5" />
                   <div className="flex-1">
                     <p className="font-semibold text-gray-900">Copilot do professor</p>
-                    <p className="text-sm text-gray-600">Gere uma proposta de plano de aula baseada nos seus materiais autorizados.</p>
+                    <p className="text-sm text-gray-600">Gere ou revise uma proposta baseada somente nas fontes autorizadas. Nenhuma proposta e publicada automaticamente.</p>
                   </div>
-                  <Button type="button" onClick={() => void generateLessonPlan()} disabled={lessonPlanLoading} className="gap-2">
-                    {lessonPlanLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                    {lessonPlanLoading ? "Gerando..." : "Criar plano com Copilot"}
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label htmlFor="copilot-objective">Objetivo da proposta</Label>
+                    <Input id="copilot-objective" value={copilotObjective} onChange={(event) => setCopilotObjective(event.target.value)} placeholder={`Ex.: ensinar ${formData.titulo || "o tema"}`} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="copilot-sources">Fontes autorizadas</Label>
+                    <Input id="copilot-sources" value={copilotSourceIds} onChange={(event) => setCopilotSourceIds(event.target.value)} placeholder="IDs UUID, separados por virgula" />
+                    <p className="text-xs text-gray-500">Deixe vazio para usar apenas o contexto autorizado disponivel.</p>
+                  </div>
+                  {(selectedCopilotModule === "exercise" || selectedCopilotModule === "assessment" || selectedCopilotModule === "simulado") && (
+                    <div className="space-y-1">
+                      <Label htmlFor="copilot-question-count">Quantidade de questoes</Label>
+                      <Input id="copilot-question-count" type="number" min={1} max={40} value={copilotQuestionCount} onChange={(event) => setCopilotQuestionCount(Math.max(1, Math.min(40, Number(event.target.value) || 1)))} />
+                    </div>
+                  )}
+                  <div className="space-y-1 sm:col-span-2">
+                    <Label htmlFor="copilot-notes">Observacoes para revisao</Label>
+                    <Textarea id="copilot-notes" value={copilotNotes} onChange={(event) => setCopilotNotes(event.target.value)} placeholder="Ex.: simplifique a linguagem e verifique se as questoes cobrem o objetivo." className="min-h-20" />
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" onClick={() => void requestContentProposal("generate")} disabled={contentProposalLoading || contentProposalSaving} className="gap-2">
+                    {contentProposalLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                    {contentProposalLoading ? "Gerando proposta..." : "Gerar com Copilot"}
+                  </Button>
+                  <Button type="button" variant="outline" onClick={() => void requestContentProposal("review")} disabled={contentProposalLoading || contentProposalSaving}>
+                    Revisar com Copilot
                   </Button>
                 </div>
-                {lessonPlanError && <p className="text-sm text-red-600">{lessonPlanError}</p>}
-                {lessonPlanProposal && (
-                  <div className="rounded-lg border bg-white p-4 space-y-3">
-                    <div className="flex justify-between gap-3"><h3 className="font-semibold">{lessonPlanProposal.draft.title}</h3><Button type="button" variant="ghost" size="sm" onClick={() => setLessonPlanProposal(null)}>Fechar</Button></div>
-                    <p className="text-sm"><strong>Objetivos:</strong> {lessonPlanProposal.draft.objectives.join(" ")}</p>
-                    <ol className="list-decimal pl-5 text-sm space-y-1">{lessonPlanProposal.draft.steps.map((step) => <li key={`${step.title}-${step.minutes}`}><strong>{step.title}</strong> ({step.minutes} min): {step.description}</li>)}</ol>
-                    <p className="text-sm"><strong>Atividade:</strong> {lessonPlanProposal.draft.activity}</p>
-                    <div className="flex gap-2"><Button type="button" onClick={() => void saveLessonPlanDraft()}>Salvar como rascunho</Button><Button type="button" variant="outline" onClick={() => void rejectLessonPlan()}>Rejeitar</Button></div>
-                    <p className="text-xs text-gray-500">Fontes: {lessonPlanProposal.draft.citations.map((citation) => citation.title).join(", ")}</p>
+                {contentProposalError && <p role="alert" className="text-sm text-red-600">Nao foi possivel gerar a proposta: {contentProposalError}</p>}
+                {contentProposal && (
+                  <div className="rounded-lg border border-blue-100 bg-white p-4 space-y-3">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <h3 className="font-semibold">{contentProposal.mode === "review" ? "Versao revisada" : "Preview da proposta"}</h3>
+                        <p className="text-sm text-gray-600">{contentProposal.draft?.title ?? "A proposta nao trouxe um rascunho que possa ser aplicado."}</p>
+                      </div>
+                      <Badge variant="secondary">{contentProposal.safety.decision}</Badge>
+                    </div>
+                    <div className="text-sm"><strong>Resumo das alteracoes:</strong> {contentProposal.changeSummary}</div>
+                    {contentProposal.draft && ("bodyHtml" in contentProposal.draft ? (
+                      <p className="whitespace-pre-wrap text-sm text-gray-700">{htmlToPlainDicaDesc(contentProposal.draft.bodyHtml)}</p>
+                    ) : (
+                      <div className="space-y-2 text-sm text-gray-700">
+                        <p><strong>Instrucoes:</strong> {contentProposal.draft.instructions}</p>
+                        <ol className="list-decimal space-y-1 pl-5">
+                          {contentProposal.draft.questions.map((question) => <li key={question.id}>{question.prompt} ({question.points} pts)</li>)}
+                        </ol>
+                      </div>
+                    ))}
+                    {contentProposal.warnings.length > 0 && (
+                      <div className="rounded-md bg-amber-50 p-3 text-sm text-amber-900"><strong>Avisos:</strong><ul className="list-disc pl-5">{contentProposal.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>
+                    )}
+                    {contentProposal.citations.length > 0 && (
+                      <div className="text-sm"><strong>Fontes:</strong><ul className="mt-1 space-y-1">{contentProposal.citations.map((citation) => <li key={citation.id}><a href={citation.url} target="_blank" rel="noreferrer" className="text-[#1D4ED8] hover:underline">{citation.title}</a><span className="text-gray-600">. {citation.excerpt}</span></li>)}</ul></div>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" onClick={applyContentProposal} disabled={!contentProposal.draft || contentProposalSaving}>Editar proposta</Button>
+                      <Button type="button" variant="outline" onClick={() => void saveContentProposal()} disabled={!contentProposal.draft || contentProposalSaving}>Salvar como rascunho</Button>
+                      <Button type="button" variant="ghost" onClick={() => void rejectContentProposal()} disabled={contentProposalSaving}>Rejeitar</Button>
+                    </div>
                   </div>
                 )}
-              </div>
+              </section>
             )}
 
             <div className="grid sm:grid-cols-2 gap-4">
