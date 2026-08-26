@@ -1,3 +1,16 @@
+do $$
+begin
+  if not exists (
+    select 1
+      from pg_constraint
+     where conname = 'content_items_id_author_id_key'
+       and conrelid = 'public.content_items'::regclass
+  ) then
+    alter table public.content_items
+      add constraint content_items_id_author_id_key unique (id, author_id);
+  end if;
+end $$;
+
 create table if not exists public.ai_content_proposals (
   id uuid primary key default gen_random_uuid(),
   teacher_id uuid not null references public.profiles(id) on delete cascade,
@@ -15,12 +28,15 @@ create table if not exists public.ai_content_proposals (
   status text not null default 'proposed'
     check (status in ('proposed', 'rejected', 'saved', 'blocked', 'failed')),
   idempotency_key text not null check (char_length(btrim(idempotency_key)) between 8 and 200),
-  content_item_id uuid references public.content_items(id) on delete restrict,
+  content_item_id uuid,
   created_at timestamptz not null default timezone('utc'::text, now()),
   updated_at timestamptz not null default timezone('utc'::text, now()),
   unique (teacher_id, idempotency_key),
   foreign key (conversation_id, teacher_id)
     references public.ai_conversations(id, teacher_id) on delete cascade,
+  constraint ai_content_proposals_content_item_owner_fkey
+    foreign key (content_item_id, teacher_id)
+    references public.content_items(id, author_id) on delete restrict,
   check (original_content is null or jsonb_typeof(original_content) = 'object'),
   check (jsonb_typeof(payload) = 'object'),
   check (payload ? 'module' and payload->>'module' = module),

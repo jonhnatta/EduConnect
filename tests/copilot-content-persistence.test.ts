@@ -132,6 +132,28 @@ class IdempotentProposalDatabase {
   }
 }
 
+class ForeignContentOwnershipDatabase extends RecordingDatabase {
+  override async transaction<T>(work: (client: {
+    query: <Row extends Record<string, unknown> = Record<string, unknown>>(text: string, params?: unknown[]) => Promise<{ rows: Row[] }>
+  }) => Promise<T>) {
+    this.txRows = [
+      { rows: [proposalRow()] },
+      { rows: [{
+        id: contentItemId,
+        author_id: anotherTeacherId,
+        type: "article",
+        title: savedDraft.title,
+        body_html: savedDraft.bodyHtml,
+        status: "draft",
+        visibility: "private",
+        settings: savedDraft.settings,
+      }] },
+      new Error("insert or update on table ai_content_proposals violates foreign key constraint ai_content_proposals_content_item_owner_fkey"),
+    ]
+    return super.transaction(work)
+  }
+}
+
 test("content proposal migration protects ownership, lifecycle, normalized payload and saved content", () => {
   assert.ok(existsSync(migrationUrl), "scripts/058_ai_copilot_content_proposals.sql must exist")
   const sql = readFileSync(migrationUrl, "utf8").replace(/\s+/g, " ").trim().toLowerCase()
@@ -148,7 +170,8 @@ test("content proposal migration protects ownership, lifecycle, normalized paylo
   assert.match(sql, /model text not null/)
   assert.match(sql, /status text not null default 'proposed'/)
   assert.match(sql, /idempotency_key text not null/)
-  assert.match(sql, /content_item_id uuid references public\.content_items\(id\) on delete restrict/)
+  assert.match(sql, /add constraint content_items_id_author_id_key unique \(id, author_id\)/)
+  assert.match(sql, /foreign key \(content_item_id, teacher_id\) references public\.content_items\(id, author_id\) on delete restrict/)
   assert.match(sql, /unique \(teacher_id, idempotency_key\)/)
   assert.match(sql, /foreign key \(conversation_id, teacher_id\) references public\.ai_conversations\(id, teacher_id\) on delete cascade/)
   assert.match(sql, /check \(\(status = 'saved' and content_item_id is not null\) or \(status <> 'saved' and content_item_id is null\)\)/)
@@ -293,6 +316,20 @@ test("saves a private content draft transactionally and rolls back if proposal l
   assert.equal(database.txQueries[1]!.params?.[1], "article")
   assert.match(database.txQueries[2]!.text, /update public\.ai_content_proposals/)
   assert.match(database.txQueries[2]!.text, /where teacher_id = \$1\s+and id = \$2\s+and status = 'proposed'/)
+})
+
+test("rejects a proposal link to a content item owned by another teacher", async () => {
+  const database = new ForeignContentOwnershipDatabase()
+  const repository = new PostgresCopilotRepository(database)
+
+  await assert.rejects(
+    repository.saveContentDraft({ teacherId, proposalId, contentDraft: savedDraft }),
+    /ai_content_proposals_content_item_owner_fkey/,
+  )
+
+  assert.equal(database.transactionRolledBack, true)
+  assert.equal(database.txQueries[1]?.params?.[0], teacherId)
+  assert.equal(database.txQueries[2]?.params?.[2], contentItemId)
 })
 
 test("saves one private content item and reuses it on a save retry", async () => {
