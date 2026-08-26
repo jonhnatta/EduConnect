@@ -9,6 +9,8 @@ import type {
   StoredContentProposal,
 } from "../lib/ai/copilot/postgres-repository.ts"
 import { ContentServiceError } from "../lib/ai/copilot/content-service.ts"
+import { ProposalServiceError } from "../lib/ai/copilot/proposal-service.ts"
+import { CopilotServiceError } from "../lib/ai/copilot/service.ts"
 import type { CopilotActor } from "../lib/ai/copilot/types.ts"
 
 const teacher: CopilotActor = {
@@ -106,12 +108,15 @@ function setup(options: {
   generate?: (input: { actor: CopilotActor; request: unknown }) => Promise<ContentProposal>
   review?: (input: { actor: CopilotActor; request: unknown }) => Promise<ContentProposal>
   proposal?: StoredContentProposal | null
+  createError?: Error
+  saveError?: Error
 } = {}) {
   const calls: Record<string, unknown[]> = { generate: [], review: [], create: [], get: [], reject: [], save: [], list: [] }
   let current = options.proposal === undefined ? stored() : options.proposal
   const repository: ContentProposalRepository = {
     async createContentProposal(input) {
       calls.create.push(input)
+      if (options.createError) throw options.createError
       current = stored({
         teacherId: input.teacherId,
         conversationId: input.conversationId,
@@ -140,6 +145,7 @@ function setup(options: {
     },
     async saveContentDraft(input) {
       calls.save.push(input)
+      if (options.saveError) throw options.saveError
       if (!current || current.teacherId !== input.teacherId || current.id !== input.proposalId) return null
       const contentItem: SavedContentProposalItem = {
         id: contentItemId,
@@ -249,6 +255,39 @@ test("rejects invalid and authority-bearing request bodies with 422", async () =
   assert.equal(calls.generate.length, 0)
 })
 
+test("rejects malformed JSON and a null request with 422", async () => {
+  const { calls, handlers } = setup()
+  const malformed = await handlers.generate(new Request("https://educonnect.test/api/copilot/content", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{",
+  }))
+  assert.equal(malformed.status, 422)
+  assert.deepEqual(await malformed.json(), { ok: false, error: "invalid_payload" })
+
+  const nullRequest = await handlers.generate(request("/api/copilot/content", { ...generateInput, request: null }))
+  assert.equal(nullRequest.status, 422)
+  assert.deepEqual(await nullRequest.json(), { ok: false, error: "invalid_payload" })
+  assert.equal(calls.generate.length, 0)
+})
+
+test("maps content proposal errors to stable statuses", async () => {
+  const conflict = setup({ createError: new ProposalServiceError("content_idempotency_conflict") })
+  const conflictResponse = await conflict.handlers.generate(request("/api/copilot/content", generateInput))
+  assert.equal(conflictResponse.status, 409)
+  assert.deepEqual(await conflictResponse.json(), { ok: false, error: "idempotency_conflict" })
+
+  const missingConversation = setup({ createError: new CopilotServiceError("conversation_not_found") })
+  const missingResponse = await missingConversation.handlers.generate(request("/api/copilot/content", generateInput))
+  assert.equal(missingResponse.status, 404)
+  assert.deepEqual(await missingResponse.json(), { ok: false, error: "not_found" })
+
+  const saveConflict = setup({ saveError: new ProposalServiceError("content_proposal_save_conflict") })
+  const saveResponse = await saveConflict.handlers.save(new Request("https://educonnect.test/api/copilot/content/" + proposalId + "/save", { method: "POST" }), { params: { proposalId } })
+  assert.equal(saveResponse.status, 409)
+  assert.deepEqual(await saveResponse.json(), { ok: false, error: "proposal_conflict" })
+})
+
 test("maps quota errors to 429", async () => {
   const { handlers } = setup({
     generate: async () => { throw new ContentServiceError("daily_quota_exceeded") },
@@ -278,6 +317,24 @@ test("reads, rejects, saves, and hides another teacher's proposal as 404", async
   const missing = await foreign.handlers.get(new Request("https://educonnect.test/api/copilot/content/" + proposalId), { params: { proposalId } })
   assert.equal(missing.status, 404)
   assert.deepEqual(await missing.json(), { ok: false, error: "not_found" })
+})
+
+test("does not save performance or classroom proposals as content items", async () => {
+  for (const proposalModule of ["performance", "classroom"] as const) {
+    const { calls, handlers } = setup({ proposal: stored({
+      module: proposalModule,
+      payload: proposal({
+        module: proposalModule,
+        draft: proposalModule === "performance"
+          ? { module: proposalModule, overview: "Visão agregada da turma.", findings: ["Há lacunas."], recommendations: ["Retome o tema."] }
+          : { module: proposalModule, title: "Atividade em grupo", activity: "Debatam os conceitos.", rationale: "Consolida a aprendizagem." },
+      }),
+    }) })
+    const response = await handlers.save(new Request("https://educonnect.test/api/copilot/content/" + proposalId + "/save", { method: "POST" }), { params: { proposalId } })
+    assert.equal(response.status, 409)
+    assert.deepEqual(await response.json(), { ok: false, error: "proposal_not_savable" })
+    assert.equal(calls.save.length, 0)
+  }
 })
 
 test("lists teacher-scoped history with validated filters and cursor", async () => {

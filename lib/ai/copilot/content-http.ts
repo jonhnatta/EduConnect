@@ -6,14 +6,15 @@ import {
   type ContentProposal,
 } from "./content-contracts.ts"
 import { ContentServiceError } from "./content-service.ts"
-import { proposalPayloadHash, type ProposalStatus } from "./proposal-service.ts"
+import { ProposalServiceError, proposalPayloadHash, type ProposalStatus } from "./proposal-service.ts"
 import type { ContentProposalRepository } from "./postgres-repository.ts"
+import { CopilotServiceError } from "./service.ts"
 import type { CopilotActor } from "./types.ts"
 
 const envelope = z.object({
   conversationId: z.string().uuid(),
   idempotencyKey: z.string().trim().min(8).max(200),
-  request: z.unknown(),
+  request: z.object({}).passthrough(),
 }).strict()
 const params = z.object({ proposalId: z.string().uuid() })
 const historyQuery = z.object({
@@ -35,16 +36,25 @@ function publicProposal(proposal: any) {
   const { teacherId: _teacherId, ...withoutTeacher } = proposal
   const payload = proposal.payload as ContentProposal
   const draft = payload.draft === null ? null : toStudentContentDraft(payload.draft)
-  return { ...withoutTeacher, payload: { ...payload, draft } }
+  const originalContent = proposal.originalContent === null ? null : toStudentContentDraft(proposal.originalContent)
+  return { ...withoutTeacher, originalContent, payload: { ...payload, draft } }
 }
 function errorResponse(error: unknown) {
   if (error instanceof ZodError) return json({ ok: false, error: "invalid_payload" }, 422)
+  if (error instanceof ProposalServiceError) {
+    if (error.code === "content_idempotency_conflict") return json({ ok: false, error: "idempotency_conflict" }, 409)
+    return json({ ok: false, error: "proposal_conflict" }, 409)
+  }
+  if (error instanceof CopilotServiceError && error.code === "conversation_not_found") return json({ ok: false, error: "not_found" }, 404)
   if (error instanceof ContentServiceError) {
     if (["content_not_found", "classroom_not_found", "proposal_not_found"].includes(error.code)) return json({ ok: false, error: "not_found" }, 404)
     if (["professor_required", "professor_not_approved", "beta_disabled", "account_inactive", "individual_diagnosis_not_allowed"].includes(error.code)) return json({ ok: false, error: "forbidden" }, 403)
     if (error.code.includes("quota")) return json({ ok: false, error: "quota_exceeded" }, 429)
   }
   return json({ ok: false, error: "internal_error" }, 500)
+}
+async function jsonBody(request: Request) {
+  try { return await request.json() } catch { throw new ZodError([]) }
 }
 async function requireProfessor(resolveActor: Dependencies["resolveActor"]) {
   const actor = await resolveActor()
@@ -65,7 +75,7 @@ export function createContentApiHandlers(dependencies: Dependencies) {
     async generate(request: Request) {
       const access = await requireProfessor(dependencies.resolveActor); if (!access.ok) return access.response
       try {
-        const body = envelope.parse(await request.json())
+        const body = envelope.parse(await jsonBody(request))
         const parsedRequest = body.request as Record<string, unknown>
         const parsed = parsedRequest.module === "review" ? contentReviewInputSchema.parse(body.request) : contentGenerationInputSchema.parse(body.request)
         const proposal = parsed.module === "review"
@@ -91,7 +101,7 @@ export function createContentApiHandlers(dependencies: Dependencies) {
     },
     async save(_request: Request, context: { params: { proposalId: string } | Promise<{ proposalId: string }> }) {
       const access = await requireProfessor(dependencies.resolveActor); if (!access.ok) return access.response
-      try { const { proposalId } = params.parse(await context.params); const found = await dependencies.repository.getContentProposal({ teacherId: access.actor.userId, proposalId }); if (!found) return json({ ok: false, error: "not_found" }, 404); const result = await dependencies.repository.saveContentDraft({ teacherId: access.actor.userId, proposalId, contentDraft: contentDraft(found.payload) }); if (!result) return json({ ok: false, error: "not_found" }, 404); const { authorId: _authorId, ...publicContentItem } = result.contentItem; return json({ ok: true, proposal: publicProposal(result.proposal), contentItem: { ...publicContentItem, settings: { ...publicContentItem.settings, copilotDraft: publicContentItem.settings.copilotDraft ? toStudentContentDraft(publicContentItem.settings.copilotDraft) : undefined } } }, 201) } catch (error) { return errorResponse(error) }
+      try { const { proposalId } = params.parse(await context.params); const found = await dependencies.repository.getContentProposal({ teacherId: access.actor.userId, proposalId }); if (!found) return json({ ok: false, error: "not_found" }, 404); if (["performance", "classroom"].includes(found.module)) return json({ ok: false, error: "proposal_not_savable" }, 409); const result = await dependencies.repository.saveContentDraft({ teacherId: access.actor.userId, proposalId, contentDraft: contentDraft(found.payload) }); if (!result) return json({ ok: false, error: "not_found" }, 404); const { authorId: _authorId, ...publicContentItem } = result.contentItem; return json({ ok: true, proposal: publicProposal(result.proposal), contentItem: { ...publicContentItem, settings: { ...publicContentItem.settings, copilotDraft: publicContentItem.settings.copilotDraft ? toStudentContentDraft(publicContentItem.settings.copilotDraft) : undefined } } }, 201) } catch (error) { return errorResponse(error) }
     },
     async history(request: Request) {
       const access = await requireProfessor(dependencies.resolveActor); if (!access.ok) return access.response
