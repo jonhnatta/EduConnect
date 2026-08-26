@@ -1,9 +1,12 @@
-import { createHash } from "node:crypto"
 import { sanitizeActivityHtml } from "../../sanitize-activity-html.ts"
 import type { Citation } from "../contracts.ts"
 import { copilotResponseSchema, usageSchema } from "../contracts.ts"
 import { NoopTelemetry, type Telemetry } from "../telemetry/langfuse.ts"
 import { evaluateCopilotInput } from "./guardrail.ts"
+import {
+  createProposalService,
+  type ProposalRepository,
+} from "./proposal-service.ts"
 import {
   lessonPlanDraftSchema,
   lessonPlanInputSchema,
@@ -155,10 +158,6 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value)
 }
 
-function stableHash(value: unknown): string {
-  return createHash("sha256").update(stableStringify(value)).digest("hex")
-}
-
 function canonicalPayload(
   payload: LessonPlanProposalPayload,
   status: LessonPlanStatus
@@ -195,18 +194,6 @@ function canonicalPayload(
     usage: proposal.data.usage,
     safety: proposal.data.safety,
   }
-}
-
-function proposalCreationHash(input: {
-  conversationId: string
-  status: LessonPlanStatus
-  payload: LessonPlanProposalPayload
-}) {
-  return stableHash({
-    conversationId: input.conversationId,
-    status: input.status,
-    payload: input.payload,
-  })
 }
 
 function escapeHtml(value: string): string {
@@ -417,6 +404,31 @@ export function createLessonPlanService({
 }: {
   repository: LessonPlanProposalRepository
 } & LessonPlanGenerationDependencies) {
+  const proposalRepository: ProposalRepository<
+    LessonPlanProposalPayload,
+    StoredLessonPlanProposal,
+    LessonPlanContentDraft,
+    LessonPlanSavedContentItem
+  > = {
+    createProposal: (input) => repository.createProposal({
+      ...input,
+      safetyDecision: input.payload.safety.decision,
+      model: input.payload.model,
+    }),
+    getProposal: (input) => repository.getProposal(input),
+    rejectProposal: (input) => repository.rejectProposal(input),
+    saveDraft: (input) => repository.saveDraft(input),
+  }
+  const proposalService = createProposalService<
+    LessonPlanProposalPayload,
+    StoredLessonPlanProposal,
+    LessonPlanContentDraft,
+    LessonPlanSavedContentItem
+  >({
+    repository: proposalRepository,
+    normalizePayload: canonicalPayload,
+  })
+
   async function createProposal(input: {
     teacherId: string
     conversationId: string
@@ -425,20 +437,15 @@ export function createLessonPlanService({
     status?: LessonPlanStatus
   }) {
     const status = input.status ?? "proposed"
-    const payload = canonicalPayload(input.payload, status)
-    return repository.createProposal({
+    if (status === "saved") {
+      throw new LessonPlanServiceError("invalid_lesson_plan_proposal")
+    }
+    return proposalService.createProposal({
       teacherId: input.teacherId,
       conversationId: input.conversationId,
       idempotencyKey: input.idempotencyKey,
       status,
-      payload,
-      payloadHash: proposalCreationHash({
-        conversationId: input.conversationId,
-        status,
-        payload,
-      }),
-      safetyDecision: payload.safety.decision,
-      model: payload.model,
+      payload: input.payload,
     })
   }
 
@@ -726,11 +733,11 @@ export function createLessonPlanService({
     },
 
     getProposal(input: { teacherId: string; proposalId: string }) {
-      return repository.getProposal(input)
+      return proposalService.getProposal(input)
     },
 
     rejectProposal(input: { teacherId: string; proposalId: string }) {
-      return repository.rejectProposal(input)
+      return proposalService.rejectProposal(input)
     },
 
     async saveDraft(input: {
@@ -740,7 +747,7 @@ export function createLessonPlanService({
       authorId?: string
       status?: string
     }) {
-      const proposal = await repository.getProposal(input)
+      const proposal = await proposalService.getProposal(input)
       if (!proposal) return null
       if (proposal.status !== "proposed" && proposal.status !== "saved") return null
 
@@ -749,7 +756,7 @@ export function createLessonPlanService({
         throw new LessonPlanServiceError("invalid_lesson_plan_proposal")
       }
 
-      return repository.saveDraft({
+      return proposalService.saveDraft({
         teacherId: input.teacherId,
         proposalId: input.proposalId,
         contentDraft: lessonPlanDraftToContentDraft({
