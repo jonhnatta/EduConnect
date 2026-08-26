@@ -1,4 +1,5 @@
 import OpenAI from "openai"
+import { zodTextFormat } from "openai/helpers/zod"
 import { auth } from "../../../auth.ts"
 import { dbPool } from "../../db/pool.ts"
 import { queryOne } from "../../db/query.ts"
@@ -23,6 +24,12 @@ import { createCopilotApiHandlers } from "./http.ts"
 import { createLessonPlanApiHandlers } from "./lesson-plan-http.ts"
 import { createLessonPlanService } from "./lesson-plan-service.ts"
 import { PostgresCopilotRepository } from "./postgres-repository.ts"
+import {
+  createContentService,
+  type ContentProvider,
+  type ContentServiceRepository,
+} from "./content-service.ts"
+import { areCitationsAuthorized, contentProposalSchema } from "./content-contracts.ts"
 import type { CopilotActor, CopilotProvider } from "./types.ts"
 
 const TENANT_ID = "educonnect"
@@ -53,6 +60,47 @@ class LazyOpenAiCopilotProvider implements CopilotProvider {
       user: `Contexto autorizado:\n${input.context}\n\nHistorico e pergunta:\n${input.user}`,
       maxOutputTokens: input.maxOutputTokens,
     })
+  }
+}
+
+class LazyOpenAiContentProvider implements ContentProvider {
+  readonly name = "openai"
+
+  get model(): string {
+    return readAiConfig().model
+  }
+
+  async generate(input: Parameters<ContentProvider["generate"]>[0]) {
+    const config = readAiConfig()
+    if (!config.enabled) throw new CopilotServiceError("feature_disabled")
+    const client = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+      maxRetries: 0,
+      timeout: 30_000,
+    })
+    const response = await client.responses.create({
+      model: config.model,
+      instructions: input.system,
+      input: input.user,
+      store: false,
+      max_output_tokens: input.maxOutputTokens,
+      text: { format: zodTextFormat(contentProposalSchema, "professor_content_proposal") },
+    })
+    try {
+      const proposal = contentProposalSchema.parse(JSON.parse(response.output_text))
+      if (!areCitationsAuthorized(proposal.citations, input.authorizedEvidence)) {
+        throw new Error("unauthorized_content_citations")
+      }
+      return {
+        ...proposal,
+        usage: {
+          inputTokens: Number(response.usage?.input_tokens ?? 0),
+          outputTokens: Number(response.usage?.output_tokens ?? 0),
+        },
+      }
+    } catch {
+      throw new Error("invalid_openai_content_response")
+    }
   }
 }
 
@@ -186,6 +234,84 @@ class PostgresKnowledgeSourceRepository implements KnowledgeSourceRepository {
   }
 }
 
+class PostgresContentServiceRepository implements ContentServiceRepository {
+  private readonly copilotRepository = new PostgresCopilotRepository()
+
+  async ownsContent(input: { teacherId: string; contentIds: readonly string[] }): Promise<boolean> {
+    if (input.contentIds.length === 0) return true
+    const row = await queryOne<{ owned_count: number | string }>(
+      `select count(*)::integer as owned_count
+         from public.content_items
+        where author_id = $1
+          and id = any($2::uuid[])`,
+      [input.teacherId, input.contentIds]
+    )
+    return Number(row?.owned_count ?? 0) === input.contentIds.length
+  }
+
+  async ownsClassroom(input: { teacherId: string; classroomId: string }): Promise<boolean> {
+    const row = await queryOne<{ id: string }>(
+      `select id
+         from public.classrooms
+        where id = $1
+          and professor_id = $2
+        limit 1`,
+      [input.classroomId, input.teacherId]
+    )
+    return !!row
+  }
+
+  async getPerformanceSummary(input: {
+    teacherId: string
+    classroomId: string
+    periodStart: string
+    periodEnd: string
+  }): Promise<Record<string, number | null> | null> {
+    const row = await queryOne<{
+      activity_count: number | string
+      submission_count: number | string
+      average_score: number | string | null
+      delivery_rate: number | string | null
+    }>(
+      `select
+         count(distinct activity.id)::integer as activity_count,
+         count(submission.id)::integer as submission_count,
+         avg(submission.score_total)::double precision as average_score,
+         case when count(distinct member.student_id) = 0 then null
+              else count(distinct submission.student_id)::double precision / count(distinct member.student_id)::double precision
+          end as delivery_rate
+       from public.classrooms classroom
+       left join public.classroom_members member
+         on member.classroom_id = classroom.id
+       left join public.classroom_activities activity
+         on activity.classroom_id = classroom.id
+        and activity.status <> 'rascunho'
+        and activity.created_at >= $3::date
+        and activity.created_at < ($4::date + interval '1 day')
+       left join public.classroom_activity_submissions submission
+         on submission.activity_id = activity.id
+        and submission.status = 'enviado'
+        and submission.score_total is not null
+       where classroom.id = $1
+         and classroom.professor_id = $2
+       group by classroom.id
+       limit 1`,
+      [input.classroomId, input.teacherId, input.periodStart, input.periodEnd]
+    )
+    if (!row) return null
+    return {
+      activityCount: Number(row.activity_count ?? 0),
+      submissionCount: Number(row.submission_count ?? 0),
+      averageScore: row.average_score === null ? null : Number(row.average_score),
+      deliveryRate: row.delivery_rate === null ? null : Number(row.delivery_rate),
+    }
+  }
+
+  recordRun(input: Parameters<PostgresCopilotRepository["recordRun"]>[0]) {
+    return this.copilotRepository.recordRun(input)
+  }
+}
+
 function toCopilotCitation(citation: RetrievalCitation) {
   return {
     sourceId: citation.id,
@@ -264,6 +390,16 @@ export function createDefaultCopilotService() {
     repository: new PostgresCopilotRepository(),
     quota: new PostgresAiQuota(),
     provider: new LazyOpenAiCopilotProvider(),
+    retrieveContext,
+    telemetry: new LangfuseTelemetry(),
+  })
+}
+
+export function createDefaultContentService() {
+  return createContentService({
+    repository: new PostgresContentServiceRepository(),
+    quota: new PostgresAiQuota(),
+    provider: new LazyOpenAiContentProvider(),
     retrieveContext,
     telemetry: new LangfuseTelemetry(),
   })
