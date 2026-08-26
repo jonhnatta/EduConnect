@@ -37,8 +37,31 @@ export const contentSafetySchema = z.object({
     "human_review_required",
   ]),
   policyVersion: boundedText(100),
-  reasonCode: z.string().trim().min(1).max(100).optional(),
+  reasonCode: z.string().trim().min(1).max(100).nullable(),
 }).strict()
+
+/**
+ * Compares provider citations with the normalized evidence selected by the server.
+ * Call this after parsing a proposal and before persisting or returning it.
+ */
+export function areCitationsAuthorized(
+  citations: readonly ContentCitation[],
+  authorizedEvidence: readonly ContentCitation[]
+): boolean {
+  const authorized = new Set(authorizedEvidence.map(citationFingerprint))
+  return citations.every((citation) => authorized.has(citationFingerprint(citation)))
+}
+
+function citationFingerprint(citation: ContentCitation): string {
+  return JSON.stringify([
+    citation.kind,
+    citation.id,
+    citation.title,
+    citation.url,
+    citation.retrievedAt,
+    citation.excerpt,
+  ])
+}
 
 export const contentModuleSchema = z.enum([
   "article",
@@ -75,7 +98,7 @@ const questionBaseSchema = z.object({
   order: z.number().int().min(1).max(40),
   prompt: boundedText(4_000),
   points: z.number().positive().max(1_000),
-  disciplina: z.string().trim().min(1).max(120).optional(),
+  disciplina: z.string().trim().min(1).max(120).nullable(),
 })
 
 export const teacherQuestionSchema = z.discriminatedUnion("type", [
@@ -290,6 +313,7 @@ export const contentProposalSchema = z.object({
 })
 
 export type ContentModule = z.infer<typeof contentModuleSchema>
+export type ContentCitation = z.infer<typeof contentCitationSchema>
 export type ContentGenerationInput = z.infer<typeof contentGenerationInputSchema>
 export type ContentReviewInput = z.infer<typeof contentReviewInputSchema>
 export type TeacherQuestion = z.infer<typeof teacherQuestionSchema>

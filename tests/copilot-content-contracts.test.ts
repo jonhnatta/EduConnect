@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { zodTextFormat } from "openai/helpers/zod"
 import {
+  areCitationsAuthorized,
   contentGenerationInputSchema,
   contentProposalSchema,
   contentReviewInputSchema,
@@ -29,6 +31,7 @@ const teacherQuestion = {
   prompt: "Qual alternativa resume o conceito?",
   options: ["Alternativa correta", "Alternativa incorreta"],
   points: 1,
+  disciplina: null,
   teacherAnswer: {
     correctIndex: 0,
     rationale: "A primeira alternativa corresponde à evidência autorizada.",
@@ -155,7 +158,7 @@ test("rejects approved proposals without citations", () => {
     citations: [],
     model: "gpt-test",
     usage: { inputTokens: 100, outputTokens: 80 },
-    safety: { decision: "approved", policyVersion: "content-v1" },
+    safety: { decision: "approved", policyVersion: "content-v1", reasonCode: null },
   }
 
   assert.equal(contentProposalSchema.safeParse(proposal).success, false)
@@ -179,7 +182,7 @@ test("rejects unknown fields in proposal usage, safety, and citations", () => {
     citations: [citation],
     model: "gpt-test",
     usage: { inputTokens: 100, outputTokens: 80 },
-    safety: { decision: "approved", policyVersion: "content-v1" },
+    safety: { decision: "approved", policyVersion: "content-v1", reasonCode: null },
   }
 
   assert.equal(contentProposalSchema.safeParse({
@@ -210,7 +213,7 @@ test("bounds citation metadata and safety policy versions", () => {
     citations: [citation],
     model: "gpt-test",
     usage: { inputTokens: 100, outputTokens: 80 },
-    safety: { decision: "approved", policyVersion: "content-v1" },
+    safety: { decision: "approved", policyVersion: "content-v1", reasonCode: null },
   }
 
   for (const invalidCitation of [
@@ -242,7 +245,7 @@ test("accepts abstained and blocked proposals with a null factual draft", () => 
       citations: [],
       model: "gpt-test",
       usage: { inputTokens: 20, outputTokens: 0 },
-      safety: { decision, policyVersion: "content-v1" },
+      safety: { decision, policyVersion: "content-v1", reasonCode: null },
     }).success, true, decision)
   }
 })
@@ -258,9 +261,23 @@ test("rejects citations on abstained and blocked proposals", () => {
       citations: [citation],
       model: "gpt-test",
       usage: { inputTokens: 20, outputTokens: 0 },
-      safety: { decision, policyVersion: "content-v1" },
+      safety: { decision, policyVersion: "content-v1", reasonCode: null },
     }).success, false, decision)
   }
+})
+
+test("converts the content proposal to a strict OpenAI text format", () => {
+  assert.doesNotThrow(() => zodTextFormat(contentProposalSchema, "professor_content_proposal"))
+})
+
+test("accepts only citations that exactly match authorized evidence", () => {
+  assert.equal(areCitationsAuthorized([citation], [citation]), true)
+  assert.equal(
+    areCitationsAuthorized([
+      { ...citation, excerpt: "Trecho inventado pelo provider." },
+    ], [citation]),
+    false
+  )
 })
 
 test("creates a strict student DTO that never includes teacher answers", () => {
@@ -305,6 +322,8 @@ test("versioned prompts require strict JSON, authorized context, and abstention"
   })
 
   assert.match(CONTENT_PROMPT_VERSION, /^content-copilot-v\d+$/)
+  assert.match(generationPrompt.system, /authorizedEvidence/)
+  assert.match(generationPrompt.user, /authorizedEvidence/)
   for (const prompt of [generationPrompt.system, generationPrompt.user, reviewPrompt.system, reviewPrompt.user]) {
     assert.match(prompt, /JSON/i)
     assert.match(prompt, /autorizad/i)
