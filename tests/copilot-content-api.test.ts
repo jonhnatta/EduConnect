@@ -312,6 +312,9 @@ test("reads, rejects, saves, and hides another teacher's proposal as 404", async
   const savedBody = await saved.json()
   assertTeacherDataHidden(savedBody)
   assert.equal((savable.calls.save[0] as { contentDraft: ContentProposalSavedContentDraft }).contentDraft.type, "assessment")
+  const savedDraft = savable.calls.save[0] as { contentDraft: ContentProposalSavedContentDraft }
+  assert.equal((savedDraft.contentDraft.settings.exam as { version: number }).version, 1)
+  assert.equal((savedDraft.contentDraft.settings.exam as { questions: Array<{ correctIndex: number }> }).questions[0]?.correctIndex, 0)
 
   const foreign = setup({ proposal: stored({ teacherId: anotherTeacherId }) })
   const missing = await foreign.handlers.get(new Request("https://educonnect.test/api/copilot/content/" + proposalId), { params: { proposalId } })

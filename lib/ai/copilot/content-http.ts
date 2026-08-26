@@ -10,6 +10,7 @@ import { ProposalServiceError, proposalPayloadHash, type ProposalStatus } from "
 import type { ContentProposalRepository } from "./postgres-repository.ts"
 import { CopilotServiceError } from "./service.ts"
 import type { CopilotActor } from "./types.ts"
+import { EXAM_VERSION } from "../../activities/exam.ts"
 
 const envelope = z.object({
   conversationId: z.string().uuid(),
@@ -67,7 +68,24 @@ function contentDraft(proposal: ContentProposal) {
   const draft: any = proposal.draft
   const type = draft.module === "tip" ? "dica" : draft.module
   const bodyHtml = "bodyHtml" in draft ? draft.bodyHtml : null
-  return { type, title: draft.title, bodyHtml, status: "draft" as const, visibility: "private" as const, settings: { source: "copilot", copilotDraft: draft } }
+  const settings: Record<string, unknown> = { source: "copilot" }
+  if ("questions" in draft) {
+    settings.exam = {
+      version: EXAM_VERSION,
+      questions: draft.questions.map((question: any) => question.type === "mcq"
+        ? { id: question.id, order: question.order, type: question.type, prompt: question.prompt, points: question.points, disciplina: question.disciplina ?? undefined, options: question.options, correctIndex: question.teacherAnswer.correctIndex }
+        : { id: question.id, order: question.order, type: question.type, prompt: question.prompt, points: question.points, disciplina: question.disciplina ?? undefined }),
+    }
+    settings.copilotDraft = draft
+  } else settings.copilotDraft = draft
+  return { type, title: draft.title, bodyHtml, status: "draft" as const, visibility: "private" as const, settings }
+}
+
+function publicContentSettings(settings: Record<string, unknown>) {
+  const exam = settings.exam
+  if (!exam || typeof exam !== "object") return settings
+  const questions: unknown[] = Array.isArray((exam as Record<string, unknown>).questions) ? (exam as Record<string, unknown>).questions as unknown[] : []
+  return { ...settings, exam: { ...(exam as Record<string, unknown>), questions: questions.map((question: unknown) => { if (!question || typeof question !== "object") return question; const { correctIndex: _correctIndex, ...publicQuestion } = question as Record<string, unknown>; return publicQuestion }) } }
 }
 
 export function createContentApiHandlers(dependencies: Dependencies) {
@@ -101,7 +119,7 @@ export function createContentApiHandlers(dependencies: Dependencies) {
     },
     async save(_request: Request, context: { params: { proposalId: string } | Promise<{ proposalId: string }> }) {
       const access = await requireProfessor(dependencies.resolveActor); if (!access.ok) return access.response
-      try { const { proposalId } = params.parse(await context.params); const found = await dependencies.repository.getContentProposal({ teacherId: access.actor.userId, proposalId }); if (!found) return json({ ok: false, error: "not_found" }, 404); if (["performance", "classroom"].includes(found.module)) return json({ ok: false, error: "proposal_not_savable" }, 409); const result = await dependencies.repository.saveContentDraft({ teacherId: access.actor.userId, proposalId, contentDraft: contentDraft(found.payload) }); if (!result) return json({ ok: false, error: "not_found" }, 404); const { authorId: _authorId, ...publicContentItem } = result.contentItem; return json({ ok: true, proposal: publicProposal(result.proposal), contentItem: { ...publicContentItem, settings: { ...publicContentItem.settings, copilotDraft: publicContentItem.settings.copilotDraft ? toStudentContentDraft(publicContentItem.settings.copilotDraft) : undefined } } }, 201) } catch (error) { return errorResponse(error) }
+      try { const { proposalId } = params.parse(await context.params); const found = await dependencies.repository.getContentProposal({ teacherId: access.actor.userId, proposalId }); if (!found) return json({ ok: false, error: "not_found" }, 404); if (["performance", "classroom"].includes(found.module)) return json({ ok: false, error: "proposal_not_savable" }, 409); const result = await dependencies.repository.saveContentDraft({ teacherId: access.actor.userId, proposalId, contentDraft: contentDraft(found.payload) }); if (!result) return json({ ok: false, error: "not_found" }, 404); const { authorId: _authorId, ...publicContentItem } = result.contentItem; const settings = publicContentSettings(publicContentItem.settings); return json({ ok: true, proposal: publicProposal(result.proposal), contentItem: { ...publicContentItem, settings: { ...settings, copilotDraft: settings.copilotDraft ? toStudentContentDraft(settings.copilotDraft) : undefined } } }, 201) } catch (error) { return errorResponse(error) }
     },
     async history(request: Request) {
       const access = await requireProfessor(dependencies.resolveActor); if (!access.ok) return access.response
