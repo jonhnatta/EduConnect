@@ -102,6 +102,36 @@ class RecordingDatabase {
   }
 }
 
+class IdempotentProposalDatabase {
+  insertAttempts = 0
+  insertedRows = 0
+  private proposal: ReturnType<typeof proposalRow> | null = null
+
+  async query<Row extends Record<string, unknown> = Record<string, unknown>>(text: string, params?: unknown[]): Promise<Row[]> {
+    if (/insert into public\.ai_content_proposals/.test(text)) {
+      this.insertAttempts++
+      const payloadHash = params?.[7]
+      const idempotencyKey = params?.[11]
+      if (!this.proposal) {
+        this.insertedRows++
+        this.proposal = proposalRow({ payload_hash: payloadHash, idempotency_key: idempotencyKey })
+        return [this.proposal] as unknown as Row[]
+      }
+      return this.proposal.payload_hash === payloadHash && this.proposal.idempotency_key === idempotencyKey
+        ? [this.proposal] as unknown as Row[]
+        : []
+    }
+    if (/select id\s+from public\.ai_content_proposals/.test(text)) {
+      return this.proposal ? [{ id: this.proposal.id }] as unknown as Row[] : []
+    }
+    return []
+  }
+
+  async transaction<T>(_work: (client: never) => Promise<T>): Promise<T> {
+    throw new Error("not_used")
+  }
+}
+
 test("content proposal migration protects ownership, lifecycle, normalized payload and saved content", () => {
   assert.ok(existsSync(migrationUrl), "scripts/058_ai_copilot_content_proposals.sql must exist")
   const sql = readFileSync(migrationUrl, "utf8").replace(/\s+/g, " ").trim().toLowerCase()
@@ -187,6 +217,57 @@ test("returns the same content proposal for an idempotent retry and rejects a co
     }),
     (error: unknown) => error instanceof ProposalServiceError && error.code === "content_idempotency_conflict",
   )
+})
+
+test("retries the same content proposal against persisted idempotency state without a duplicate insert", async () => {
+  const database = new IdempotentProposalDatabase()
+  const repository = new PostgresCopilotRepository(database)
+  const input = {
+    teacherId,
+    conversationId,
+    module: payload.module,
+    mode: payload.mode,
+    originalContent: null,
+    payload,
+    payloadHash: "content-hash",
+    provider: "openai",
+    idempotencyKey: "content-proposal-key",
+    status: "proposed" as const,
+  }
+
+  const first = await repository.createContentProposal(input)
+  const retry = await repository.createContentProposal(input)
+
+  assert.equal(retry.id, first.id)
+  assert.equal(retry.createdAt, first.createdAt)
+  assert.equal(database.insertAttempts, 2)
+  assert.equal(database.insertedRows, 1)
+})
+
+test("paginates content proposal history with the next keyset cursor and no duplicate items", async () => {
+  const firstRow = proposalRow({ id: "55555555-5555-4555-8555-555555555555", updated_at: "2026-08-25T12:03:00.000Z" })
+  const secondRow = proposalRow({ id: "66666666-6666-4666-8666-666666666666", updated_at: "2026-08-25T12:02:00.000Z" })
+  const thirdRow = proposalRow({ id: "77777777-7777-4777-8777-777777777777", updated_at: "2026-08-25T12:01:00.000Z" })
+  const database = new RecordingDatabase()
+  database.rows = [[firstRow, secondRow, thirdRow], [thirdRow]]
+  const repository = new PostgresCopilotRepository(database)
+
+  const firstPage = await repository.listContentProposals({ teacherId, module: "article", status: "proposed", limit: 2 })
+  const secondPage = await repository.listContentProposals({
+    teacherId,
+    module: "article",
+    status: "proposed",
+    limit: 2,
+    cursor: firstPage.nextCursor,
+  })
+
+  assert.deepEqual(firstPage.items.map((item) => item.id), [firstRow.id, secondRow.id])
+  assert.deepEqual(firstPage.nextCursor, { updatedAt: secondRow.updated_at, id: secondRow.id })
+  assert.deepEqual(secondPage.items.map((item) => item.id), [thirdRow.id])
+  assert.equal(secondPage.nextCursor, null)
+  assert.equal(new Set([...firstPage.items, ...secondPage.items].map((item) => item.id)).size, 3)
+  assert.match(database.queries[1]!.text, /\(updated_at, id\) < \(\$4::timestamptz, \$5::uuid\)/)
+  assert.deepEqual(database.queries[1]!.params, [teacherId, "article", "proposed", secondRow.updated_at, secondRow.id, 3])
 })
 
 test("saves a private content draft transactionally and rolls back if proposal linkage fails", async () => {
