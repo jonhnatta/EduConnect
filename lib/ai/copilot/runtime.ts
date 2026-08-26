@@ -30,6 +30,7 @@ import {
   type ContentServiceRepository,
 } from "./content-service.ts"
 import { areCitationsAuthorized, contentProposalSchema } from "./content-contracts.ts"
+import { performanceSummaryFromRow, type PerformanceSummaryRow } from "./performance-summary.ts"
 import type { CopilotActor, CopilotProvider } from "./types.ts"
 
 const TENANT_ID = "educonnect"
@@ -267,44 +268,43 @@ class PostgresContentServiceRepository implements ContentServiceRepository {
     periodStart: string
     periodEnd: string
   }): Promise<Record<string, number | null> | null> {
-    const row = await queryOne<{
-      activity_count: number | string
-      submission_count: number | string
-      average_score: number | string | null
-      delivery_rate: number | string | null
-    }>(
-      `select
-         count(distinct activity.id)::integer as activity_count,
-         count(submission.id)::integer as submission_count,
-         avg(submission.score_total)::double precision as average_score,
-         case when count(distinct member.student_id) = 0 then null
-              else count(distinct submission.student_id)::double precision / count(distinct member.student_id)::double precision
-          end as delivery_rate
-       from public.classrooms classroom
-       left join public.classroom_members member
-         on member.classroom_id = classroom.id
-       left join public.classroom_activities activity
-         on activity.classroom_id = classroom.id
-        and activity.status <> 'rascunho'
-        and activity.created_at >= $3::date
-        and activity.created_at < ($4::date + interval '1 day')
-       left join public.classroom_activity_submissions submission
-         on submission.activity_id = activity.id
-        and submission.status = 'enviado'
-        and submission.score_total is not null
-       where classroom.id = $1
-         and classroom.professor_id = $2
-       group by classroom.id
+    const row = await queryOne<PerformanceSummaryRow>(
+      `with member_counts as (
+         select classroom_id, count(*)::integer as member_count
+           from public.classroom_members
+          where classroom_id = $1
+          group by classroom_id
+       ), activity_stats as (
+         select id
+           from public.classroom_activities
+          where classroom_id = $1
+            and status <> 'rascunho'
+            and created_at >= $3::date
+            and created_at < ($4::date + interval '1 day')
+       ), submission_stats as (
+         select count(submission.id)::integer as submission_count,
+                avg(submission.score_total)::double precision as average_score,
+                count(distinct submission.student_id)::integer as distinct_submitter_count
+           from public.classroom_activity_submissions submission
+           join activity_stats activity on activity.id = submission.activity_id
+          where submission.status = 'enviado'
+            and submission.score_total is not null
+       )
+       select coalesce(member_counts.member_count, 0)::integer as member_count,
+              (select count(*)::integer from activity_stats) as activity_count,
+              submission_stats.submission_count,
+              submission_stats.average_score,
+              submission_stats.distinct_submitter_count
+         from public.classrooms classroom
+         left join member_counts on member_counts.classroom_id = classroom.id
+         cross join submission_stats
+        where classroom.id = $1
+          and classroom.professor_id = $2
        limit 1`,
       [input.classroomId, input.teacherId, input.periodStart, input.periodEnd]
     )
     if (!row) return null
-    return {
-      activityCount: Number(row.activity_count ?? 0),
-      submissionCount: Number(row.submission_count ?? 0),
-      averageScore: row.average_score === null ? null : Number(row.average_score),
-      deliveryRate: row.delivery_rate === null ? null : Number(row.delivery_rate),
-    }
+    return performanceSummaryFromRow(row)
   }
 
   recordRun(input: Parameters<PostgresCopilotRepository["recordRun"]>[0]) {
