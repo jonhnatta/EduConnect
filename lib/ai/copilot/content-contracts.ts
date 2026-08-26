@@ -1,9 +1,44 @@
 import { z } from "zod"
-import { citationSchema, safetyResultSchema, usageSchema } from "../contracts.ts"
 
 const boundedText = (max: number) => z.string().trim().min(1).max(max)
 const optionalBoundedText = (max: number) => z.string().trim().max(max).default("")
 const sourceIdsSchema = z.array(z.string().uuid()).max(20).default([])
+
+const contentCitationBaseSchema = z.object({
+  id: boundedText(160),
+  title: boundedText(300),
+  retrievedAt: z.string().trim().max(64).datetime(),
+  excerpt: boundedText(2_000),
+})
+
+export const contentCitationSchema = z.discriminatedUnion("kind", [
+  contentCitationBaseSchema.extend({
+    kind: z.literal("internal"),
+    url: z.string().trim().min(1).max(2_048).regex(/^\/(?!\/)[^\s\\]*$/, "Internal citation URL must be a same-origin path"),
+  }).strict(),
+  contentCitationBaseSchema.extend({
+    kind: z.literal("web"),
+    url: z.string().trim().min(1).max(2_048).url().startsWith("https://"),
+  }).strict(),
+])
+
+export const contentUsageSchema = z.object({
+  inputTokens: z.number().int().nonnegative().max(2_000_000),
+  outputTokens: z.number().int().nonnegative().max(200_000),
+}).strict()
+
+export const contentSafetySchema = z.object({
+  decision: z.enum([
+    "approved",
+    "approved_with_warning",
+    "regenerate",
+    "abstain",
+    "blocked",
+    "human_review_required",
+  ]),
+  policyVersion: boundedText(100),
+  reasonCode: z.string().trim().min(1).max(100).optional(),
+}).strict()
 
 export const contentModuleSchema = z.enum([
   "article",
@@ -222,19 +257,25 @@ export const contentProposalDraftSchema = z.union([
 export const contentProposalSchema = z.object({
   module: contentModuleSchema,
   mode: z.enum(["generate", "review"]),
-  draft: contentProposalDraftSchema,
+  draft: contentProposalDraftSchema.nullable(),
   changeSummary: boundedText(1_200),
   warnings: z.array(boundedText(500)).max(12),
-  citations: z.array(citationSchema).max(20),
+  citations: z.array(contentCitationSchema).max(20),
   model: boundedText(160),
-  usage: usageSchema,
-  safety: safetyResultSchema,
+  usage: contentUsageSchema,
+  safety: contentSafetySchema,
 }).strict().superRefine((proposal, context) => {
   const requiresCitation = proposal.safety.decision === "approved" || proposal.safety.decision === "approved_with_warning"
   if (requiresCitation && proposal.citations.length === 0) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["citations"], message: "Approved proposals require at least one citation" })
   }
-  if (proposal.mode === "generate" && proposal.module !== proposal.draft.module) {
+  if (requiresCitation && proposal.draft === null) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["draft"], message: "Approved proposals require a generated draft" })
+  }
+  if (!requiresCitation && proposal.draft !== null) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["draft"], message: "Non-approved proposals must not expose a factual draft" })
+  }
+  if (proposal.mode === "generate" && proposal.draft !== null && proposal.module !== proposal.draft.module) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["draft", "module"], message: "Generated proposal draft must match its module" })
   }
   if (proposal.mode === "review" && proposal.module !== "review") {

@@ -165,6 +165,88 @@ test("rejects approved proposals without citations", () => {
   )
 })
 
+test("rejects unknown fields in proposal usage, safety, and citations", () => {
+  const proposal = {
+    module: "article",
+    mode: "generate",
+    draft: {
+      module: "article",
+      title: "Fotossíntese",
+      bodyHtml: "<p>Texto baseado na evidência.</p>",
+    },
+    changeSummary: "Cria um artigo conciso.",
+    warnings: [],
+    citations: [citation],
+    model: "gpt-test",
+    usage: { inputTokens: 100, outputTokens: 80 },
+    safety: { decision: "approved", policyVersion: "content-v1" },
+  }
+
+  assert.equal(contentProposalSchema.safeParse({
+    ...proposal,
+    usage: { ...proposal.usage, providerCost: 0.01 },
+  }).success, false)
+  assert.equal(contentProposalSchema.safeParse({
+    ...proposal,
+    safety: { ...proposal.safety, internalReason: "not-for-client" },
+  }).success, false)
+  assert.equal(contentProposalSchema.safeParse({
+    ...proposal,
+    citations: [{ ...citation, rawDocument: "do-not-return" }],
+  }).success, false)
+})
+
+test("bounds citation metadata and safety policy versions", () => {
+  const proposal = {
+    module: "article",
+    mode: "generate",
+    draft: {
+      module: "article",
+      title: "Fotossíntese",
+      bodyHtml: "<p>Texto baseado na evidência.</p>",
+    },
+    changeSummary: "Cria um artigo conciso.",
+    warnings: [],
+    citations: [citation],
+    model: "gpt-test",
+    usage: { inputTokens: 100, outputTokens: 80 },
+    safety: { decision: "approved", policyVersion: "content-v1" },
+  }
+
+  for (const invalidCitation of [
+    { ...citation, id: "i".repeat(161) },
+    { ...citation, title: "t".repeat(301) },
+    { ...citation, url: `/${"u".repeat(2_048)}` },
+    { ...citation, retrievedAt: "2026-08-25T12:00:00.000Z".repeat(4) },
+    { ...citation, excerpt: "e".repeat(2_001) },
+  ]) {
+    assert.equal(contentProposalSchema.safeParse({
+      ...proposal,
+      citations: [invalidCitation],
+    }).success, false)
+  }
+  assert.equal(contentProposalSchema.safeParse({
+    ...proposal,
+    safety: { ...proposal.safety, policyVersion: "p".repeat(101) },
+  }).success, false)
+})
+
+test("accepts abstained and blocked proposals with a null factual draft", () => {
+  for (const decision of ["abstain", "blocked"] as const) {
+    assert.equal(contentProposalSchema.safeParse({
+      module: "article",
+      mode: "generate",
+      draft: null,
+      changeSummary: "Não foi possível gerar conteúdo com segurança.",
+      warnings: ["Faltam evidências autorizadas para sustentar uma proposta."],
+      citations: [],
+      model: "gpt-test",
+      usage: { inputTokens: 20, outputTokens: 0 },
+      safety: { decision, policyVersion: "content-v1" },
+    }).success, true, decision)
+  }
+})
+
 test("creates a strict student DTO that never includes teacher answers", () => {
   const teacherDraft = {
     module: "assessment" as const,
