@@ -148,7 +148,7 @@ export function CopilotClient() {
   }, [contentHistoryModule, contentHistoryStatus])
 
   useEffect(() => {
-    void loadContentHistory()
+    queueMicrotask(() => { void loadContentHistory() })
   }, [loadContentHistory])
 
   const contentProposalAction = async (proposal: ContentProposal, action: "save" | "reject") => {

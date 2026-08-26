@@ -4,8 +4,9 @@ EduConnect e uma plataforma educacional para professores e alunos. Professores p
 conteudos, organizam turmas e atividades e acompanham o desempenho. Alunos entram em
 turmas, consomem materiais, respondem atividades e acompanham o proprio progresso.
 
-O primeiro lancamento e gratuito e nao expoe funcionalidades de inteligencia artificial.
-A verificacao de professores e feita por analise humana dos documentos enviados.
+O primeiro lancamento e gratuito. As funcionalidades de inteligencia artificial ficam
+desativadas por padrao e sao liberadas somente para professores aprovados no beta. A
+verificacao de professores e feita por analise humana dos documentos enviados.
 
 ## Stack
 
@@ -206,6 +207,24 @@ set enabled = excluded.enabled,
     starts_at = excluded.starts_at,
     expires_at = null;
 ```
+
+### Superficies do Copilot do professor
+
+- **Conversas**: perguntas grounded com fontes autorizadas, guardrails, citacoes e feedback.
+- **Editores**: gerar ou revisar artigos, exercicios, avaliacoes, simulados e dicas. A proposta
+  aparece como preview e o professor precisa editar, rejeitar ou salvar como rascunho.
+- **Historico**: filtrar por modulo e status, paginar, reutilizar parametros, rejeitar e salvar
+  uma proposta. O historico e isolado por professor.
+- **Analise**: gerar uma leitura agregada por turma e periodo, sem diagnostico individual.
+- **Salas**: pedir sugestoes de atividade ou conteudo sem criar ou publicar automaticamente.
+
+Os retornos publicos de propostas removem `teacherAnswer`, `teacherId`, `authorId` e dados
+brutos de uso. A rota de edicao de uma proposta de avaliacao e exclusiva do professor dono,
+para preservar gabaritos e rubricas durante a revisao.
+
+Para trocar OpenAI por um modelo local, mantenha os contratos Zod e as interfaces de provider,
+retrieval e telemetria. Implemente um novo provider em `lib/ai/copilot/runtime.ts` e preserve
+schema estruturado, citacoes, guardrails, quota e auditoria.
 
 Fluxo local minimo apos subir a aplicacao:
 
