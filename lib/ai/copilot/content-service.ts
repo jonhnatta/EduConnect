@@ -32,7 +32,11 @@ const CONTENT_FEATURE = "teacher_content_copilot"
 const CONTENT_RESERVED_TOKENS = 40_000
 const CONTENT_MAX_OUTPUT_TOKENS = 4_000
 const BLOCKED_SUMMARY = "Não foi possível gerar uma proposta segura com o contexto autorizado."
-const INDIVIDUAL_DIAGNOSIS = /\b(?:alun[oa]s?|students?|nome|cpf|e-?mail|diagn[oó]stic[oa]\s+individual)\b/i
+const INDIVIDUAL_DIAGNOSIS_PATTERNS = [
+  /\b(?:desempenho|performance)\s+(?:individual|por\s+alun[oa]|de\s+(?:um[ae]?\s+)?(?:alun[oa]|estudante|student))\b/i,
+  /\b(?:avaliar|analisar|diagnosticar|diagn[oó]stico)\b[\s\S]{0,80}\b(?:desempenho|performance)\b[\s\S]{0,80}\b(?:individual|por\s+alun[oa]|de\s+[A-ZÀ-ÖØ-Þ][\p{L}'’-]{1,}(?:\s+[A-ZÀ-ÖØ-Þ][\p{L}'’-]{1,}){0,3})\b/iu,
+  /\b(?:cpf|e-?mail)\b/i,
+]
 
 export class ContentServiceError extends Error {
   readonly code: string
@@ -111,6 +115,10 @@ function boundedSettlementUsage(value: unknown, reservedTokens: number) {
   return usage.inputTokens + usage.outputTokens <= reservedTokens
     ? usage
     : { inputTokens: reservedTokens, outputTokens: 0 }
+}
+
+function usageExceedsReservation(usage: { inputTokens: number; outputTokens: number }, reservedTokens: number): boolean {
+  return usage.inputTokens + usage.outputTokens > reservedTokens
 }
 
 function sanitizeText(value: string): string {
@@ -228,8 +236,12 @@ function promptText(input: ContentGenerationInput | ContentReviewInput): string 
   return [input.topic, input.audience, input.objective].join("\n")
 }
 
+function guardrailText(input: ContentGenerationInput | ContentReviewInput): string {
+  return JSON.stringify(input)
+}
+
 function assertAggregatePerformanceObjective(input: ContentGenerationInput) {
-  if (input.module === "performance" && INDIVIDUAL_DIAGNOSIS.test(input.objective)) {
+  if (input.module === "performance" && INDIVIDUAL_DIAGNOSIS_PATTERNS.some((pattern) => pattern.test(input.objective))) {
     throw new ContentServiceError("individual_diagnosis_not_allowed")
   }
 }
@@ -281,7 +293,7 @@ export function createContentService({
     }
 
     const mode = request.module === "review" ? "review" as const : "generate" as const
-    const inputGuardrail = evaluateCopilotInput(promptText(request))
+    const inputGuardrail = evaluateCopilotInput(guardrailText(request))
     if (!inputGuardrail.ok) {
       const proposal = blockedProposal({
         module: request.module,
@@ -350,10 +362,10 @@ export function createContentService({
           name: "content_copilot.generate",
           metadata: { teacherId: actor.userId, classroomId, correlationId, provider: providerName, model: providerModel },
         }, () => provider.generate({ ...prompt, maxOutputTokens: CONTENT_MAX_OUTPUT_TOKENS, authorizedEvidence: evidence }))
-        settlementUsage = boundedSettlementUsage(
+        const reportedUsage = safeUsage(
           rawProposal && typeof rawProposal === "object" ? (rawProposal as { usage?: unknown }).usage : undefined,
-          reservation.reservedTokens
         )
+        settlementUsage = boundedSettlementUsage(reportedUsage, reservation.reservedTokens)
         const parsed = contentProposalSchema.safeParse(rawProposal)
         if (!parsed.success) {
           const proposal = blockedProposal({
@@ -365,18 +377,37 @@ export function createContentService({
           return proposal
         }
         const output = parsed.data
-        if (settlementUsage.outputTokens > CONTENT_MAX_OUTPUT_TOKENS) {
+        if (usageExceedsReservation(reportedUsage, reservation.reservedTokens)) {
           const proposal = blockedProposal({
-            module: request.module, mode, model: providerModel, usage: settlementUsage,
+            module: request.module, mode, model: providerModel, usage: reportedUsage,
+            safety: { decision: "blocked", policyVersion: CONTENT_PROMPT_VERSION, reasonCode: "usage_exceeds_reservation" },
+          })
+          lastSafety = toAuditSafety(proposal.safety)
+          await audit(proposal, "blocked", "usage_exceeds_reservation")
+          return proposal
+        }
+        if (reportedUsage.outputTokens > CONTENT_MAX_OUTPUT_TOKENS) {
+          const proposal = blockedProposal({
+            module: request.module, mode, model: providerModel, usage: reportedUsage,
             safety: { decision: "blocked", policyVersion: CONTENT_PROMPT_VERSION, reasonCode: "output_token_limit_exceeded" },
           })
           lastSafety = toAuditSafety(proposal.safety)
           await audit(proposal, "blocked", "output_token_limit_exceeded")
           return proposal
         }
+        const mismatchedReviewDraft = request.module === "review" && output.draft !== null && output.draft.module !== request.targetModule
+        if (mismatchedReviewDraft) {
+          const proposal = blockedProposal({
+            module: request.module, mode, model: providerModel, usage: reportedUsage,
+            safety: { decision: "blocked", policyVersion: CONTENT_PROMPT_VERSION, reasonCode: "invalid_provider_output" },
+          })
+          lastSafety = toAuditSafety(proposal.safety)
+          await audit(proposal, "blocked", "invalid_provider_output")
+          return proposal
+        }
         if (output.module !== request.module || output.mode !== mode || !areCitationsAuthorized(output.citations, evidence)) {
           const proposal = blockedProposal({
-            module: request.module, mode, model: providerModel, usage: settlementUsage,
+            module: request.module, mode, model: providerModel, usage: reportedUsage,
             safety: { decision: "blocked", policyVersion: CONTENT_PROMPT_VERSION, reasonCode: "unauthorized_citations" },
           })
           lastSafety = toAuditSafety(proposal.safety)
@@ -386,14 +417,14 @@ export function createContentService({
         const proposal = contentProposalSchema.safeParse({
           ...output,
           model: providerModel,
-          usage: settlementUsage,
+          usage: reportedUsage,
           draft: sanitizeDraft(output.draft),
           changeSummary: sanitizeText(output.changeSummary),
           warnings: output.warnings.map(sanitizeText),
         })
         if (!proposal.success) {
           const blocked = blockedProposal({
-            module: request.module, mode, model: providerModel, usage: settlementUsage,
+            module: request.module, mode, model: providerModel, usage: reportedUsage,
             safety: { decision: "blocked", policyVersion: CONTENT_PROMPT_VERSION, reasonCode: "invalid_provider_output" },
           })
           lastSafety = toAuditSafety(blocked.safety)
