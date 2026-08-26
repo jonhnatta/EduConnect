@@ -86,6 +86,7 @@ const niveis = [
 
 type ClassroomOpt = { id: string; name: string; subject: string }
 type EditorCopilotModule = "article" | "exercise" | "assessment" | "simulado" | "tip"
+type CopilotSourceOption = { id: string; title: string; type: string; status: string; disciplina: string | null }
 
 type CopilotQuestion = {
   id: string
@@ -240,8 +241,10 @@ function getOrCreateDicaDraftId(): Promise<string> {
 
 export function CriarConteudoClient({
   initialEditId,
+  initialAuthorizedSources = [],
 }: {
   initialEditId: string | null
+  initialAuthorizedSources?: CopilotSourceOption[]
 }) {
   const router = useRouter()
   const [step, setStep] = useState<"tipo" | "editor">(() =>
@@ -293,7 +296,7 @@ export function CriarConteudoClient({
   const [dicaImageUrls, setDicaImageUrls] = useState<string[]>([])
   const [copilotObjective, setCopilotObjective] = useState("")
   const [copilotNotes, setCopilotNotes] = useState("")
-  const [copilotSourceIds, setCopilotSourceIds] = useState("")
+  const [copilotSourceIds, setCopilotSourceIds] = useState<string[]>([])
   const [copilotQuestionCount, setCopilotQuestionCount] = useState(5)
   const [contentProposalLoading, setContentProposalLoading] = useState(false)
   const [contentProposalSaving, setContentProposalSaving] = useState(false)
@@ -303,7 +306,7 @@ export function CriarConteudoClient({
   const selectedCopilotModule = copilotModuleForEditor(tipoSelecionado)
 
   const sourceIdsForCopilot = () => {
-    const sourceIds = copilotSourceIds.split(",").map((id) => id.trim()).filter(Boolean)
+    const sourceIds = copilotSourceIds
     if (sourceIds.some((id) => !isUuid(id))) {
       throw new Error("Use IDs UUID de fontes autorizadas separados por virgula")
     }
@@ -1584,9 +1587,11 @@ export function CriarConteudoClient({
                     <Input id="copilot-objective" value={copilotObjective} onChange={(event) => setCopilotObjective(event.target.value)} placeholder={`Ex.: ensinar ${formData.titulo || "o tema"}`} />
                   </div>
                   <div className="space-y-1">
-                    <Label htmlFor="copilot-sources">Fontes autorizadas</Label>
-                    <Input id="copilot-sources" value={copilotSourceIds} onChange={(event) => setCopilotSourceIds(event.target.value)} placeholder="IDs UUID, separados por virgula" />
-                    <p className="text-xs text-gray-500">Deixe vazio para usar apenas o contexto autorizado disponivel.</p>
+                    <Label>Fontes autorizadas</Label>
+                    <div className="max-h-40 space-y-2 overflow-y-auto rounded-md border border-input bg-white p-3">
+                      {initialAuthorizedSources.length === 0 ? <p className="text-xs text-gray-500">Nenhum conteúdo próprio disponível. O Copilot usará o contexto autorizado disponível.</p> : initialAuthorizedSources.map((source) => <label key={source.id} className="flex cursor-pointer items-start gap-2 text-sm text-gray-700"><input type="checkbox" checked={copilotSourceIds.includes(source.id)} onChange={(event) => setCopilotSourceIds((current) => event.target.checked ? [...new Set([...current, source.id])] : current.filter((id) => id !== source.id))} className="mt-1" /><span><span className="font-medium text-gray-900">{source.title}</span><span className="ml-2 text-xs text-gray-500">{source.type}{source.disciplina ? ` · ${source.disciplina}` : ""} · {source.status}</span></span></label>)}
+                    </div>
+                    <p className="text-xs text-gray-500">Selecione materiais específicos ou deixe tudo desmarcado para usar o contexto autorizado disponível.</p>
                   </div>
                   {(selectedCopilotModule === "exercise" || selectedCopilotModule === "assessment" || selectedCopilotModule === "simulado") && (
                     <div className="space-y-1">

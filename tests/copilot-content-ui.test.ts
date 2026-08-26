@@ -30,6 +30,15 @@ test("content proposal UI uses the common professor API and preserves an explici
   assert.doesNotMatch(editor, /handlePublish(?:Article|Exercise|Assessment|Simulado|Dica)\(\).*saveContentProposal/)
 })
 
+test("content proposal UI lets the professor select authorized sources without typing UUIDs", () => {
+  const editor = source()
+
+  assert.match(editor, /initialAuthorizedSources/)
+  assert.match(editor, /type="checkbox"/)
+  assert.match(editor, /Selecione materiais específicos/)
+  assert.doesNotMatch(editor, /IDs UUID, separados por virgula/)
+})
+
 test("content proposal UI renders the proposal states and never handles teacher answers outside the professor editor", () => {
   const editor = source()
 
