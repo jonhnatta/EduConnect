@@ -1,7 +1,7 @@
 "use client"
 
 import { FormEvent, useCallback, useEffect, useMemo, useState, useTransition } from "react"
-import { AlertCircle, Bot, Check, Loader2, MessageSquare, Plus, Send, Sparkles, ThumbsDown, ThumbsUp } from "lucide-react"
+import { AlertCircle, Bot, Check, Loader2, MessageSquare, Plus, RefreshCw, Send, Sparkles, ThumbsDown, ThumbsUp, X } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -51,6 +51,19 @@ type Usage = {
   requestLimit: number
 }
 
+type ContentProposal = {
+  id: string
+  module: string
+  mode: "generate" | "review"
+  status: "proposed" | "rejected" | "saved" | "blocked" | "failed"
+  model: string
+  changeSummary: string
+  warnings: string[]
+  createdAt: string
+  updatedAt: string
+  payload?: { draft?: { title?: string; module?: string } | null }
+}
+
 const suggestedQuestions = [
   "Como posso adaptar a proxima atividade para alunos com dificuldades?",
   "Quais materiais da minha turma precisam de reforco?",
@@ -96,6 +109,14 @@ export function CopilotClient() {
   const [sending, setSending] = useState(false)
   const [usage, setUsage] = useState<Usage | null>(null)
   const [feedbackCommentByMessage, setFeedbackCommentByMessage] = useState<Record<string, string>>({})
+  const [contentProposals, setContentProposals] = useState<ContentProposal[]>([])
+  const [contentHistoryLoading, setContentHistoryLoading] = useState(true)
+  const [contentHistoryError, setContentHistoryError] = useState<string | null>(null)
+  const [contentHistoryModule, setContentHistoryModule] = useState("")
+  const [contentHistoryStatus, setContentHistoryStatus] = useState("")
+  const [contentHistoryCursor, setContentHistoryCursor] = useState<string | null>(null)
+  const [contentHistoryNextCursor, setContentHistoryNextCursor] = useState<string | null>(null)
+  const [contentHistoryAction, setContentHistoryAction] = useState<string | null>(null)
   const [creating, startCreating] = useTransition()
 
   const activeState = activeId ? stateById[activeId] ?? null : null
@@ -104,6 +125,51 @@ export function CopilotClient() {
   const activeLoaded = activeState?.loaded ?? false
   const activeLoading = activeId ? loadingDetails[activeId] === true : false
   const sortedConversations = useMemo(() => sortConversations(conversations), [conversations])
+
+  const loadContentHistory = useCallback(async (cursor?: string | null) => {
+    setContentHistoryLoading(true)
+    setContentHistoryError(null)
+    const params = new URLSearchParams({ limit: "10" })
+    if (contentHistoryModule) params.set("module", contentHistoryModule)
+    if (contentHistoryStatus) params.set("status", contentHistoryStatus)
+    if (cursor) params.set("cursor", cursor)
+    try {
+      const response = await fetch(`/api/copilot/content/history?${params.toString()}`, { cache: "no-store" })
+      const data = await parseJson(response)
+      if (!response.ok || !data.ok) throw new Error(apiError(data.error, "Nao foi possivel carregar o historico de propostas."))
+      setContentProposals(data.proposals ?? [])
+      setContentHistoryCursor(cursor ?? null)
+      setContentHistoryNextCursor(data.nextCursor ?? null)
+    } catch (error) {
+      setContentHistoryError(error instanceof Error ? error.message : "Nao foi possivel carregar o historico de propostas.")
+    } finally {
+      setContentHistoryLoading(false)
+    }
+  }, [contentHistoryModule, contentHistoryStatus])
+
+  useEffect(() => {
+    void loadContentHistory()
+  }, [loadContentHistory])
+
+  const contentProposalAction = async (proposal: ContentProposal, action: "save" | "reject") => {
+    setContentHistoryAction(`${action}:${proposal.id}`)
+    try {
+      const response = await fetch(`/api/copilot/content/${proposal.id}${action === "save" ? "/save" : ""}`, { method: action === "save" ? "POST" : "DELETE" })
+      const data = await parseJson(response)
+      if (!response.ok) throw new Error(apiError(data.error, "Nao foi possivel atualizar a proposta."))
+      await loadContentHistory(contentHistoryCursor)
+    } catch (error) {
+      setContentHistoryError(error instanceof Error ? error.message : "Nao foi possivel atualizar a proposta.")
+    } finally {
+      setContentHistoryAction(null)
+    }
+  }
+
+  const reuseContentProposal = (proposal: ContentProposal) => {
+    const title = proposal.payload?.draft?.title ?? ""
+    setInput(`Reutilizar proposta ${proposal.module} (${proposal.mode})${title ? `: ${title}` : ""}. ${proposal.changeSummary}`)
+    window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" })
+  }
 
   const loadUsage = useCallback(async () => {
     const response = await fetch("/api/copilot/usage", {
@@ -419,6 +485,38 @@ export function CopilotClient() {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
+
+      <section className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm" aria-label="Historico de propostas de conteudo">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="font-display font-semibold text-gray-900">Historico de propostas</h2>
+            <p className="text-sm text-gray-500">Reutilize, salve como rascunho ou rejeite propostas do Copilot.</p>
+          </div>
+          <Button type="button" variant="outline" size="sm" onClick={() => void loadContentHistory()} disabled={contentHistoryLoading} className="gap-2">
+            <RefreshCw className={`h-4 w-4 ${contentHistoryLoading ? "animate-spin" : ""}`} /> Atualizar
+          </Button>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <select aria-label="Filtrar modulo" value={contentHistoryModule} onChange={(event) => setContentHistoryModule(event.target.value)} className="h-10 rounded-md border border-input bg-background px-3 text-sm">
+            <option value="">Todos os modulos</option><option value="article">Artigo</option><option value="exercise">Exercicio</option><option value="assessment">Avaliacao</option><option value="simulado">Simulado</option><option value="tip">Dica</option><option value="review">Revisao</option>
+          </select>
+          <select aria-label="Filtrar status" value={contentHistoryStatus} onChange={(event) => setContentHistoryStatus(event.target.value)} className="h-10 rounded-md border border-input bg-background px-3 text-sm">
+            <option value="">Todos os status</option><option value="proposed">Proposta</option><option value="saved">Rascunho salvo</option><option value="rejected">Rejeitada</option><option value="blocked">Bloqueada</option>
+          </select>
+        </div>
+        {contentHistoryError && <p role="alert" className="mt-3 text-sm text-red-600">{contentHistoryError}</p>}
+        {contentHistoryLoading ? <p className="mt-4 text-sm text-gray-500">Carregando propostas...</p> : contentProposals.length === 0 ? <p className="mt-4 text-sm text-gray-500">Nenhuma proposta encontrada.</p> : (
+          <div className="mt-4 space-y-2">
+            {contentProposals.map((proposal) => <article key={proposal.id} className="rounded-lg border border-gray-100 p-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div><div className="flex flex-wrap items-center gap-2"><strong className="text-sm text-gray-900">{proposal.payload?.draft?.title ?? proposal.module}</strong><Badge variant="secondary">{proposal.status}</Badge><Badge variant="outline">{proposal.mode}</Badge></div><p className="mt-1 text-xs text-gray-500">{new Date(proposal.updatedAt).toLocaleString("pt-BR")} · {proposal.model}</p><p className="mt-2 text-sm text-gray-700">{proposal.changeSummary}</p></div>
+                <div className="flex shrink-0 flex-wrap gap-2"><Button type="button" size="sm" variant="outline" onClick={() => reuseContentProposal(proposal)} disabled={proposal.status === "rejected"}><RefreshCw className="mr-1 h-3.5 w-3.5" /> Reutilizar</Button>{proposal.status === "proposed" && <><Button type="button" size="sm" onClick={() => void contentProposalAction(proposal, "save")} disabled={contentHistoryAction !== null}><Check className="mr-1 h-3.5 w-3.5" /> Salvar rascunho</Button><Button type="button" size="sm" variant="ghost" onClick={() => void contentProposalAction(proposal, "reject")} disabled={contentHistoryAction !== null} aria-label="Rejeitar proposta"><X className="h-3.5 w-3.5" /></Button></>}</div>
+              </div>
+            </article>)}
+          </div>
+        )}
+        {(contentHistoryCursor || contentHistoryNextCursor) && <div className="mt-4 flex justify-end gap-2"><Button type="button" variant="outline" size="sm" disabled={!contentHistoryCursor || contentHistoryLoading} onClick={() => void loadContentHistory(null)}>Anterior</Button><Button type="button" variant="outline" size="sm" disabled={!contentHistoryNextCursor || contentHistoryLoading} onClick={() => void loadContentHistory(contentHistoryNextCursor)}>Proxima</Button></div>}
+      </section>
 
       <div className="grid min-h-[640px] overflow-hidden rounded-xl border border-gray-100 bg-white lg:grid-cols-[280px_1fr]">
         <aside className="border-b border-gray-100 bg-gray-50/80 lg:border-b-0 lg:border-r">
