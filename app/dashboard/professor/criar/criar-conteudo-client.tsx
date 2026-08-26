@@ -95,6 +95,12 @@ type CopilotQuestion = {
   points: number
   disciplina: string | null
   options?: string[]
+  teacherAnswer?: {
+    correctIndex?: number
+    rationale?: string
+    referenceAnswer?: string
+    rubric?: string[]
+  }
 }
 
 type CopilotDraft =
@@ -405,8 +411,22 @@ export function CriarConteudoClient({
     }
   }
 
-  const applyContentProposal = () => {
-    const draft = contentProposal?.draft
+  const applyContentProposal = async () => {
+    if (!contentProposal) return
+    let draft = contentProposal.draft
+    if (draft && (draft.module === "assessment" || draft.module === "exercise" || draft.module === "simulado")) {
+      try {
+        const response = await fetch(`/api/copilot/content/${contentProposal.id}/edit`)
+        const data = await response.json().catch(() => null)
+        if (!response.ok || !data?.proposal?.draft) throw new Error(data?.error || "Nao foi possivel carregar o gabarito da proposta")
+        draft = data.proposal.draft as CopilotDraft
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Nao foi possivel carregar o gabarito da proposta"
+        setContentProposalError(message)
+        toast.error(message)
+        return
+      }
+    }
     if (!draft) return
     setFormData((previous) => ({ ...previous, titulo: draft.title }))
     if ("bodyHtml" in draft) {
@@ -426,7 +446,7 @@ export function CriarConteudoClient({
               prompt: question.prompt,
               points: question.points,
               options: question.options ?? ["Opcao 1", "Opcao 2"],
-              correctIndex: 0,
+              correctIndex: question.teacherAnswer?.correctIndex ?? 0,
               ...(question.disciplina ? { disciplina: question.disciplina } : {}),
             }
           : {
@@ -1616,7 +1636,7 @@ export function CriarConteudoClient({
                       <div className="text-sm"><strong>Fontes:</strong><ul className="mt-1 space-y-1">{contentProposal.citations.map((citation) => <li key={citation.id}><a href={citation.url} target="_blank" rel="noreferrer" className="text-[#1D4ED8] hover:underline">{citation.title}</a><span className="text-gray-600">. {citation.excerpt}</span></li>)}</ul></div>
                     )}
                     <div className="flex flex-wrap gap-2">
-                      <Button type="button" onClick={applyContentProposal} disabled={!contentProposal.draft || contentProposalSaving}>Editar proposta</Button>
+                      <Button type="button" onClick={() => void applyContentProposal()} disabled={!contentProposal.draft || contentProposalSaving}>Editar proposta</Button>
                       <Button type="button" variant="outline" onClick={() => void saveContentProposal()} disabled={!contentProposal.draft || contentProposalSaving}>Salvar como rascunho</Button>
                       <Button type="button" variant="ghost" onClick={() => void rejectContentProposal()} disabled={contentProposalSaving}>Rejeitar</Button>
                     </div>

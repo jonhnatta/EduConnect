@@ -224,6 +224,22 @@ test("generates, persists, and returns a DTO without teacher answers", async () 
   assert.equal((calls.create[0] as { teacherId: string }).teacherId, teacher.userId)
 })
 
+test("loads a private teacher edit preview with the stored answer key", async () => {
+  const { handlers } = setup()
+  const response = await handlers.edit(new Request(`https://educonnect.test/api/copilot/content/${proposalId}/edit`), { params: { proposalId } })
+  assert.equal(response.status, 200)
+  const body = await response.json()
+  assert.equal(body.proposal.draft.questions[0].teacherAnswer.correctIndex, 0)
+  assert.equal(body.proposal.teacherId, undefined)
+})
+
+test("does not allow a student to load a teacher edit preview", async () => {
+  const { handlers } = setup({ actor: student })
+  const response = await handlers.edit(new Request(`https://educonnect.test/api/copilot/content/${proposalId}/edit`), { params: { proposalId } })
+  assert.equal(response.status, 403)
+  assert.deepEqual(await response.json(), { ok: false, error: "forbidden" })
+})
+
 test("reviews only a strict review payload and persists the server-derived status", async () => {
   const { calls, handlers } = setup()
   const response = await handlers.generate(request("/api/copilot/content", {

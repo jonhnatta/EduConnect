@@ -38,7 +38,12 @@ function publicProposal(proposal: any) {
   const payload = proposal.payload as ContentProposal
   const draft = payload.draft === null ? null : toStudentContentDraft(payload.draft)
   const originalContent = proposal.originalContent === null ? null : toStudentContentDraft(proposal.originalContent)
-  return { ...withoutTeacher, originalContent, payload: { ...payload, draft } }
+  return { ...withoutTeacher, ...payload, draft, originalContent, payload: { ...payload, draft } }
+}
+function teacherEditProposal(proposal: any) {
+  const { teacherId: _teacherId, ...withoutTeacher } = proposal
+  const payload = proposal.payload as ContentProposal
+  return { ...withoutTeacher, ...payload, originalContent: proposal.originalContent, payload }
 }
 function errorResponse(error: unknown) {
   if (error instanceof ZodError) return json({ ok: false, error: "invalid_payload" }, 422)
@@ -112,6 +117,10 @@ export function createContentApiHandlers(dependencies: Dependencies) {
     async get(_request: Request, context: { params: { proposalId: string } | Promise<{ proposalId: string }> }) {
       const access = await requireProfessor(dependencies.resolveActor); if (!access.ok) return access.response
       try { const { proposalId } = params.parse(await context.params); const found = await dependencies.repository.getContentProposal({ teacherId: access.actor.userId, proposalId }); return found ? json({ ok: true, proposal: publicProposal(found) }) : json({ ok: false, error: "not_found" }, 404) } catch (error) { return errorResponse(error) }
+    },
+    async edit(_request: Request, context: { params: { proposalId: string } | Promise<{ proposalId: string }> }) {
+      const access = await requireProfessor(dependencies.resolveActor); if (!access.ok) return access.response
+      try { const { proposalId } = params.parse(await context.params); const found = await dependencies.repository.getContentProposal({ teacherId: access.actor.userId, proposalId }); return found ? json({ ok: true, proposal: teacherEditProposal(found) }) : json({ ok: false, error: "not_found" }, 404) } catch (error) { return errorResponse(error) }
     },
     async reject(_request: Request, context: { params: { proposalId: string } | Promise<{ proposalId: string }> }) {
       const access = await requireProfessor(dependencies.resolveActor); if (!access.ok) return access.response
