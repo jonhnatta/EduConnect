@@ -39,6 +39,7 @@ import { parseExamFromSettings } from "@/lib/activities/exam"
 import { parseTrabalhoConfig } from "@/lib/activities/trabalho"
 import { ActivityAttachmentsList } from "@/components/dashboard/activity-attachments-list"
 import { toast } from "sonner"
+import { CopilotClassroomAction } from "@/components/dashboard/copilot-classroom-action"
 
 type Member = {
   student_id: string
@@ -603,11 +604,10 @@ export function ProfessorSalaDetail({
         )}
 
         {activeTab === "desempenho" && (
-          <ClassroomPerformancePanel
-            classroomId={classroom.id}
-            initialData={performance}
-          />
+          <div className="space-y-4"><ClassroomPerformancePanel classroomId={classroom.id} initialData={performance} /><CopilotClassroomAction classroomId={classroom.id} mode="performance" /></div>
         )}
+
+        {activeTab === "atividades" && <div className="mb-4"><CopilotClassroomAction classroomId={classroom.id} mode="classroom" /></div>}
       </div>
 
       <ClassroomActivityFormDialog

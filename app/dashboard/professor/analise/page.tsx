@@ -3,6 +3,7 @@ import { BarChart3, Users, ClipboardList, TrendingUp, ChevronRight } from "lucid
 import { requireApprovedProfessorAccess } from "@/lib/auth/guards"
 import { listClassroomsForProfessor } from "@/app/actions/classrooms"
 import { getClassroomPerformanceForProfessor } from "@/app/actions/classroom-performance"
+import { CopilotClassroomAction } from "@/components/dashboard/copilot-classroom-action"
 
 export const dynamic = "force-dynamic"
 
@@ -77,8 +78,8 @@ export default async function ProfessorAnalisePage() {
             {perf.map(({ classroom, data }) => {
               const deliveryPct = data.deliveryRate != null ? Math.round(data.deliveryRate * 100) : null
               return (
+                <div key={classroom.id} className="space-y-2">
                 <Link
-                  key={classroom.id}
                   href={`/dashboard/professor/salas/${classroom.id}`}
                   className="block bg-white rounded-xl border border-gray-100 p-5 hover:border-[#1D4ED8]/30 hover:shadow-md transition-all"
                 >
@@ -107,6 +108,8 @@ export default async function ProfessorAnalisePage() {
                     </div>
                   </div>
                 </Link>
+                <CopilotClassroomAction classroomId={classroom.id} mode="performance" />
+                </div>
               )
             })}
           </div>
